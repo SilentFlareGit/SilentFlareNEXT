@@ -28,6 +28,10 @@ export async function getPost(slug: string): Promise<BlogPost | undefined> {
 export type Tag = {
 	name: string;
 	slug: string;
+	description?: string;
+	featureImage?: string;
+	metaTitle?: string;
+	metaDescription?: string;
 	count: number;
 };
 
@@ -36,6 +40,10 @@ export async function getTagList(): Promise<Tag[]> {
 	return tags.map((tag) => ({
 		name: tag.name,
 		slug: tag.slug,
+		description: tag.description,
+		featureImage: tag.featureImage,
+		metaTitle: tag.metaTitle,
+		metaDescription: tag.metaDescription,
 		count: tag.count ?? 0,
 	}));
 }

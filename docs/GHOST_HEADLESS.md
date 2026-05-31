@@ -43,6 +43,16 @@ pnpm lint
 pnpm typecheck
 ```
 
+If `pnpm` is not on PATH, use the same commands through Corepack:
+
+```cmd
+corepack pnpm install
+corepack pnpm dev
+corepack pnpm build
+corepack pnpm lint
+corepack pnpm typecheck
+```
+
 If you need to preview layout before Ghost is configured:
 
 ```cmd

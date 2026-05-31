@@ -18,6 +18,33 @@ function toDate(value?: string | null): Date | undefined {
 	return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
+function stripHtml(value: string): string {
+	return value.replace(/<[^>]*>/g, "").trim();
+}
+
+function slugifyHeading(value: string, seen: Map<string, number>): string {
+	const base =
+		stripHtml(value)
+			.toLowerCase()
+			.normalize("NFKD")
+			.replace(/[^\p{Letter}\p{Number}]+/gu, "-")
+			.replace(/^-+|-+$/g, "") || "section";
+	const count = seen.get(base) ?? 0;
+	seen.set(base, count + 1);
+	return count === 0 ? base : `${base}-${count + 1}`;
+}
+
+function withHeadingIds(html: string): string {
+	const seen = new Map<string, number>();
+	return html.replace(
+		/<h([2-3])([^>]*)>(.*?)<\/h\1>/gi,
+		(match: string, level: string, attributes: string, content: string) => {
+			if (/\sid\s*=/.test(attributes)) return match;
+			return `<h${level}${attributes} id="${slugifyHeading(content, seen)}">${content}</h${level}>`;
+		},
+	);
+}
+
 export function adaptGhostTag(tag: GhostTag): BlogTag {
 	return {
 		name: tag.name,
@@ -54,7 +81,7 @@ export function adaptGhostPost(post: GhostPost): BlogPost {
 		id: post.id,
 		title: post.title,
 		slug: post.slug,
-		html: post.html ?? "",
+		html: withHeadingIds(post.html ?? ""),
 		excerpt: text(post.custom_excerpt) ?? text(post.excerpt) ?? "",
 		featureImage: text(post.feature_image),
 		published,

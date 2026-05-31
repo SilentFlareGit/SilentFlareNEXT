@@ -24,9 +24,11 @@ export const getStaticPaths = (async ({ paginate }) => {
 
 const { page, tag } = Astro.props;
 const len = page.data.length;
+const description =
+	tag.metaDescription ?? tag.description ?? `Posts tagged ${tag.name}`;
 ---
 
-<MainGridLayout title={tag.name} description={`Posts tagged ${tag.name}`}>
+<MainGridLayout title={tag.metaTitle ?? tag.name} description={description}>
     <PostPage page={page}></PostPage>
     <Pagination class="mx-auto onload-animation" page={page} style={`animation-delay: calc(var(--content-delay) + ${len * 50}ms)`}></Pagination>
 </MainGridLayout>

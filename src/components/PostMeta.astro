@@ -2,15 +2,16 @@
 import { Icon } from "astro-icon/components";
 import I18nKey from "../i18n/i18nKey";
 import { i18n } from "../i18n/translation";
-import type { BlogTag } from "../lib/ghost";
+import type { BlogAuthor, BlogTag } from "../lib/ghost";
 import { formatDateToYYYYMMDD } from "../utils/date-utils";
-import { getCategoryUrl, getTagUrl } from "../utils/url-utils";
+import { getAuthorUrl, getCategoryUrl, getTagUrl } from "../utils/url-utils";
 
 interface Props {
 	class: string;
 	published: Date;
 	updated?: Date;
 	tags: BlogTag[];
+	authors?: BlogAuthor[];
 	category?: BlogTag;
 	hideTagsForMobile?: boolean;
 	hideUpdateDate?: boolean;
@@ -19,6 +20,7 @@ const {
 	published,
 	updated,
 	tags,
+	authors = [],
 	category,
 	hideTagsForMobile = false,
 	hideUpdateDate = false,
@@ -44,6 +46,25 @@ const className = Astro.props.class;
                 <Icon name="material-symbols:edit-calendar-outline-rounded" class="text-xl"></Icon>
             </div>
             <span class="text-50 text-sm font-medium">{formatDateToYYYYMMDD(updated)}</span>
+        </div>
+    )}
+
+    <!-- authors -->
+    {authors.length > 0 && (
+        <div class="flex items-center">
+            <div class="meta-icon">
+                <Icon name="material-symbols:person-outline-rounded" class="text-xl"></Icon>
+            </div>
+            <div class="flex flex-row flex-nowrap items-center">
+                {authors.map((author, i) => (
+                    <div class:list={[{"hidden": i == 0}, "mx-1.5 text-[var(--meta-divider)] text-sm"]}>/</div>
+                    <a href={getAuthorUrl(author.slug)} aria-label={`View all posts by ${author.name.trim()}`}
+                       class="link-lg transition text-50 text-sm font-medium
+                                    hover:text-[var(--primary)] dark:hover:text-[var(--primary)] whitespace-nowrap">
+                        {author.name.trim()}
+                    </a>
+                ))}
+            </div>
         </div>
     )}
 

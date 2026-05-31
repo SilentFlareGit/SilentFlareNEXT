@@ -9,6 +9,48 @@ SilentFlareNEXT is an Astro blog front end based on the Fuwari template. Ghost r
 - Deployment model: deploy this Astro app separately from Ghost.
 - Secret rule: never put a Ghost Admin API Key in this front end. Only use the Ghost Content API Key.
 
+## What Was Initialized
+
+This repository was initialized from the Fuwari Astro template at `https://github.com/saicaca/fuwari.git`. The template was cloned only as a temporary source, then its project files were copied into SilentFlareNEXT as a new independent repository. No Fuwari Git history and no Ghost source code were merged into this repo.
+
+The migrated front-end foundation includes:
+
+- Astro, Svelte, Tailwind, Biome, Pagefind, RSS, sitemap, and related config files.
+- Fuwari UI structure under `src/components`, `src/layouts`, `src/styles`, `src/i18n`, `src/plugins`, and `public`.
+- The pnpm lockfile and package scripts for local development, build, lint, and typecheck.
+
+The original markdown/content-collection blog data path was replaced for the public blog routes with a Ghost Headless CMS data layer:
+
+- `src/lib/ghost.ts` defines normalized Ghost and blog types.
+- `src/lib/ghost-client.ts` reads Ghost Content API posts, tags, and authors with pagination and `tags,authors` includes.
+- `src/lib/ghost-adapter.ts` converts raw Ghost fields into the front-end `BlogPost`, `BlogTag`, and `BlogAuthor` shapes.
+- `src/utils/content-utils.ts` now delegates blog data reads to the Ghost layer so pages/components do not depend on raw Ghost fields directly.
+
+The public route chain now uses Ghost consistently:
+
+- `/` reads paginated Ghost posts.
+- `/posts/[slug]/` renders Ghost post HTML, metadata, cover image, tags, authors, adjacent post links, and JSON-LD.
+- `/tags/[...slug]/` lists Ghost posts for a Ghost tag.
+- `/authors/[...slug]/` lists Ghost posts for a Ghost author.
+- `/archive/` groups Ghost posts by year.
+- `/rss.xml` is generated from Ghost posts.
+- Astro sitemap generation is enabled from built routes.
+
+Environment and safety work completed:
+
+- Added `.env.example` with Ghost Content API variables and `SITE_URL`.
+- Kept `.env` ignored.
+- Added explicit missing-config errors.
+- Added `GHOST_ALLOW_EMPTY=true` as a local UI-only fallback for development without real Ghost credentials.
+- Documented that Ghost runs externally and that Ghost Admin API keys must not be used in this front end.
+
+Validation performed during initialization:
+
+- `cmd /c "set CI=true&& corepack pnpm install --frozen-lockfile"` passed.
+- `corepack pnpm lint` passed.
+- `cmd /c "set GHOST_ALLOW_EMPTY=true&& corepack pnpm typecheck"` passed.
+- `cmd /c "set GHOST_ALLOW_EMPTY=true&& corepack pnpm build"` passed.
+
 ## Local Setup
 
 Copy the example environment file:
@@ -31,6 +73,13 @@ Install and run:
 ```cmd
 pnpm install
 pnpm dev
+```
+
+If `pnpm` is not available globally, use Corepack:
+
+```cmd
+corepack pnpm install
+corepack pnpm dev
 ```
 
 Build:
