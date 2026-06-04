@@ -85,41 +85,62 @@ function encodeParams(key: string, options: RequestOptions): string {
 	return params.toString();
 }
 
+function emptyResponse<T>(options: RequestOptions): GhostListResponse<T> {
+	return {
+		data: [],
+		meta: {
+			pagination: {
+				page: Number(options.page ?? 1),
+				limit: Number(options.limit === "all" ? 0 : (options.limit ?? 0)),
+				pages: 0,
+				total: 0,
+				next: null,
+				prev: null,
+			},
+		},
+	};
+}
+
 async function requestGhost<T>(
 	resource: GhostResource,
 	options: RequestOptions = {},
 ): Promise<GhostListResponse<T>> {
 	const config = getGhostConfig();
 	if (!config) {
-		return {
-			data: [],
-			meta: {
-				pagination: {
-					page: Number(options.page ?? 1),
-					limit: Number(options.limit === "all" ? 0 : (options.limit ?? 0)),
-					pages: 0,
-					total: 0,
-					next: null,
-					prev: null,
-				},
-			},
-		};
+		return emptyResponse<T>(options);
 	}
 
 	const endpoint = `${config.url}/ghost/api/content/${resource}/`;
-	const response = await fetch(
-		`${endpoint}?${encodeParams(config.key, {
-			limit: "all",
-			...options,
-		})}`,
-		{
-			headers: {
-				"Accept-Version": config.version,
+	let response: Response;
+	try {
+		response = await fetch(
+			`${endpoint}?${encodeParams(config.key, {
+				limit: "all",
+				...options,
+			})}`,
+			{
+				headers: {
+					"Accept-Version": config.version,
+				},
 			},
-		},
-	);
+		);
+	} catch (error) {
+		if (allowEmptyData()) {
+			console.warn(
+				`[ghost] Unable to fetch ${resource}; returning empty data because GHOST_ALLOW_EMPTY=true.`,
+			);
+			return emptyResponse<T>(options);
+		}
+		throw error;
+	}
 
 	if (!response.ok) {
+		if (allowEmptyData()) {
+			console.warn(
+				`[ghost] Content API returned ${response.status} for ${resource}; returning empty data because GHOST_ALLOW_EMPTY=true.`,
+			);
+			return emptyResponse<T>(options);
+		}
 		throw new Error(
 			`Ghost Content API request failed: ${response.status} ${response.statusText} for ${resource}. Check GHOST_URL and GHOST_CONTENT_API_KEY.`,
 		);

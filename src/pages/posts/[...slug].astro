@@ -102,7 +102,7 @@ const jsonLd = {
             </div>
 
             {entry.featureImage &&
-                <ImageWrapper id="post-cover" src={entry.featureImage} class="mb-8 rounded-xl banner-container onload-animation"/>
+                <ImageWrapper id="post-cover" src={entry.featureImage} alt={`Cover image of ${entry.title}`} class="mb-8 rounded-xl aspect-[16/9] w-full onload-animation"/>
             }
 
             <Markdown class="mb-6 markdown-content onload-animation">

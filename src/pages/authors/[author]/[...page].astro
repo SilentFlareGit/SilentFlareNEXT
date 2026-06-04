@@ -1,10 +1,10 @@
 ---
 import type { GetStaticPaths } from "astro";
-import Pagination from "../../components/control/Pagination.astro";
-import PostPage from "../../components/PostPage.astro";
-import { PAGE_SIZE } from "../../constants/constants";
-import MainGridLayout from "../../layouts/MainGridLayout.astro";
-import { getAuthorList, getPostsForAuthor } from "../../utils/content-utils";
+import Pagination from "../../../components/control/Pagination.astro";
+import PostPage from "../../../components/PostPage.astro";
+import { PAGE_SIZE } from "../../../constants/constants";
+import MainGridLayout from "../../../layouts/MainGridLayout.astro";
+import { getAuthorList, getPostsForAuthor } from "../../../utils/content-utils";
 
 export const getStaticPaths = (async ({ paginate }) => {
 	const authors = await getAuthorList();
@@ -14,7 +14,7 @@ export const getStaticPaths = (async ({ paginate }) => {
 		paths.push(
 			...paginate(posts, {
 				pageSize: PAGE_SIZE,
-				params: { slug: author.slug },
+				params: { author: author.slug },
 				props: { author },
 			}),
 		);

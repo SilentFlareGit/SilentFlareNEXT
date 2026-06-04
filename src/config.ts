@@ -8,21 +8,21 @@ import type {
 import { LinkPreset } from "./types/config";
 
 export const siteConfig: SiteConfig = {
-	title: "SilentFlareNEXT",
-	subtitle: "Astro front end powered by Ghost Headless CMS",
+	title: "Fuwari",
+	subtitle: "Demo Site",
 	lang: "en", // Language code, e.g. 'en', 'zh_CN', 'ja', etc.
 	themeColor: {
 		hue: 250, // Default hue for the theme color, from 0 to 360. e.g. red: 0, teal: 200, cyan: 250, pink: 345
 		fixed: false, // Hide the theme color picker for visitors
 	},
 	banner: {
-		enable: false,
-		src: "assets/images/demo-banner.png", // Relative to the /src directory. Relative to the /public directory if it starts with '/'
+		enable: true,
+		src: "assets/images/demo-banner-online.webp", // Relative to the /src directory. Relative to the /public directory if it starts with '/'
 		position: "center", // Equivalent to object-position, only supports 'top', 'center', 'bottom'. 'center' by default
 		credit: {
-			enable: false, // Display the credit text of the banner image
-			text: "", // Credit text to be displayed
-			url: "", // (Optional) URL link to the original artwork or artist's page
+			enable: true, // Display the credit text of the banner image
+			text: "空色天絵 / NEO TOKYO NOIR 01", // Credit text to be displayed
+			url: "https://www.pixiv.net/artworks/102533863", // (Optional) URL link to the original artwork or artist's page
 		},
 	},
 	toc: {
@@ -40,14 +40,39 @@ export const siteConfig: SiteConfig = {
 };
 
 export const navBarConfig: NavBarConfig = {
-	links: [LinkPreset.Home, LinkPreset.Archive, LinkPreset.About],
+	links: [
+		LinkPreset.Home,
+		LinkPreset.Archive,
+		LinkPreset.About,
+		{
+			name: "GitHub",
+			url: "https://github.com/saicaca/fuwari",
+			external: true,
+		},
+	],
 };
 
 export const profileConfig: ProfileConfig = {
 	avatar: "assets/images/demo-avatar.png", // Relative to the /src directory. Relative to the /public directory if it starts with '/'
-	name: "SilentFlare",
-	bio: "Independent notes and long-form posts.",
-	links: [],
+	name: "Lorem Ipsum",
+	bio: "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
+	links: [
+		{
+			name: "Twitter",
+			icon: "fa6-brands:twitter",
+			url: "https://twitter.com",
+		},
+		{
+			name: "Steam",
+			icon: "fa6-brands:steam",
+			url: "https://store.steampowered.com",
+		},
+		{
+			name: "GitHub",
+			icon: "fa6-brands:github",
+			url: "https://github.com/saicaca/fuwari",
+		},
+	],
 };
 
 export const licenseConfig: LicenseConfig = {
