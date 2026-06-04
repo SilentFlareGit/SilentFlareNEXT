@@ -1,0 +1,43 @@
+---
+import type { Subsite } from "../constants/subsites";
+
+interface Props {
+	subsite: Subsite;
+}
+
+const { subsite } = Astro.props;
+
+const statusLabel = {
+	live: "Live",
+	external: "External service",
+	placeholder: "Placeholder",
+}[subsite.status];
+---
+
+<section class="card-base rounded-[var(--radius-large)] overflow-hidden">
+	<div class="px-6 py-7 md:px-9 md:py-9">
+		<div class="flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
+			<div class="min-w-0">
+				<div class="mb-3 flex flex-wrap items-center gap-3">
+					<span class="rounded-lg bg-[oklch(0.94_0.04_var(--hue))] px-3 py-1 text-sm font-medium text-[oklch(0.48_0.16_var(--hue))] dark:bg-white/10 dark:text-white/80">
+						{statusLabel}
+					</span>
+					<span class="text-sm text-50">{subsite.host}</span>
+				</div>
+				<h1 class="mb-3 text-3xl font-bold text-90 md:text-4xl">{subsite.name}</h1>
+				<p class="text-lg font-medium text-75">{subsite.purpose}</p>
+			</div>
+			<a href="/" class="btn-regular h-10 shrink-0 px-4">Blog home</a>
+		</div>
+
+		<p class="mt-7 max-w-3xl text-base leading-7 text-75">{subsite.details}</p>
+
+		<div class="mt-8 grid gap-3 md:grid-cols-3">
+			{subsite.actions.map((action) => (
+				<div class="rounded-xl bg-[var(--btn-regular-bg)] px-4 py-4 text-sm leading-6 text-75">
+					{action}
+				</div>
+			))}
+		</div>
+	</div>
+</section>

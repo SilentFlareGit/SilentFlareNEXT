@@ -1,0 +1,11 @@
+---
+import SubsitePlaceholder from "../../components/SubsitePlaceholder.astro";
+import { getSubsite } from "../../constants/subsites";
+import MainGridLayout from "../../layouts/MainGridLayout.astro";
+
+const subsite = getSubsite("API");
+---
+
+<MainGridLayout title={`${subsite.name} - ${subsite.purpose}`} description={subsite.details}>
+	<SubsitePlaceholder subsite={subsite} />
+</MainGridLayout>

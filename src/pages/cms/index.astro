@@ -1,0 +1,67 @@
+---
+import SubsitePlaceholder from "../../components/SubsitePlaceholder.astro";
+import { getSubsite } from "../../constants/subsites";
+import MainGridLayout from "../../layouts/MainGridLayout.astro";
+import { getGhostCmsStatus } from "../../lib/ghost-client";
+import { formatDateToYYYYMMDD } from "../../utils/date-utils";
+import { getPostUrlBySlug } from "../../utils/url-utils";
+
+const subsite = getSubsite("CMS");
+const status = await getGhostCmsStatus();
+---
+
+<MainGridLayout title={`${subsite.name} - ${subsite.purpose}`} description={subsite.details}>
+	<SubsitePlaceholder subsite={subsite} />
+	<section class="card-base mt-4 rounded-[var(--radius-large)] px-6 py-7 md:px-9">
+		<div class="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+			<div>
+				<h2 class="text-2xl font-bold text-90">Ghost connection</h2>
+				<p class="mt-2 text-sm text-50">{status.url ?? "GHOST_URL is not configured"} · {status.apiVersion}</p>
+			</div>
+			<div class:list={[
+				"rounded-lg px-3 py-1 text-sm font-medium",
+				status.connected
+					? "bg-[oklch(0.92_0.06_150)] text-[oklch(0.42_0.13_150)] dark:bg-white/10 dark:text-white/80"
+					: "bg-[oklch(0.94_0.04_40)] text-[oklch(0.48_0.14_40)] dark:bg-white/10 dark:text-white/80",
+			]}>
+				{status.connected ? "Connected" : "Not connected"}
+			</div>
+		</div>
+
+		<div class="grid gap-3 md:grid-cols-3">
+			<div class="rounded-xl bg-[var(--btn-regular-bg)] px-4 py-4">
+				<div class="text-sm text-50">Posts</div>
+				<div class="mt-2 text-3xl font-bold text-90">{status.counts.posts}</div>
+			</div>
+			<div class="rounded-xl bg-[var(--btn-regular-bg)] px-4 py-4">
+				<div class="text-sm text-50">Tags</div>
+				<div class="mt-2 text-3xl font-bold text-90">{status.counts.tags}</div>
+			</div>
+			<div class="rounded-xl bg-[var(--btn-regular-bg)] px-4 py-4">
+				<div class="text-sm text-50">Authors</div>
+				<div class="mt-2 text-3xl font-bold text-90">{status.counts.authors}</div>
+			</div>
+		</div>
+
+		{status.site && (
+			<div class="mt-6 rounded-xl border border-dashed border-black/10 px-4 py-4 text-sm leading-6 text-75 dark:border-white/10">
+				<div class="font-medium text-90">{status.site.title ?? "Ghost site"}</div>
+				{status.site.description && <div class="mt-1">{status.site.description}</div>}
+			</div>
+		)}
+
+		{status.latestPosts.length > 0 && (
+			<div class="mt-7">
+				<h3 class="mb-3 text-lg font-bold text-90">Latest from Ghost</h3>
+				<div class="flex flex-col gap-2">
+					{status.latestPosts.map((post) => (
+						<a href={getPostUrlBySlug(post.slug)} class="btn-plain flex min-h-11 items-center justify-between rounded-lg px-3">
+							<span class="truncate font-medium text-75">{post.title}</span>
+							<span class="ml-4 shrink-0 text-sm text-50">{formatDateToYYYYMMDD(post.published)}</span>
+						</a>
+					))}
+				</div>
+			</div>
+		)}
+	</section>
+</MainGridLayout>

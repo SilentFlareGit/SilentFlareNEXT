@@ -9,6 +9,23 @@ SilentFlareNEXT is an Astro blog front end based on the Fuwari template. Ghost r
 - Deployment model: deploy this Astro app separately from Ghost.
 - Secret rule: never put a Ghost Admin API Key in this front end. Only use the Ghost Content API Key.
 
+## Subsites
+
+SilentFlare uses separate hostnames for separate responsibilities:
+
+- `blog.silentflare.com`: public Astro/Fuwari front end, served by this app.
+- `cms.silentflare.com`: external Ghost CMS and Ghost Admin at `/ghost`.
+- `api.silentflare.com`: reserved for the future SilentFlare custom API.
+- `admin.silentflare.com`: reserved for the future SilentFlare custom admin dashboard.
+
+Placeholder and status routes are available in this app until the external services are built:
+
+- `/cms/`: Ghost CMS boundary and Content API connection status.
+- `/api/`: custom API boundary placeholder.
+- `/admin/`: custom admin boundary placeholder.
+
+See [docs/SUBSITES.md](docs/SUBSITES.md) for the current subsite map.
+
 ## What Was Initialized
 
 This repository was initialized from the Fuwari Astro template at `https://github.com/saicaca/fuwari.git`. The template was cloned only as a temporary source, then its project files were copied into SilentFlareNEXT as a new independent repository. No Fuwari Git history and no Ghost source code were merged into this repo.
@@ -62,10 +79,11 @@ copy .env.example .env
 Edit `.env`:
 
 ```env
-GHOST_URL=https://your-ghost-domain.com
+GHOST_URL=https://cms.silentflare.com
 GHOST_CONTENT_API_KEY=your_content_api_key
 GHOST_API_VERSION=v5.0
-SITE_URL=https://your-blog-domain.com
+SITE_URL=https://blog.silentflare.com
+PUBLIC_API_BASE_URL=https://api.silentflare.com
 ```
 
 Install and run:
@@ -111,6 +129,9 @@ See [docs/GHOST_HEADLESS.md](docs/GHOST_HEADLESS.md) for Ghost setup, deployment
 ## Main Routes
 
 - `/` reads paginated posts from Ghost.
+- `/cms/` shows the Ghost CMS connection status and latest content summary.
+- `/api/` shows the custom API placeholder.
+- `/admin/` shows the custom admin placeholder.
 - `/posts/[slug]/` reads a Ghost post by slug.
 - `/tags/[slug]/` reads Ghost posts filtered by tag.
 - `/authors/[slug]/` reads Ghost posts filtered by author.

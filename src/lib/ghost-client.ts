@@ -3,9 +3,11 @@ import type {
 	BlogPost,
 	BlogTag,
 	GhostAuthor,
+	GhostCmsStatus,
 	GhostListResponse,
 	GhostPage,
 	GhostPost,
+	GhostSettings,
 	GhostTag,
 } from "./ghost";
 import {
@@ -71,6 +73,16 @@ function getGhostConfig() {
 		url: normalizeGhostUrl(ghostUrl),
 		key,
 		version,
+	};
+}
+
+function getGhostPublicConfig() {
+	const ghostUrl = readEnvString("GHOST_URL");
+	const version = readEnvString("GHOST_API_VERSION") || DEFAULT_API_VERSION;
+
+	return {
+		url: ghostUrl ? normalizeGhostUrl(ghostUrl) : undefined,
+		apiVersion: version,
 	};
 }
 
@@ -159,6 +171,46 @@ async function requestGhost<T>(
 	};
 }
 
+async function requestGhostSettings(): Promise<GhostSettings | undefined> {
+	const config = getGhostConfig();
+	if (!config) {
+		return undefined;
+	}
+
+	const endpoint = `${config.url}/ghost/api/content/settings/`;
+	let response: Response;
+	try {
+		response = await fetch(`${endpoint}?${encodeParams(config.key, {})}`, {
+			headers: {
+				"Accept-Version": config.version,
+			},
+		});
+	} catch (error) {
+		if (allowEmptyData()) {
+			console.warn(
+				"[ghost] Unable to fetch settings; returning empty data because GHOST_ALLOW_EMPTY=true.",
+			);
+			return undefined;
+		}
+		throw error;
+	}
+
+	if (!response.ok) {
+		if (allowEmptyData()) {
+			console.warn(
+				`[ghost] Content API returned ${response.status} for settings; returning empty data because GHOST_ALLOW_EMPTY=true.`,
+			);
+			return undefined;
+		}
+		throw new Error(
+			`Ghost Content API request failed: ${response.status} ${response.statusText} for settings. Check GHOST_URL and GHOST_CONTENT_API_KEY.`,
+		);
+	}
+
+	const json = (await response.json()) as { settings?: GhostSettings };
+	return json.settings;
+}
+
 export async function getPosts(
 	options: RequestOptions = {},
 ): Promise<GhostPage<BlogPost>> {
@@ -230,4 +282,27 @@ export async function getPostsByAuthor(
 		...options,
 		filter: `author:${slug}`,
 	});
+}
+
+export async function getGhostCmsStatus(): Promise<GhostCmsStatus> {
+	const publicConfig = getGhostPublicConfig();
+	const [site, posts, tags, authors] = await Promise.all([
+		requestGhostSettings(),
+		getPosts({ limit: 3 }),
+		getTags({ limit: 1 }),
+		getAuthors({ limit: 1 }),
+	]);
+
+	return {
+		connected: !!site || posts.pagination.total > 0,
+		url: publicConfig.url,
+		apiVersion: publicConfig.apiVersion,
+		site,
+		counts: {
+			posts: posts.pagination.total,
+			tags: tags.pagination.total,
+			authors: authors.pagination.total,
+		},
+		latestPosts: posts.items,
+	};
 }
