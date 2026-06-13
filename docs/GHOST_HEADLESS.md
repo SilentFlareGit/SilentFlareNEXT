@@ -53,6 +53,18 @@ corepack pnpm lint
 corepack pnpm typecheck
 ```
 
+## Verify Real Ghost Content
+
+Use the strict verification command before a production deployment:
+
+```cmd
+pnpm verify:ghost
+```
+
+This command builds with the configured Ghost Content API and then requires the generated output to contain at least one post route, one tag route, and one author route. It fails when Ghost is unreachable, credentials are invalid, or the build silently falls back to empty content.
+
+Keep `GHOST_ALLOW_EMPTY=false` for this check. The empty-data switch is only for UI and CI fallback validation.
+
 If you need to preview layout before Ghost is configured:
 
 ```cmd

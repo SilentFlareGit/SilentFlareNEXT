@@ -8,6 +8,8 @@
     "check": "astro check",
     "build": "astro build && pagefind --site dist",
     "test:smoke": "node scripts/check-built-routes.js",
+    "test:smoke:content": "node scripts/check-built-routes.js --require-content",
+    "verify:ghost": "astro build && pagefind --site dist && node scripts/check-built-routes.js --require-content",
     "preview": "astro preview",
     "astro": "astro",
     "type-check": "astro check",
