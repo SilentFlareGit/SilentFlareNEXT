@@ -7,6 +7,7 @@
     "start": "astro dev",
     "check": "astro check",
     "build": "astro build && pagefind --site dist",
+    "test:smoke": "node scripts/check-built-routes.js",
     "preview": "astro preview",
     "astro": "astro",
     "type-check": "astro check",
