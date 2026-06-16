@@ -86,6 +86,21 @@ function getGhostPublicConfig() {
 	};
 }
 
+function getGhostRequestHeaders(config: { version: string }): HeadersInit {
+	const headers: Record<string, string> = {
+		"Accept-Version": config.version,
+	};
+	const host = readEnvString("GHOST_REQUEST_HOST");
+	const proto = readEnvString("GHOST_REQUEST_PROTO");
+	if (host) {
+		headers.Host = host;
+	}
+	if (proto) {
+		headers["X-Forwarded-Proto"] = proto;
+	}
+	return headers;
+}
+
 function encodeParams(key: string, options: RequestOptions): string {
 	const params = new URLSearchParams();
 	params.set("key", key);
@@ -131,9 +146,7 @@ async function requestGhost<T>(
 				...options,
 			})}`,
 			{
-				headers: {
-					"Accept-Version": config.version,
-				},
+				headers: getGhostRequestHeaders(config),
 			},
 		);
 	} catch (error) {
@@ -181,9 +194,7 @@ async function requestGhostSettings(): Promise<GhostSettings | undefined> {
 	let response: Response;
 	try {
 		response = await fetch(`${endpoint}?${encodeParams(config.key, {})}`, {
-			headers: {
-				"Accept-Version": config.version,
-			},
+			headers: getGhostRequestHeaders(config),
 		});
 	} catch (error) {
 		if (allowEmptyData()) {
