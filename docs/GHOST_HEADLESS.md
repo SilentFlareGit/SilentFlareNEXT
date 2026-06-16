@@ -92,6 +92,56 @@ pnpm build
 
 Deploy the generated `dist` directory if your platform expects static output.
 
+### FNS1 Static Deployment
+
+The production blog currently deploys to the FNS1 server as a static Astro site:
+
+- Source checkout: `/opt/silentflare/app`
+- Deploy script: `/opt/silentflare/deploy/deploy.sh`
+- Deploy environment: `/opt/silentflare/deploy/deploy.env`
+- Static releases: `/opt/silentflare/blog/releases`
+- Live symlink: `/opt/silentflare/blog/current`
+- Deploy log: `/var/log/silentflare-deploy.log`
+
+The deploy script keeps `/opt/silentflare/app` aligned with GitHub before every build:
+
+```sh
+git fetch --prune origin main
+git reset --hard origin/main
+```
+
+It then installs dependencies, runs the strict Ghost build verification, publishes a timestamped release, and atomically moves the `current` symlink.
+
+GitHub Actions triggers the FNS1 deploy webhook after the `Build and Check` workflow passes on `main`. Configure the repository secret with the full origin webhook URL:
+
+```text
+DEPLOY_WEBHOOK_URL=http://<origin-ip>/hooks/rebuild?token=<deploy-token>
+```
+
+Do not commit this URL or token. Keep it in GitHub repository secrets only.
+
+To verify the live site from the server:
+
+```sh
+curl -sS -o /dev/null -w 'HOME=%{http_code}\n' -H Host:blog.silentflare.com http://127.0.0.1/
+curl -sS -o /dev/null -w 'POST=%{http_code}\n' -H Host:blog.silentflare.com http://127.0.0.1/posts/coming-soon/
+```
+
+To inspect the active release:
+
+```sh
+git -C /opt/silentflare/app rev-parse --short HEAD
+readlink -f /opt/silentflare/blog/current
+tail -n 120 /var/log/silentflare-deploy.log
+```
+
+To roll back, point `current` to an earlier release and keep the change atomic:
+
+```sh
+ln -sfn /opt/silentflare/blog/releases/<release-id> /opt/silentflare/blog/current.next
+mv -Tf /opt/silentflare/blog/current.next /opt/silentflare/blog/current
+```
+
 ## Avoid Duplicate Indexing
 
 If Ghost's default front end is reachable at the same public content URLs as Astro, search engines may index duplicates. Prefer one of these approaches:
