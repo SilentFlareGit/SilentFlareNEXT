@@ -1,8 +1,9 @@
-import path from "node:path";
 import { getCollection } from "astro:content";
+import path from "node:path";
 import I18nKey from "@i18n/i18nKey";
 import { i18n } from "@i18n/translation";
 import { getCategoryUrl, getTagUrl } from "@utils/url-utils.ts";
+import MarkdownIt from "markdown-it";
 import type { BlogAuthor, BlogPost, BlogTag } from "@/lib/ghost";
 import {
 	getAuthors,
@@ -12,7 +13,6 @@ import {
 	getPostsByTag,
 	getTags,
 } from "@/lib/ghost-client";
-import MarkdownIt from "markdown-it";
 
 export type { BlogAuthor, BlogPost, BlogTag };
 
