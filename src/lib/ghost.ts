@@ -52,17 +52,6 @@ export interface GhostPost {
 	meta_description?: string | null;
 }
 
-export interface GhostSettings {
-	title?: string;
-	description?: string;
-	url?: string;
-	locale?: string;
-	timezone?: string;
-	icon?: string | null;
-	logo?: string | null;
-	cover_image?: string | null;
-}
-
 export interface GhostPagination {
 	page: number;
 	limit: number;
@@ -133,11 +122,9 @@ export interface GhostCmsStatus {
 	connected: boolean;
 	url?: string;
 	apiVersion: string;
-	site?: GhostSettings;
 	counts: {
 		posts: number;
 		tags: number;
-		authors: number;
 	};
 	latestPosts: BlogPost[];
 }

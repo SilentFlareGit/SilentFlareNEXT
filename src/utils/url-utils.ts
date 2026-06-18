@@ -31,11 +31,6 @@ export function getCategoryUrl(category: string | null): string {
 	return getTagUrl(category);
 }
 
-export function getAuthorUrl(author: string): string {
-	if (!author) return url("/archive/");
-	return url(`/authors/${encodeURIComponent(author.trim())}/`);
-}
-
 export function getDir(path: string): string {
 	const lastSlashIndex = path.lastIndexOf("/");
 	if (lastSlashIndex < 0) {

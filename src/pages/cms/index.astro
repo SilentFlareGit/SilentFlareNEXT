@@ -28,7 +28,7 @@ const status = await getGhostCmsStatus();
 			</div>
 		</div>
 
-		<div class="grid gap-3 md:grid-cols-3">
+		<div class="grid gap-3 md:grid-cols-2">
 			<div class="rounded-xl bg-[var(--btn-regular-bg)] px-4 py-4">
 				<div class="text-sm text-50">Posts</div>
 				<div class="mt-2 text-3xl font-bold text-90">{status.counts.posts}</div>
@@ -37,18 +37,7 @@ const status = await getGhostCmsStatus();
 				<div class="text-sm text-50">Tags</div>
 				<div class="mt-2 text-3xl font-bold text-90">{status.counts.tags}</div>
 			</div>
-			<div class="rounded-xl bg-[var(--btn-regular-bg)] px-4 py-4">
-				<div class="text-sm text-50">Authors</div>
-				<div class="mt-2 text-3xl font-bold text-90">{status.counts.authors}</div>
-			</div>
 		</div>
-
-		{status.site && (
-			<div class="mt-6 rounded-xl border border-dashed border-black/10 px-4 py-4 text-sm leading-6 text-75 dark:border-white/10">
-				<div class="font-medium text-90">{status.site.title ?? "Ghost site"}</div>
-				{status.site.description && <div class="mt-1">{status.site.description}</div>}
-			</div>
-		)}
 
 		{status.latestPosts.length > 0 && (
 			<div class="mt-7">

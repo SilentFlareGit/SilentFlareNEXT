@@ -6,10 +6,8 @@ import { getCategoryUrl, getTagUrl } from "@utils/url-utils.ts";
 import MarkdownIt from "markdown-it";
 import type { BlogAuthor, BlogPost, BlogTag } from "@/lib/ghost";
 import {
-	getAuthors,
 	getPostBySlug,
 	getPosts,
-	getPostsByAuthor,
 	getPostsByTag,
 	getTags,
 } from "@/lib/ghost-client";
@@ -250,24 +248,4 @@ export async function getPostsForTag(slug: string): Promise<BlogPost[]> {
 		});
 	}
 	return posts;
-}
-
-export async function getPostsForAuthor(slug: string): Promise<BlogPost[]> {
-	const posts = (await getPostsByAuthor(slug, { limit: "all" })).items;
-	if (
-		posts.length === 0 &&
-		shouldUseLocalFallback() &&
-		slug === localAuthor.slug
-	) {
-		return getLocalPosts();
-	}
-	return posts;
-}
-
-export async function getAuthorList(): Promise<BlogAuthor[]> {
-	const authors = (await getAuthors({ limit: "all" })).items;
-	if (authors.length === 0 && shouldUseLocalFallback()) {
-		return [localAuthor];
-	}
-	return authors;
 }

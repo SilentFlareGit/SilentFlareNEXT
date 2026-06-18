@@ -1,23 +1,19 @@
 import type {
-	BlogAuthor,
 	BlogPost,
 	BlogTag,
-	GhostAuthor,
 	GhostCmsStatus,
 	GhostListResponse,
 	GhostPage,
 	GhostPost,
-	GhostSettings,
 	GhostTag,
 } from "./ghost";
 import {
-	adaptGhostAuthor,
 	adaptGhostPost,
 	adaptGhostTag,
 	withAdjacentPosts,
 } from "./ghost-adapter";
 
-type GhostResource = "posts" | "tags" | "authors";
+type GhostResource = "posts" | "tags";
 
 interface RequestOptions {
 	page?: number;
@@ -29,7 +25,7 @@ interface RequestOptions {
 }
 
 const DEFAULT_API_VERSION = "v5.0";
-const POSTS_INCLUDE = "tags,authors";
+const POSTS_INCLUDE = "tags";
 const POSTS_ORDER = "published_at desc";
 
 function readEnv(name: string): string | boolean | undefined {
@@ -174,7 +170,6 @@ async function requestGhost<T>(
 	const json = (await response.json()) as {
 		posts?: T[];
 		tags?: T[];
-		authors?: T[];
 		meta: GhostListResponse<T>["meta"];
 	};
 
@@ -182,44 +177,6 @@ async function requestGhost<T>(
 		data: json[resource] ?? [],
 		meta: json.meta,
 	};
-}
-
-async function requestGhostSettings(): Promise<GhostSettings | undefined> {
-	const config = getGhostConfig();
-	if (!config) {
-		return undefined;
-	}
-
-	const endpoint = `${config.url}/ghost/api/content/settings/`;
-	let response: Response;
-	try {
-		response = await fetch(`${endpoint}?${encodeParams(config.key, {})}`, {
-			headers: getGhostRequestHeaders(config),
-		});
-	} catch (error) {
-		if (allowEmptyData()) {
-			console.warn(
-				"[ghost] Unable to fetch settings; returning empty data because GHOST_ALLOW_EMPTY=true.",
-			);
-			return undefined;
-		}
-		throw error;
-	}
-
-	if (!response.ok) {
-		if (allowEmptyData()) {
-			console.warn(
-				`[ghost] Content API returned ${response.status} for settings; returning empty data because GHOST_ALLOW_EMPTY=true.`,
-			);
-			return undefined;
-		}
-		throw new Error(
-			`Ghost Content API request failed: ${response.status} ${response.statusText} for settings. Check GHOST_URL and GHOST_CONTENT_API_KEY.`,
-		);
-	}
-
-	const json = (await response.json()) as { settings?: GhostSettings };
-	return json.settings;
 }
 
 export async function getPosts(
@@ -271,48 +228,20 @@ export async function getPostsByTag(
 	});
 }
 
-export async function getAuthors(
-	options: RequestOptions = {},
-): Promise<GhostPage<BlogAuthor>> {
-	const response = await requestGhost<GhostAuthor>("authors", {
-		include: "count.posts",
-		order: "name asc",
-		...options,
-	});
-	return {
-		items: response.data.map(adaptGhostAuthor),
-		pagination: response.meta.pagination,
-	};
-}
-
-export async function getPostsByAuthor(
-	slug: string,
-	options: RequestOptions = {},
-): Promise<GhostPage<BlogPost>> {
-	return getPosts({
-		...options,
-		filter: `author:${slug}`,
-	});
-}
-
 export async function getGhostCmsStatus(): Promise<GhostCmsStatus> {
 	const publicConfig = getGhostPublicConfig();
-	const [site, posts, tags, authors] = await Promise.all([
-		requestGhostSettings(),
+	const [posts, tags] = await Promise.all([
 		getPosts({ limit: 3 }),
 		getTags({ limit: 1 }),
-		getAuthors({ limit: 1 }),
 	]);
 
 	return {
-		connected: !!site || posts.pagination.total > 0,
+		connected: posts.pagination.total > 0 || tags.pagination.total > 0,
 		url: publicConfig.url,
 		apiVersion: publicConfig.apiVersion,
-		site,
 		counts: {
 			posts: posts.pagination.total,
 			tags: tags.pagination.total,
-			authors: authors.pagination.total,
 		},
 		latestPosts: posts.items,
 	};
