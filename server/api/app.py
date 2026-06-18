@@ -4,15 +4,18 @@ import json
 import hashlib
 import hmac
 import os
+import secrets
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request as UrlRequest, urlopen
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 APP_NAME = "SilentFlare Bot API"
 BACKUP_SCRIPT = Path(
@@ -22,6 +25,15 @@ BACKUP_DIR = Path(os.getenv("BACKUP_DIR", "/opt/silentflare/backups/ghost-db"))
 ADMIN_TOKEN = os.getenv("API_ADMIN_TOKEN", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+WEB_ADMIN_USERNAME = os.getenv("WEB_ADMIN_USERNAME", "admin")
+WEB_ADMIN_PASSWORD_HASH = os.getenv("WEB_ADMIN_PASSWORD_HASH", "")
+WEB_SESSION_TTL = int(os.getenv("WEB_SESSION_TTL", "43200"))
+WEB_COOKIE_SECURE = os.getenv("WEB_COOKIE_SECURE", "1") != "0"
+WEB_LOGIN_ATTEMPTS = int(os.getenv("WEB_LOGIN_ATTEMPTS", "5"))
+WEB_LOGIN_WINDOW_SECONDS = int(os.getenv("WEB_LOGIN_WINDOW_SECONDS", "900"))
+WEB_LOGIN_SESSION_EPOCH = os.getenv("WEB_LOGIN_SESSION_EPOCH", "")
+SESSION_COOKIE = "sf_bot_session"
+PBKDF2_PREFIX = "pbkdf2_sha256"
 
 app = FastAPI(title=APP_NAME)
 app.add_middleware(
@@ -34,8 +46,9 @@ app.add_middleware(
 		"http://tgbot.silentflare.com",
 		"http://tgbotmanagement.silentflare.com",
 	],
+	allow_credentials=True,
 	allow_methods=["GET", "POST", "OPTIONS"],
-	allow_headers=["Content-Type", "X-Admin-Token"],
+	allow_headers=["Content-Type", "X-Admin-Token", "X-CSRF-Token"],
 )
 
 BOTS = [
@@ -46,6 +59,135 @@ BOTS = [
 		"status": "active",
 	}
 ]
+
+SESSIONS: dict[str, dict[str, Any]] = {}
+LOGIN_FAILURES: dict[str, list[float]] = {}
+
+
+class LoginPayload(BaseModel):
+	username: str
+	password: str
+
+
+def make_password_hash(password: str, iterations: int = 260000) -> str:
+	salt = secrets.token_hex(16)
+	digest = hashlib.pbkdf2_hmac(
+		"sha256",
+		password.encode("utf-8"),
+		salt.encode("utf-8"),
+		iterations,
+	)
+	return f"{PBKDF2_PREFIX}${iterations}${salt}${digest.hex()}"
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+	try:
+		prefix, iterations, salt, digest = password_hash.split("$", 3)
+	except ValueError:
+		return False
+	if prefix != PBKDF2_PREFIX:
+		return False
+	candidate = hashlib.pbkdf2_hmac(
+		"sha256",
+		password.encode("utf-8"),
+		salt.encode("utf-8"),
+		int(iterations),
+	).hex()
+	return hmac.compare_digest(candidate, digest)
+
+
+def cleanup_sessions() -> None:
+	now = time.time()
+	expired = [
+		session_id
+		for session_id, session in SESSIONS.items()
+		if session["expires_at"] <= now
+		or session.get("login_epoch") != WEB_LOGIN_SESSION_EPOCH
+	]
+	for session_id in expired:
+		SESSIONS.pop(session_id, None)
+
+
+def create_session(response: Response) -> dict[str, str]:
+	cleanup_sessions()
+	session_id = secrets.token_urlsafe(32)
+	csrf = secrets.token_urlsafe(32)
+	SESSIONS[session_id] = {
+		"csrf": csrf,
+		"expires_at": time.time() + WEB_SESSION_TTL,
+		"login_epoch": WEB_LOGIN_SESSION_EPOCH,
+		"username": WEB_ADMIN_USERNAME,
+	}
+	response.set_cookie(
+		SESSION_COOKIE,
+		session_id,
+		httponly=True,
+		secure=WEB_COOKIE_SECURE,
+		samesite="none" if WEB_COOKIE_SECURE else "lax",
+		max_age=WEB_SESSION_TTL,
+		path="/",
+	)
+	return {"csrf": csrf, "username": WEB_ADMIN_USERNAME}
+
+
+def destroy_session(request: Request, response: Response) -> None:
+	session_id = request.cookies.get(SESSION_COOKIE, "")
+	if session_id:
+		SESSIONS.pop(session_id, None)
+	response.delete_cookie(
+		SESSION_COOKIE,
+		secure=WEB_COOKIE_SECURE,
+		samesite="none" if WEB_COOKIE_SECURE else "lax",
+		path="/",
+	)
+
+
+def get_session(request: Request) -> dict[str, Any]:
+	cleanup_sessions()
+	session_id = request.cookies.get(SESSION_COOKIE, "")
+	session = SESSIONS.get(session_id)
+	if not session:
+		raise HTTPException(status_code=401, detail="Login required")
+	session["expires_at"] = time.time() + WEB_SESSION_TTL
+	return session
+
+
+def require_session(
+	request: Request,
+	x_csrf_token: str | None = None,
+	require_csrf: bool = False,
+) -> dict[str, Any]:
+	session = get_session(request)
+	if require_csrf and (
+		not x_csrf_token or not hmac.compare_digest(x_csrf_token, session["csrf"])
+	):
+		raise HTTPException(status_code=403, detail="Invalid CSRF token")
+	return session
+
+
+def client_key(request: Request) -> str:
+	forwarded = request.headers.get("x-forwarded-for", "")
+	if forwarded:
+		return forwarded.split(",", 1)[0].strip()
+	return request.client.host if request.client else "unknown"
+
+
+def check_login_rate_limit(request: Request) -> None:
+	now = time.time()
+	key = client_key(request)
+	failures = [
+		item
+		for item in LOGIN_FAILURES.get(key, [])
+		if now - item < WEB_LOGIN_WINDOW_SECONDS
+	]
+	LOGIN_FAILURES[key] = failures
+	if len(failures) >= WEB_LOGIN_ATTEMPTS:
+		raise HTTPException(status_code=429, detail="Too many login attempts")
+
+
+def record_login_failure(request: Request) -> None:
+	key = client_key(request)
+	LOGIN_FAILURES.setdefault(key, []).append(time.time())
 
 
 def require_admin(x_admin_token: str | None) -> None:
@@ -129,7 +271,7 @@ def notify_telegram(text: str) -> None:
 	if not TELEGRAM_BOT_TOKEN or not chat_id:
 		return
 	data = urlencode({"chat_id": chat_id, "text": text}).encode()
-	request = Request(
+	request = UrlRequest(
 		f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
 		data=data,
 		method="POST",
@@ -143,18 +285,62 @@ def health() -> dict[str, Any]:
 	return {"ok": True, "service": APP_NAME}
 
 
+@app.get("/auth/me")
+def auth_me(request: Request) -> dict[str, Any]:
+	session = get_session(request)
+	return {
+		"authenticated": True,
+		"username": session["username"],
+		"csrf": session["csrf"],
+	}
+
+
+@app.post("/auth/login")
+def auth_login(
+	payload: LoginPayload,
+	request: Request,
+	response: Response,
+) -> dict[str, Any]:
+	check_login_rate_limit(request)
+	if not WEB_ADMIN_PASSWORD_HASH:
+		raise HTTPException(status_code=503, detail="Login password is not configured")
+	if payload.username != WEB_ADMIN_USERNAME or not verify_password(
+		payload.password,
+		WEB_ADMIN_PASSWORD_HASH,
+	):
+		record_login_failure(request)
+		raise HTTPException(status_code=401, detail="Invalid username or password")
+	LOGIN_FAILURES.pop(client_key(request), None)
+	session = create_session(response)
+	return {"ok": True, **session}
+
+
+@app.post("/auth/logout")
+def auth_logout(
+	request: Request,
+	response: Response,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	require_session(request, x_csrf_token, require_csrf=True)
+	destroy_session(request, response)
+	return {"ok": True}
+
+
 @app.get("/bots")
-def bots() -> dict[str, Any]:
+def bots(request: Request) -> dict[str, Any]:
+	require_session(request)
 	return {"bots": BOTS}
 
 
 @app.get("/bots/{bot_id}")
-def bot(bot_id: str) -> dict[str, Any]:
+def bot(bot_id: str, request: Request) -> dict[str, Any]:
+	require_session(request)
 	return ensure_bot(bot_id)
 
 
 @app.get("/bots/{bot_id}/backup/status")
-def backup_status(bot_id: str) -> dict[str, Any]:
+def backup_status(bot_id: str, request: Request) -> dict[str, Any]:
+	require_session(request)
 	ensure_bot(bot_id)
 	backups = list_backups()
 	return {
@@ -170,9 +356,15 @@ def backup_status(bot_id: str) -> dict[str, Any]:
 
 @app.post("/bots/{bot_id}/backup/run")
 def backup_run(
-	bot_id: str, x_admin_token: str | None = Header(default=None)
+	bot_id: str,
+	request: Request,
+	x_admin_token: str | None = Header(default=None),
+	x_csrf_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
-	require_admin(x_admin_token)
+	if x_admin_token:
+		require_admin(x_admin_token)
+	else:
+		require_session(request, x_csrf_token, require_csrf=True)
 	ensure_bot(bot_id)
 	if not BACKUP_SCRIPT.exists():
 		raise HTTPException(status_code=500, detail="Backup script is missing")
@@ -201,9 +393,15 @@ def backup_run(
 
 @app.post("/bots/{bot_id}/telegram/test")
 def telegram_test(
-	bot_id: str, x_admin_token: str | None = Header(default=None)
+	bot_id: str,
+	request: Request,
+	x_admin_token: str | None = Header(default=None),
+	x_csrf_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
-	require_admin(x_admin_token)
+	if x_admin_token:
+		require_admin(x_admin_token)
+	else:
+		require_session(request, x_csrf_token, require_csrf=True)
 	ensure_bot(bot_id)
 	if not TELEGRAM_BOT_TOKEN or not resolve_telegram_chat_id():
 		raise HTTPException(
