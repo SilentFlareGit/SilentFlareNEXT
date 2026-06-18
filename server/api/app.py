@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import hashlib
+import hmac
 import os
 import subprocess
 from datetime import datetime, timezone
@@ -49,7 +51,7 @@ BOTS = [
 def require_admin(x_admin_token: str | None) -> None:
 	if not ADMIN_TOKEN:
 		raise HTTPException(status_code=503, detail="Admin token is not configured")
-	if not x_admin_token or not hashlib.compare_digest(x_admin_token, ADMIN_TOKEN):
+	if not x_admin_token or not hmac.compare_digest(x_admin_token, ADMIN_TOKEN):
 		raise HTTPException(status_code=401, detail="Invalid admin token")
 
 
@@ -100,10 +102,33 @@ def timer_active() -> bool:
 	return result.stdout.strip() == "active"
 
 
+def resolve_telegram_chat_id() -> str:
+	if TELEGRAM_CHAT_ID:
+		return TELEGRAM_CHAT_ID
+	if not TELEGRAM_BOT_TOKEN:
+		return ""
+	with urlopen(
+		f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates",
+		timeout=20,
+	) as response:
+		data = json.loads(response.read().decode("utf-8"))
+	for update in reversed(data.get("result", [])):
+		message = (
+			update.get("message")
+			or update.get("channel_post")
+			or update.get("edited_message")
+		)
+		chat = (message or {}).get("chat", {})
+		if chat.get("id") is not None:
+			return str(chat["id"])
+	return ""
+
+
 def notify_telegram(text: str) -> None:
-	if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+	chat_id = resolve_telegram_chat_id()
+	if not TELEGRAM_BOT_TOKEN or not chat_id:
 		return
-	data = urlencode({"chat_id": TELEGRAM_CHAT_ID, "text": text}).encode()
+	data = urlencode({"chat_id": chat_id, "text": text}).encode()
 	request = Request(
 		f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
 		data=data,
@@ -180,10 +205,10 @@ def telegram_test(
 ) -> dict[str, Any]:
 	require_admin(x_admin_token)
 	ensure_bot(bot_id)
-	if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+	if not TELEGRAM_BOT_TOKEN or not resolve_telegram_chat_id():
 		raise HTTPException(
 			status_code=503,
-			detail="Telegram token or chat id is not configured",
+			detail="Telegram token is not configured or no chat has messaged the bot",
 		)
 	notify_telegram("SilentFlare Bot Management test notification.")
 	return {"ok": True, "message": "Telegram test notification sent."}
