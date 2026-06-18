@@ -1,0 +1,246 @@
+---
+import MainGridLayout from "../../layouts/MainGridLayout.astro";
+
+const apiBase =
+	import.meta.env.PUBLIC_API_BASE_URL ?? "https://api.silentflare.com";
+---
+
+<MainGridLayout
+	title="Telegram Bot Management"
+	description="SilentFlare bot operations dashboard"
+>
+	<section class="card-base overflow-hidden rounded-[var(--radius-large)]">
+		<div class="px-6 py-7 md:px-9 md:py-9">
+			<div class="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
+				<div class="max-w-2xl">
+					<h1 class="mb-3 text-3xl font-bold text-90 md:text-4xl">
+						Telegram Bot Management
+					</h1>
+					<p class="text-base leading-7 text-75">
+						Select a bot, review its backup status, and trigger controlled
+						server-side operations through the SilentFlare API.
+					</p>
+				</div>
+				<div
+					id="api-health"
+					class="rounded-lg bg-[var(--btn-regular-bg)] px-4 py-3 text-sm font-medium text-50"
+				>
+					Checking API
+				</div>
+			</div>
+		</div>
+	</section>
+
+	<section class="mt-4 grid gap-4 xl:grid-cols-[18rem_1fr]">
+		<div class="card-base rounded-[var(--radius-large)] px-5 py-5">
+			<div class="mb-4 text-sm font-bold uppercase tracking-wide text-50">
+				Bots
+			</div>
+			<div id="bot-list" class="flex flex-col gap-2">
+				<button
+					type="button"
+					class="btn-regular min-h-12 justify-start rounded-xl px-4 text-left"
+					disabled
+				>
+					Loading bots
+				</button>
+			</div>
+		</div>
+
+		<div class="card-base rounded-[var(--radius-large)] px-6 py-6 md:px-8">
+			<div class="mb-6 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+				<div>
+					<div id="selected-bot-purpose" class="mb-2 text-sm text-50">
+						Database backup
+					</div>
+					<h2 id="selected-bot-name" class="text-2xl font-bold text-90">
+						Ghost database backup bot
+					</h2>
+				</div>
+				<button
+					id="run-backup"
+					type="button"
+					class="btn-regular h-11 rounded-xl px-5 font-medium"
+				>
+					Run backup
+				</button>
+			</div>
+
+			<div class="grid gap-3 md:grid-cols-3">
+				<div class="rounded-xl bg-[var(--btn-regular-bg)] px-4 py-4">
+					<div class="text-sm text-50">Timer</div>
+					<div id="backup-timer" class="mt-2 text-lg font-bold text-90">
+						Unknown
+					</div>
+				</div>
+				<div class="rounded-xl bg-[var(--btn-regular-bg)] px-4 py-4">
+					<div class="text-sm text-50">Latest backup</div>
+					<div id="backup-latest" class="mt-2 text-lg font-bold text-90">
+						Unknown
+					</div>
+				</div>
+				<div class="rounded-xl bg-[var(--btn-regular-bg)] px-4 py-4">
+					<div class="text-sm text-50">Local files</div>
+					<div id="backup-count" class="mt-2 text-lg font-bold text-90">
+						0
+					</div>
+				</div>
+			</div>
+
+			<div
+				id="backup-message"
+				class="mt-5 rounded-xl border border-dashed border-black/10 px-4 py-4 text-sm leading-6 text-75 dark:border-white/10"
+			>
+				Waiting for API status.
+			</div>
+
+			<div class="mt-6 overflow-hidden rounded-xl bg-[var(--btn-regular-bg)]">
+				<div class="grid grid-cols-[1fr_8rem] px-4 py-3 text-sm font-bold text-75">
+					<div>Backup file</div>
+					<div class="text-right">Size</div>
+				</div>
+				<div id="backup-history" class="border-t border-black/10 dark:border-white/10">
+					<div class="px-4 py-4 text-sm text-50">No backup history loaded.</div>
+				</div>
+			</div>
+		</div>
+	</section>
+
+	<script is:inline define:vars={{ apiBase }}>
+		const botList = document.getElementById("bot-list");
+		const apiHealth = document.getElementById("api-health");
+		const runBackup = document.getElementById("run-backup");
+		const selectedBotName = document.getElementById("selected-bot-name");
+		const selectedBotPurpose = document.getElementById("selected-bot-purpose");
+		const backupTimer = document.getElementById("backup-timer");
+		const backupLatest = document.getElementById("backup-latest");
+		const backupCount = document.getElementById("backup-count");
+		const backupMessage = document.getElementById("backup-message");
+		const backupHistory = document.getElementById("backup-history");
+
+		let selectedBotId = "ghost-db-backup";
+
+		function setMessage(message, tone = "neutral") {
+			backupMessage.textContent = message;
+			backupMessage.dataset.tone = tone;
+		}
+
+		function formatSize(value) {
+			if (!Number.isFinite(value)) return "0 B";
+			if (value < 1024) return `${value} B`;
+			if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+			return `${(value / 1024 / 1024).toFixed(1)} MB`;
+		}
+
+		async function api(path, options) {
+			const headers = { "Content-Type": "application/json" };
+			if (options?.admin === true) {
+				let token = sessionStorage.getItem("silentflare_admin_token");
+				if (!token) {
+					token = window.prompt("Admin token") ?? "";
+					if (token) sessionStorage.setItem("silentflare_admin_token", token);
+				}
+				if (token) headers["X-Admin-Token"] = token;
+			}
+			const response = await fetch(`${apiBase}${path}`, {
+				headers,
+				...options,
+			});
+			if (!response.ok) {
+				throw new Error(`API ${response.status}`);
+			}
+			return response.json();
+		}
+
+		function renderBots(bots) {
+			botList.textContent = "";
+			for (const bot of bots) {
+				const button = document.createElement("button");
+				button.type = "button";
+				button.className =
+					"btn-regular min-h-12 justify-start rounded-xl px-4 text-left";
+				button.textContent = bot.name;
+				button.addEventListener("click", () => {
+					selectedBotId = bot.id;
+					selectedBotName.textContent = bot.name;
+					selectedBotPurpose.textContent = bot.purpose;
+					loadStatus();
+				});
+				botList.append(button);
+			}
+		}
+
+		function renderStatus(status) {
+			backupTimer.textContent = status.timer_active ? "Active" : "Inactive";
+			backupLatest.textContent = status.latest?.created_at ?? "None";
+			backupCount.textContent = String(status.backups.length);
+			backupHistory.textContent = "";
+
+			if (status.backups.length === 0) {
+				const empty = document.createElement("div");
+				empty.className = "px-4 py-4 text-sm text-50";
+				empty.textContent = "No local backups found.";
+				backupHistory.append(empty);
+				return;
+			}
+
+			for (const item of status.backups) {
+				const row = document.createElement("div");
+				row.className =
+					"grid grid-cols-[1fr_8rem] gap-3 border-t border-black/10 px-4 py-3 text-sm dark:border-white/10";
+				const name = document.createElement("div");
+				name.className = "min-w-0 truncate font-medium text-75";
+				name.textContent = item.filename;
+				const size = document.createElement("div");
+				size.className = "text-right text-50";
+				size.textContent = formatSize(item.size);
+				row.append(name, size);
+				backupHistory.append(row);
+			}
+		}
+
+		async function loadStatus() {
+			try {
+				const status = await api(`/bots/${selectedBotId}/backup/status`);
+				renderStatus(status);
+				setMessage(status.message ?? "Backup status loaded.");
+			} catch (error) {
+				setMessage(`Unable to load backup status: ${error.message}`, "error");
+			}
+		}
+
+		async function boot() {
+			try {
+				const health = await api("/health");
+				apiHealth.textContent = health.ok ? "API online" : "API degraded";
+				const bots = await api("/bots");
+				renderBots(bots.bots);
+				await loadStatus();
+			} catch (error) {
+				apiHealth.textContent = "API offline";
+				setMessage(`Unable to reach API: ${error.message}`, "error");
+			}
+		}
+
+		runBackup?.addEventListener("click", async () => {
+			runBackup.disabled = true;
+			runBackup.textContent = "Running";
+			setMessage("Backup job started.");
+			try {
+				const result = await api(`/bots/${selectedBotId}/backup/run`, {
+					method: "POST",
+					admin: true,
+				});
+				setMessage(result.message ?? "Backup completed.");
+				await loadStatus();
+			} catch (error) {
+				setMessage(`Backup failed: ${error.message}`, "error");
+			} finally {
+				runBackup.disabled = false;
+				runBackup.textContent = "Run backup";
+			}
+		});
+
+		boot();
+	</script>
+</MainGridLayout>

@@ -8,6 +8,7 @@ const requiredFiles = [
 	"404.html",
 	"about/index.html",
 	"archive/index.html",
+	"bots/index.html",
 	"cms/index.html",
 	"robots.txt",
 	"rss.xml",
