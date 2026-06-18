@@ -13,24 +13,6 @@ export interface GhostTag {
 	};
 }
 
-export interface GhostAuthor {
-	id?: string;
-	name: string;
-	slug: string;
-	bio?: string | null;
-	profile_image?: string | null;
-	cover_image?: string | null;
-	website?: string | null;
-	location?: string | null;
-	facebook?: string | null;
-	twitter?: string | null;
-	meta_title?: string | null;
-	meta_description?: string | null;
-	count?: {
-		posts?: number;
-	};
-}
-
 export interface GhostPost {
 	id: string;
 	uuid?: string;
@@ -45,9 +27,7 @@ export interface GhostPost {
 	updated_at?: string | null;
 	reading_time?: number | null;
 	tags?: GhostTag[];
-	authors?: GhostAuthor[];
 	primary_tag?: GhostTag | null;
-	primary_author?: GhostAuthor | null;
 	meta_title?: string | null;
 	meta_description?: string | null;
 }
@@ -78,19 +58,6 @@ export interface BlogTag {
 	count?: number;
 }
 
-export interface BlogAuthor {
-	name: string;
-	slug: string;
-	bio?: string;
-	profileImage?: string;
-	coverImage?: string;
-	website?: string;
-	location?: string;
-	metaTitle?: string;
-	metaDescription?: string;
-	count?: number;
-}
-
 export interface BlogPost {
 	id: string;
 	title: string;
@@ -102,9 +69,7 @@ export interface BlogPost {
 	updated?: Date;
 	readingTime: number;
 	tags: BlogTag[];
-	authors: BlogAuthor[];
 	primaryTag?: BlogTag;
-	primaryAuthor?: BlogAuthor;
 	metaTitle?: string;
 	metaDescription?: string;
 	nextSlug?: string;

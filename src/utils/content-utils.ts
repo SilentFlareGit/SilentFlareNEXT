@@ -4,7 +4,7 @@ import I18nKey from "@i18n/i18nKey";
 import { i18n } from "@i18n/translation";
 import { getCategoryUrl, getTagUrl } from "@utils/url-utils.ts";
 import MarkdownIt from "markdown-it";
-import type { BlogAuthor, BlogPost, BlogTag } from "@/lib/ghost";
+import type { BlogPost, BlogTag } from "@/lib/ghost";
 import {
 	getPostBySlug,
 	getPosts,
@@ -12,13 +12,7 @@ import {
 	getTags,
 } from "@/lib/ghost-client";
 
-export type { BlogAuthor, BlogPost, BlogTag };
-
-const localAuthor: BlogAuthor = {
-	name: "SilentFlare",
-	slug: "silentflare",
-	bio: "Technical practice, product thinking, and sustainable building.",
-};
+export type { BlogPost, BlogTag };
 
 const markdown = new MarkdownIt({
 	html: true,
@@ -114,9 +108,7 @@ async function getLocalPosts(): Promise<BlogPost[]> {
 				Math.ceil((entry.body ?? "").split(/\s+/).length / 180),
 			),
 			tags,
-			authors: [localAuthor],
 			primaryTag: category ?? tags[0],
-			primaryAuthor: localAuthor,
 			nextSlug: entry.data.nextSlug || undefined,
 			nextTitle: entry.data.nextTitle || undefined,
 			prevSlug: entry.data.prevSlug || undefined,

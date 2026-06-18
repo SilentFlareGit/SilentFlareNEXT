@@ -51,10 +51,6 @@ const jsonLd = {
 	headline: entry.metaTitle ?? entry.title,
 	description: entry.metaDescription ?? entry.excerpt ?? entry.title,
 	keywords: entry.tags.map((tag) => tag.name),
-	author: entry.authors.map((author) => ({
-		"@type": "Person",
-		name: author.name,
-	})),
 	datePublished: formatDateToYYYYMMDD(entry.published),
 	dateModified: entry.updated ? formatDateToYYYYMMDD(entry.updated) : undefined,
 	image: entry.featureImage,

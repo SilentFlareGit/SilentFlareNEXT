@@ -1,11 +1,4 @@
-import type {
-	BlogAuthor,
-	BlogPost,
-	BlogTag,
-	GhostAuthor,
-	GhostPost,
-	GhostTag,
-} from "./ghost";
+import type { BlogPost, BlogTag, GhostPost, GhostTag } from "./ghost";
 
 function text(value?: string | null): string | undefined {
 	const trimmed = value?.trim();
@@ -57,24 +50,8 @@ export function adaptGhostTag(tag: GhostTag): BlogTag {
 	};
 }
 
-export function adaptGhostAuthor(author: GhostAuthor): BlogAuthor {
-	return {
-		name: author.name,
-		slug: author.slug,
-		bio: text(author.bio),
-		profileImage: text(author.profile_image),
-		coverImage: text(author.cover_image),
-		website: text(author.website),
-		location: text(author.location),
-		metaTitle: text(author.meta_title),
-		metaDescription: text(author.meta_description),
-		count: author.count?.posts,
-	};
-}
-
 export function adaptGhostPost(post: GhostPost): BlogPost {
 	const tags = (post.tags ?? []).map(adaptGhostTag);
-	const authors = (post.authors ?? []).map(adaptGhostAuthor);
 	const published = toDate(post.published_at) ?? new Date(0);
 
 	return {
@@ -88,11 +65,7 @@ export function adaptGhostPost(post: GhostPost): BlogPost {
 		updated: toDate(post.updated_at),
 		readingTime: post.reading_time ?? 1,
 		tags,
-		authors,
 		primaryTag: post.primary_tag ? adaptGhostTag(post.primary_tag) : tags[0],
-		primaryAuthor: post.primary_author
-			? adaptGhostAuthor(post.primary_author)
-			: authors[0],
 		metaTitle: text(post.meta_title),
 		metaDescription: text(post.meta_description),
 	};
