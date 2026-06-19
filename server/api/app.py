@@ -80,6 +80,11 @@ class TelegramStartPayload(BaseModel):
 	bot_id: str
 
 
+class TelegramCancelPayload(BaseModel):
+	bot_id: str
+	challenge_id: str
+
+
 def cleanup_sessions() -> None:
 	now = time.time()
 	expired = [
@@ -506,6 +511,18 @@ def auth_telegram_status(
 		"bot": public_bot(bot),
 		**session,
 	}
+
+
+@app.post("/auth/telegram/cancel")
+def auth_telegram_cancel(payload: TelegramCancelPayload, request: Request) -> dict[str, Any]:
+	challenge = get_login_challenge(
+		payload.challenge_id,
+		payload.bot_id,
+		client_key(request),
+	)
+	if challenge["status"] == "pending":
+		LOGIN_CHALLENGES.pop(payload.challenge_id, None)
+	return {"ok": True}
 
 
 @app.post("/auth/logout")
