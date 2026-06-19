@@ -455,6 +455,8 @@ def timer_active() -> bool:
 def resolve_telegram_chat_id() -> str:
 	if TELEGRAM_CHAT_ID:
 		return TELEGRAM_CHAT_ID
+	if TELEGRAM_OWNER_ID:
+		return str(TELEGRAM_OWNER_ID)
 	if not TELEGRAM_BOT_TOKEN:
 		return ""
 	with urlopen(
@@ -474,18 +476,22 @@ def resolve_telegram_chat_id() -> str:
 	return ""
 
 
-def notify_telegram(text: str) -> None:
+def notify_telegram(text: str) -> bool:
 	chat_id = resolve_telegram_chat_id()
 	if not TELEGRAM_BOT_TOKEN or not chat_id:
-		return
+		return False
 	data = urlencode({"chat_id": chat_id, "text": text}).encode()
 	request = UrlRequest(
 		f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
 		data=data,
 		method="POST",
 	)
-	with urlopen(request, timeout=20) as response:
-		response.read()
+	try:
+		with urlopen(request, timeout=20) as response:
+			response.read()
+	except Exception:
+		return False
+	return True
 
 
 @app.get("/health")
@@ -719,15 +725,20 @@ def backup_run(
 		raise HTTPException(status_code=500, detail="Backup script failed")
 	backups = list_backups()
 	latest = backups[0] if backups else None
+	notification_sent = False
 	if latest:
-		notify_telegram(
+		notification_sent = notify_telegram(
 			"SilentFlare Ghost DB backup completed: "
 			f"{latest['filename']} sha256={latest['sha256']} size={latest['size']}"
 		)
+	message = "Backup completed and local file was created."
+	if latest and not notification_sent:
+		message += " Telegram notification was not sent."
 	return {
 		"ok": True,
 		"latest": latest,
-		"message": "Backup completed and local file was created.",
+		"notification_sent": notification_sent,
+		"message": message,
 	}
 
 
@@ -753,5 +764,6 @@ def telegram_test(
 			status_code=503,
 			detail="Telegram token is not configured or no chat has messaged the bot",
 		)
-	notify_telegram("SilentFlare Bot Management test notification.")
+	if not notify_telegram("SilentFlare Bot Management test notification."):
+		raise HTTPException(status_code=503, detail="Telegram notification could not be sent")
 	return {"ok": True, "message": "Telegram test notification sent."}
