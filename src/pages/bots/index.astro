@@ -753,18 +753,32 @@ const apiBase =
 					<h1>Telegram Bot Management</h1>
 					<p>Choose a bot first, then verify access for that bot.</p>
 				</div>
-				<div class="method-grid">
+				<div id="bot-step" class="method-grid">
 					<section class="method-card">
 						<div>
-							<h2>1. Select bot</h2>
+							<h2>Select bot</h2>
 							<p>Pick the bot backend you want to operate.</p>
 						</div>
 						<div id="login-bot-list" class="bot-list login-bot-list"></div>
 					</section>
+					<div id="login-message" class="message">Loading bot list.</div>
+				</div>
+				<div id="auth-step" class="method-grid hidden">
 					<section class="method-card">
 						<div class="method-head">
 							<div>
-								<h2>2. Telegram Bot authorization</h2>
+								<h2 id="auth-title">Verify bot access</h2>
+								<p id="auth-subtitle">Confirm access before opening this bot backend.</p>
+							</div>
+							<button id="change-bot" type="button" class="button ghost">
+								<span>Change bot</span>
+							</button>
+						</div>
+					</section>
+					<section class="method-card">
+						<div class="method-head">
+							<div>
+								<h2>Telegram Bot authorization</h2>
 								<p>Send a one-time approval request for the selected bot.</p>
 							</div>
 							<button id="login-telegram" type="button" class="button primary" disabled>
@@ -776,7 +790,7 @@ const apiBase =
 					</section>
 					<section class="method-card">
 						<div>
-							<h2>2. Authenticator 2FA</h2>
+							<h2>Authenticator 2FA</h2>
 							<p>Use the six-digit Owner code for the selected bot.</p>
 						</div>
 						<form id="login-totp-form" class="code-row" autocomplete="off">
@@ -787,8 +801,8 @@ const apiBase =
 							</button>
 						</form>
 					</section>
+					<div id="login-message-auth" class="message">Choose a verification method.</div>
 				</div>
-				<div id="login-message" class="message">Checking available login methods.</div>
 			</div>
 		</section>
 
@@ -968,13 +982,19 @@ const apiBase =
 				backupHistory: $("backup-history"),
 				backupLatest: $("backup-latest"),
 				backupTimer: $("backup-timer"),
+				authStep: $("auth-step"),
+				authSubtitle: $("auth-subtitle"),
+				authTitle: $("auth-title"),
+				botStep: $("bot-step"),
 				botList: $("bot-list"),
+				changeBot: $("change-bot"),
 				dashboardView: $("dashboard-view"),
 				enableTotpCode: $("enable-totp-code"),
 				enableTotpForm: $("enable-totp-form"),
 				generateTotp: $("generate-totp"),
 				loginBotList: $("login-bot-list"),
 				loginMessage: $("login-message"),
+				loginMessageAuth: $("login-message-auth"),
 				loginPage: $("login-page"),
 				loginTelegram: $("login-telegram"),
 				loginTelegramMessage: $("login-telegram-message"),
@@ -1075,13 +1095,30 @@ const apiBase =
 				$("login-totp-submit").disabled = !enabled || !state.loginMethods.totp;
 			}
 
+			function showBotStep() {
+				stopLoginPolling();
+				nodes.authStep.classList.add("hidden");
+				nodes.botStep.classList.remove("hidden");
+				setAuthControlsEnabled(false);
+				nodes.loginTotpCode.value = "";
+			}
+
+			function showAuthStep() {
+				if (!state.selectedBot) return;
+				nodes.botStep.classList.add("hidden");
+				nodes.authStep.classList.remove("hidden");
+				nodes.authTitle.textContent = `Verify ${state.selectedBot.id}`;
+				nodes.authSubtitle.textContent = `${state.selectedBot.purpose} / ${state.selectedBot.status}`;
+				setAuthControlsEnabled(true);
+				setMessage(nodes.loginMessageAuth, "Choose Telegram approval or 2FA to continue.", "neutral");
+				setMessage(nodes.loginTelegramMessage, "Ready to send an approval request for the selected bot.");
+			}
+
 			function selectLoginBot(bot) {
 				state.selectedBot = bot;
 				sessionStorage.setItem("silentflare_selected_bot", bot.id);
 				renderLoginBots();
-				setAuthControlsEnabled(true);
-				setMessage(nodes.loginMessage, `Selected ${bot.id}. Verify access to continue.`, "success");
-				setMessage(nodes.loginTelegramMessage, "Ready to send an approval request for the selected bot.");
+				showAuthStep();
 			}
 
 			async function api(path, options = {}) {
@@ -1405,12 +1442,10 @@ const apiBase =
 					const list = await api("/bots", { lockOnAuthFailure: false });
 					state.bots = list.bots ?? [];
 					const remembered = sessionStorage.getItem("silentflare_selected_bot");
-					state.selectedBot = state.bots.find((bot) => bot.id === remembered) ?? state.bots[0] ?? null;
+					state.selectedBot = state.bots.find((bot) => bot.id === remembered) ?? null;
 					renderLoginBots();
-					setAuthControlsEnabled(Boolean(state.selectedBot));
-					if (state.selectedBot) {
-						setMessage(nodes.loginMessage, `Selected ${state.selectedBot.id}. Verify access to continue.`, "success");
-					}
+					setAuthControlsEnabled(false);
+					setMessage(nodes.loginMessage, "Select a bot to continue to verification.", "neutral");
 				} catch (error) {
 					state.bots = [];
 					renderLoginBots();
@@ -1426,12 +1461,10 @@ const apiBase =
 				try {
 					const options = await api("/auth/options", { lockOnAuthFailure: false });
 					state.loginMethods = options.methods;
-					setAuthControlsEnabled(Boolean(state.selectedBot));
+					setAuthControlsEnabled(false);
 					setMessage(
 						nodes.loginMessage,
-						state.selectedBot
-							? `Selected ${state.selectedBot.id}. Telegram ${options.methods.telegram ? "available" : "unavailable"}, 2FA ${options.methods.totp ? "configured" : "not configured"}.`
-							: "Select a bot before verification.",
+						"Select a bot to continue to verification.",
 						options.methods.telegram || options.methods.totp ? "success" : "error",
 					);
 				} catch (error) {
@@ -1459,9 +1492,10 @@ const apiBase =
 					});
 					await enterApp(result);
 				} catch (error) {
-					setMessage(nodes.loginMessage, `2FA login failed: ${error.message}`, "error");
+					setMessage(nodes.loginMessageAuth, `2FA login failed: ${error.message}`, "error");
 				}
 			});
+			nodes.changeBot.addEventListener("click", showBotStep);
 			nodes.logout.addEventListener("click", async () => {
 				try {
 					await api("/auth/logout", { method: "POST", csrf: true });
