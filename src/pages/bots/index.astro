@@ -1114,6 +1114,21 @@ const apiBase =
 				setMessage(nodes.loginTelegramMessage, "Ready to send an approval request for the selected bot.");
 			}
 
+			function handleAuthExpired(message = "Session expired. Verify this bot again.") {
+				state.csrf = "";
+				sessionStorage.removeItem("silentflare_bot_csrf");
+				stopStatusAutoRefresh();
+				nodes.appPage.classList.add("hidden");
+				nodes.loginPage.classList.remove("hidden");
+				if (state.selectedBot) {
+					showAuthStep();
+					setMessage(nodes.loginMessageAuth, message, "warning");
+				} else {
+					showBotStep();
+					setMessage(nodes.loginMessage, message, "warning");
+				}
+			}
+
 			function selectLoginBot(bot) {
 				state.selectedBot = bot;
 				sessionStorage.setItem("silentflare_selected_bot", bot.id);
@@ -1128,11 +1143,19 @@ const apiBase =
 					...(options.csrf ? { "X-CSRF-Token": state.csrf } : {}),
 					...(options.headers ?? {}),
 				};
-				const response = await fetch(`${apiBase}${path}`, {
-					...options,
-					credentials: "include",
-					headers,
-				});
+				let response;
+				try {
+					response = await fetch(`${apiBase}${path}`, {
+						...options,
+						credentials: "include",
+						headers,
+					});
+				} catch (error) {
+					if (options.lockOnAuthFailure !== false) {
+						handleAuthExpired("The API request failed. Verify this bot again.");
+					}
+					throw error;
+				}
 				if (!response.ok) {
 					let detail = `API ${response.status}`;
 					try {
@@ -1140,6 +1163,9 @@ const apiBase =
 						detail = body.detail ?? detail;
 					} catch {
 						// Keep status-based detail.
+					}
+					if ((response.status === 401 || response.status === 403) && options.lockOnAuthFailure !== false) {
+						handleAuthExpired(detail);
 					}
 					throw new Error(detail);
 				}
