@@ -10,20 +10,17 @@ const apiBase =
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<title>Telegram Bot Management</title>
 		<meta name="description" content="SilentFlare bot operations dashboard" />
-		<style>
+		<style is:global>
 			:root {
 				color-scheme: light;
 				--bg: #eef3f7;
 				--rail: #111827;
-				--rail-soft: #1f2937;
 				--surface: #ffffff;
 				--surface-soft: #f7f9fc;
-				--surface-tint: #edf5fc;
 				--line: #d7e0ea;
 				--line-soft: #e7edf4;
 				--text: #121a27;
 				--muted: #667386;
-				--subtle: #8a96a8;
 				--blue: #2563eb;
 				--blue-dark: #1d4ed8;
 				--blue-soft: #e8f1ff;
@@ -33,8 +30,8 @@ const apiBase =
 				--amber-soft: #fff7df;
 				--red: #b42318;
 				--red-soft: #fff1f0;
-				--shadow: 0 18px 46px rgba(29, 45, 65, 0.1);
 				--radius: 8px;
+				--shadow: 0 18px 46px rgba(29, 45, 65, 0.1);
 			}
 
 			* {
@@ -44,7 +41,6 @@ const apiBase =
 			body {
 				margin: 0;
 				min-height: 100vh;
-				overflow: hidden;
 				background: var(--bg);
 				color: var(--text);
 				font-family:
@@ -65,7 +61,7 @@ const apiBase =
 
 			button:disabled {
 				cursor: not-allowed;
-				opacity: 0.56;
+				opacity: 0.55;
 			}
 
 			h1,
@@ -86,39 +82,45 @@ const apiBase =
 				fill: none;
 			}
 
-			.app {
-				display: grid;
-				grid-template-columns: 13rem minmax(0, 1fr);
-				gap: 0.75rem;
-				height: 100vh;
-				padding: 0.75rem;
+			.icon * {
+				fill: none;
 			}
 
-			.rail {
+			.hidden {
+				display: none !important;
+			}
+
+			.login-page {
 				display: grid;
-				grid-template-rows: auto 1fr auto;
-				min-width: 0;
-				overflow: hidden;
-				border-radius: 14px;
-				background: linear-gradient(180deg, #111827, #0c1420);
-				color: #f8fafc;
-				padding: 0.85rem;
+				min-height: 100vh;
+				place-items: center;
+				padding: 1.2rem;
+			}
+
+			.login-card {
+				display: grid;
+				gap: 1.2rem;
+				width: min(31rem, 100%);
+				border: 1px solid var(--line);
+				border-radius: 16px;
+				background: var(--surface);
+				padding: clamp(1.2rem, 4vw, 2rem);
+				box-shadow: var(--shadow);
 			}
 
 			.brand {
 				display: flex;
 				align-items: center;
-				gap: 0.75rem;
+				gap: 0.8rem;
 				min-width: 0;
-				padding: 0.25rem 0.15rem 1rem;
 			}
 
 			.brand-mark {
 				display: grid;
-				width: 2.35rem;
-				height: 2.35rem;
+				width: 2.5rem;
+				height: 2.5rem;
 				place-items: center;
-				border-radius: 8px;
+				border-radius: 10px;
 				background: var(--blue);
 				color: #ffffff;
 				font-weight: 850;
@@ -127,409 +129,81 @@ const apiBase =
 			.brand strong,
 			.brand span {
 				display: block;
-				overflow: hidden;
-				text-overflow: ellipsis;
-				white-space: nowrap;
-			}
-
-			.brand strong {
-				font-size: 0.93rem;
 			}
 
 			.brand span {
-				margin-top: 0.12rem;
-				color: #a7b2c3;
-				font-size: 0.74rem;
-			}
-
-			.nav {
-				display: grid;
-				gap: 0.35rem;
-				align-content: start;
-			}
-
-			.nav-label {
-				margin: 0.5rem 0.45rem 0.35rem;
-				color: #8f9bad;
-				font-size: 0.68rem;
-				font-weight: 800;
-				text-transform: uppercase;
-			}
-
-			.nav button,
-			.rail-action {
-				display: grid;
-				grid-template-columns: 1.1rem minmax(0, 1fr);
-				align-items: center;
-				gap: 0.65rem;
-				width: 100%;
-				min-height: 2.55rem;
-				border: 0;
-				border-radius: var(--radius);
-				background: transparent;
-				color: #cbd5e1;
-				padding: 0 0.65rem;
-				font-size: 0.85rem;
-				text-align: left;
-			}
-
-			.nav button.active,
-			.nav button:hover,
-			.rail-action:hover {
-				background: #243244;
-				color: #ffffff;
-			}
-
-			.rail-status {
-				display: grid;
-				gap: 0.85rem;
-				border: 1px solid rgba(203, 213, 225, 0.18);
-				border-radius: 12px;
-				padding: 0.85rem;
-				color: #dbe6f4;
-			}
-
-			.rail-status .status-line {
-				color: #86efac;
+				margin-top: 0.14rem;
+				color: var(--muted);
 				font-size: 0.82rem;
-				font-weight: 760;
 			}
 
-			.rail-status small {
-				display: block;
-				margin-top: 0.24rem;
-				color: #a7b2c3;
-				font-size: 0.74rem;
-				line-height: 1.45;
+			.login-card h1 {
+				font-size: clamp(1.7rem, 5vw, 2.35rem);
+				line-height: 1.08;
 			}
 
-			.rail-action {
-				border: 1px solid rgba(203, 213, 225, 0.24);
-				justify-content: start;
+			.login-card > p {
+				color: var(--muted);
+				font-size: 0.95rem;
+				line-height: 1.55;
 			}
 
-			.shell {
+			.method-grid {
 				display: grid;
-				grid-template-rows: auto minmax(0, 1fr);
-				min-width: 0;
-				overflow: hidden;
+				gap: 0.8rem;
+			}
+
+			.method-card {
+				display: grid;
+				gap: 0.75rem;
 				border: 1px solid var(--line);
-				border-radius: 14px;
-				background: var(--surface);
-				box-shadow: var(--shadow);
-			}
-
-			.topbar {
-				display: grid;
-				grid-template-columns: minmax(0, 1fr) auto;
-				gap: 1rem;
-				align-items: center;
-				min-height: 4.6rem;
-				border-bottom: 1px solid var(--line);
-				padding: 0.9rem 1.5rem;
-			}
-
-			.topbar h1 {
-				font-size: clamp(1.25rem, 2vw, 1.72rem);
-				font-weight: 820;
-				line-height: 1.15;
-			}
-
-			.topbar p {
-				margin-top: 0.22rem;
-				color: var(--muted);
-				font-size: 0.86rem;
-				line-height: 1.4;
-			}
-
-			.top-actions {
-				display: flex;
-				flex-wrap: wrap;
-				align-items: center;
-				justify-content: flex-end;
-				gap: 0.7rem;
-			}
-
-			.status-pill,
-			.small-pill {
-				display: inline-flex;
-				min-height: 2.15rem;
-				align-items: center;
-				justify-content: center;
-				gap: 0.45rem;
-				border: 1px solid #b9e4c8;
 				border-radius: var(--radius);
-				background: var(--green-soft);
-				color: var(--green);
-				padding: 0.45rem 0.75rem;
-				font-size: 0.78rem;
-				font-weight: 760;
-				white-space: nowrap;
-			}
-
-			.status-pill::before,
-			.small-pill::before {
-				width: 0.45rem;
-				height: 0.45rem;
-				border-radius: 999px;
-				background: currentColor;
-				content: "";
-			}
-
-			.status-pill[data-tone="error"],
-			.small-pill[data-tone="error"] {
-				border-color: #f0bbb5;
-				background: var(--red-soft);
-				color: var(--red);
-			}
-
-			.status-pill[data-tone="warning"],
-			.small-pill[data-tone="warning"] {
-				border-color: #f0d593;
-				background: var(--amber-soft);
-				color: var(--amber);
-			}
-
-			.last-updated {
-				color: var(--muted);
-				font-size: 0.78rem;
-			}
-
-			.workspace {
-				display: grid;
-				grid-template-columns: minmax(0, 1fr) 18rem;
-				min-height: 0;
-				overflow: hidden;
-			}
-
-			.main {
-				display: grid;
-				grid-template-rows: auto auto minmax(0, 1fr) auto;
-				min-width: 0;
-				min-height: 0;
-				overflow: auto;
-				padding: 1rem 1.5rem;
-			}
-
-			.diagnostics {
-				min-height: 0;
-				overflow: auto;
-				border-left: 1px solid var(--line);
-				background: var(--surface-soft);
+				background: #fbfdff;
 				padding: 1rem;
 			}
 
-			.selector {
-				display: grid;
-				grid-template-columns: auto minmax(0, 1fr);
-				gap: 0.85rem;
-				align-items: center;
-				margin-bottom: 1rem;
-			}
-
-			.selector-label {
-				color: var(--text);
-				font-size: 0.84rem;
-				font-weight: 720;
-			}
-
-			.bot-list {
-				display: grid;
-				gap: 0.55rem;
-			}
-
-			.bot-card {
-				display: grid;
-				grid-template-columns: 1.9rem minmax(0, 1fr) auto;
-				align-items: center;
-				gap: 0.75rem;
-				width: 100%;
-				min-height: 3.15rem;
-				border: 1px solid var(--line);
-				border-radius: var(--radius);
-				background: #ffffff;
-				color: var(--text);
-				padding: 0.55rem 0.7rem;
-				text-align: left;
-			}
-
-			.bot-card:hover,
-			.bot-card[aria-pressed="true"] {
-				border-color: #b8d2f8;
-				background: #f8fbff;
-			}
-
-			.bot-icon,
-			.step-num {
-				display: grid;
-				width: 1.9rem;
-				height: 1.9rem;
-				place-items: center;
-				border-radius: 999px;
-				background: var(--blue);
-				color: #ffffff;
-				font-weight: 850;
-			}
-
-			.bot-card strong,
-			.bot-card small {
-				display: block;
-				min-width: 0;
-				overflow: hidden;
-				text-overflow: ellipsis;
-				white-space: nowrap;
-			}
-
-			.bot-card small {
-				margin-top: 0.12rem;
-				color: var(--muted);
-				font-size: 0.74rem;
-			}
-
-			.chip {
-				border: 1px solid var(--line);
-				border-radius: 999px;
-				background: #f8fafc;
-				color: var(--muted);
-				padding: 0.22rem 0.55rem;
-				font-size: 0.72rem;
-				font-weight: 760;
-			}
-
-			.chip[data-tone="success"] {
-				border-color: #bbe4ca;
-				background: var(--green-soft);
-				color: var(--green);
-			}
-
-			.primary-grid {
-				display: grid;
-				grid-template-columns: minmax(20rem, 0.95fr) minmax(21rem, 1.05fr);
-				gap: 1rem;
-				margin-bottom: 1rem;
-			}
-
-			.panel {
-				border: 1px solid var(--line);
-				border-radius: var(--radius);
-				background: #ffffff;
-				overflow: hidden;
-			}
-
-			.panel-head {
+			.method-head {
 				display: flex;
 				align-items: center;
 				justify-content: space-between;
 				gap: 0.75rem;
-				min-height: 3.1rem;
-				border-bottom: 1px solid var(--line-soft);
-				padding: 0.7rem 0.85rem;
 			}
 
-			.panel-title {
-				display: flex;
-				align-items: center;
-				gap: 0.65rem;
-				min-width: 0;
-			}
-
-			.panel-title h2 {
+			.method-head h2 {
 				font-size: 1rem;
-				font-weight: 800;
-				line-height: 1.2;
 			}
 
-			.panel-body {
-				padding: 0.9rem;
-			}
-
-			.auth-flow {
-				display: grid;
-				gap: 0.85rem;
-			}
-
-			.auth-state {
-				display: grid;
-				grid-template-columns: 4.4rem minmax(0, 1fr);
-				gap: 1rem;
-				align-items: center;
-				border: 1px solid var(--line);
-				border-radius: var(--radius);
-				background: #fbfdff;
-				padding: 0.85rem;
-			}
-
-			.auth-illustration {
-				display: grid;
-				width: 4.2rem;
-				height: 4.2rem;
-				place-items: center;
-				border-radius: 999px;
-				background: var(--blue-soft);
-				color: var(--blue);
-			}
-
-			.auth-state h3 {
-				font-size: 1rem;
-				font-weight: 820;
-			}
-
-			.auth-state p {
-				margin-top: 0.24rem;
+			.method-card p {
 				color: var(--muted);
 				font-size: 0.84rem;
-				line-height: 1.45;
+				line-height: 1.5;
 			}
 
-			.progress {
+			.code-row {
 				display: grid;
-				grid-template-columns: repeat(3, 1fr);
-				gap: 0.5rem;
-				align-items: start;
+				grid-template-columns: minmax(0, 1fr) auto;
+				gap: 0.6rem;
 			}
 
-			.progress-step {
-				display: grid;
-				gap: 0.35rem;
-				color: var(--muted);
-				font-size: 0.72rem;
-				text-align: center;
-			}
-
-			.progress-dot {
-				display: grid;
-				width: 2rem;
-				height: 2rem;
-				place-items: center;
-				justify-self: center;
+			input {
+				width: 100%;
+				min-height: 2.75rem;
 				border: 1px solid var(--line);
-				border-radius: 999px;
+				border-radius: var(--radius);
 				background: #ffffff;
-				color: var(--muted);
+				color: var(--text);
+				padding: 0 0.85rem;
+				outline: none;
 			}
 
-			.progress-step.active .progress-dot {
-				border-color: #b8d2f8;
-				background: var(--blue);
-				color: #ffffff;
+			input:focus {
+				border-color: #9fc2ff;
+				box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
 			}
 
-			.progress-step.success .progress-dot {
-				border-color: #bbe4ca;
-				background: var(--green);
-				color: #ffffff;
-			}
-
-			.button-row {
-				display: flex;
-				flex-wrap: wrap;
-				gap: 0.55rem;
-			}
-
-			.button,
-			.icon-button {
+			.button {
 				display: inline-flex;
-				min-height: 2.55rem;
+				min-height: 2.65rem;
 				align-items: center;
 				justify-content: center;
 				gap: 0.5rem;
@@ -537,8 +211,9 @@ const apiBase =
 				border-radius: var(--radius);
 				background: #ffffff;
 				color: var(--text);
-				padding: 0.62rem 0.85rem;
+				padding: 0.65rem 0.9rem;
 				font-weight: 760;
+				white-space: nowrap;
 			}
 
 			.button.primary {
@@ -559,81 +234,6 @@ const apiBase =
 			.button.ghost {
 				background: transparent;
 				color: var(--muted);
-			}
-
-			.icon-button {
-				width: 2.35rem;
-				min-height: 2.35rem;
-				padding: 0;
-			}
-
-			.ops-card {
-				display: grid;
-				gap: 0.8rem;
-			}
-
-			.bot-session {
-				display: grid;
-				grid-template-columns: 3.4rem minmax(0, 1fr) auto;
-				gap: 0.8rem;
-				align-items: center;
-				border: 1px solid #bbe4ca;
-				border-radius: var(--radius);
-				background: var(--green-soft);
-				padding: 0.75rem;
-			}
-
-			.bot-session .bot-icon {
-				width: 3rem;
-				height: 3rem;
-				border-radius: var(--radius);
-				background: #d7f2e3;
-				color: var(--green);
-			}
-
-			.bot-session strong,
-			.bot-session span {
-				display: block;
-			}
-
-			.bot-session span {
-				margin-top: 0.16rem;
-				color: var(--muted);
-				font-size: 0.78rem;
-			}
-
-			.metric-grid {
-				display: grid;
-				grid-template-columns: repeat(3, minmax(0, 1fr));
-				border: 1px solid var(--line);
-				border-radius: var(--radius);
-				overflow: hidden;
-			}
-
-			.metric {
-				min-height: 4.9rem;
-				border-left: 1px solid var(--line-soft);
-				background: #ffffff;
-				padding: 0.75rem;
-			}
-
-			.metric:first-child {
-				border-left: 0;
-			}
-
-			.metric span {
-				display: block;
-				color: var(--muted);
-				font-size: 0.72rem;
-				font-weight: 760;
-			}
-
-			.metric strong {
-				display: block;
-				margin-top: 0.42rem;
-				overflow-wrap: anywhere;
-				font-size: 0.92rem;
-				line-height: 1.3;
 			}
 
 			.message {
@@ -664,12 +264,278 @@ const apiBase =
 				color: var(--red);
 			}
 
-			.table-panel {
-				min-height: 0;
+			.app {
+				display: grid;
+				grid-template-columns: 15rem minmax(0, 1fr);
+				gap: 0.75rem;
+				height: 100vh;
+				padding: 0.75rem;
 			}
 
-			.table-wrap {
+			.rail {
+				display: grid;
+				grid-template-rows: auto auto 1fr auto;
+				min-width: 0;
+				overflow: hidden;
+				border-radius: 14px;
+				background: var(--rail);
+				color: #f8fafc;
+				padding: 0.85rem;
+			}
+
+			.rail .brand {
+				padding-bottom: 1rem;
+			}
+
+			.rail .brand span {
+				color: #a7b2c3;
+			}
+
+			.nav {
+				display: grid;
+				gap: 0.35rem;
+				margin-bottom: 1rem;
+			}
+
+			.nav-label {
+				margin: 0.4rem 0.45rem;
+				color: #8f9bad;
+				font-size: 0.68rem;
+				font-weight: 800;
+				text-transform: uppercase;
+			}
+
+			.nav button,
+			.logout {
+				display: grid;
+				grid-template-columns: 1.1rem minmax(0, 1fr);
+				align-items: center;
+				gap: 0.65rem;
+				width: 100%;
+				min-height: 2.55rem;
+				border: 0;
+				border-radius: var(--radius);
+				background: transparent;
+				color: #cbd5e1;
+				padding: 0 0.65rem;
+				font-size: 0.86rem;
+				text-align: left;
+			}
+
+			.nav button.active,
+			.nav button:hover,
+			.logout:hover {
+				background: #243244;
+				color: #ffffff;
+			}
+
+			.bot-list {
+				display: grid;
+				gap: 0.55rem;
+				align-content: start;
 				overflow: auto;
+			}
+
+			.bot-card {
+				display: grid;
+				grid-template-columns: 2rem minmax(0, 1fr);
+				gap: 0.65rem;
+				align-items: center;
+				width: 100%;
+				min-height: 3.6rem;
+				border: 1px solid rgba(203, 213, 225, 0.2);
+				border-radius: var(--radius);
+				background: rgba(255, 255, 255, 0.04);
+				color: #f8fafc;
+				padding: 0.65rem;
+				text-align: left;
+			}
+
+			.bot-card > span:last-child {
+				display: grid;
+				gap: 0.12rem;
+				min-width: 0;
+			}
+
+			.bot-card[aria-pressed="true"],
+			.bot-card:hover {
+				border-color: rgba(147, 197, 253, 0.55);
+				background: #243244;
+			}
+
+			.bot-icon {
+				display: grid;
+				width: 2rem;
+				height: 2rem;
+				place-items: center;
+				border-radius: var(--radius);
+				background: var(--blue);
+				color: #ffffff;
+			}
+
+			.bot-icon .icon {
+				width: 1rem;
+				height: 1rem;
+			}
+
+			.bot-card strong,
+			.bot-card small {
+				display: block;
+				min-width: 0;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
+
+			.bot-card small {
+				color: #a7b2c3;
+				font-size: 0.75rem;
+				line-height: 1.28;
+			}
+
+			.rail-status {
+				display: grid;
+				gap: 0.55rem;
+				border: 1px solid rgba(203, 213, 225, 0.18);
+				border-radius: 12px;
+				padding: 0.85rem;
+				color: #dbe6f4;
+				font-size: 0.78rem;
+			}
+
+			.rail-status strong {
+				color: #86efac;
+			}
+
+			.shell {
+				display: grid;
+				grid-template-rows: auto minmax(0, 1fr);
+				min-width: 0;
+				overflow: hidden;
+				border: 1px solid var(--line);
+				border-radius: 14px;
+				background: var(--surface);
+				box-shadow: var(--shadow);
+			}
+
+			.topbar {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				gap: 1rem;
+				min-height: 4.5rem;
+				border-bottom: 1px solid var(--line);
+				padding: 0.9rem 1.5rem;
+			}
+
+			.topbar h1 {
+				font-size: clamp(1.25rem, 2vw, 1.72rem);
+				line-height: 1.15;
+			}
+
+			.topbar p {
+				margin-top: 0.22rem;
+				color: var(--muted);
+				font-size: 0.86rem;
+			}
+
+			.status-pill,
+			.chip {
+				display: inline-flex;
+				min-height: 2rem;
+				align-items: center;
+				justify-content: center;
+				border: 1px solid #b9e4c8;
+				border-radius: 999px;
+				background: var(--green-soft);
+				color: var(--green);
+				padding: 0.35rem 0.72rem;
+				font-size: 0.76rem;
+				font-weight: 760;
+				white-space: nowrap;
+			}
+
+			.chip.neutral {
+				border-color: var(--line);
+				background: #f8fafc;
+				color: var(--muted);
+			}
+
+			.content {
+				min-height: 0;
+				overflow: auto;
+				padding: 1rem 1.5rem;
+			}
+
+			.grid {
+				display: grid;
+				grid-template-columns: minmax(20rem, 0.9fr) minmax(22rem, 1.1fr);
+				gap: 1rem;
+			}
+
+			.panel {
+				border: 1px solid var(--line);
+				border-radius: var(--radius);
+				background: #ffffff;
+				overflow: hidden;
+			}
+
+			.panel-head {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				gap: 0.75rem;
+				min-height: 3.2rem;
+				border-bottom: 1px solid var(--line-soft);
+				padding: 0.72rem 0.9rem;
+			}
+
+			.panel-head h2 {
+				font-size: 1rem;
+			}
+
+			.panel-body {
+				display: grid;
+				gap: 0.85rem;
+				padding: 0.9rem;
+			}
+
+			.action-row {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 0.55rem;
+			}
+
+			.metric-grid {
+				display: grid;
+				grid-template-columns: repeat(3, minmax(0, 1fr));
+				border: 1px solid var(--line);
+				border-radius: var(--radius);
+				overflow: hidden;
+			}
+
+			.metric {
+				min-height: 4.8rem;
+				border-left: 1px solid var(--line-soft);
+				padding: 0.75rem;
+			}
+
+			.metric:first-child {
+				border-left: 0;
+			}
+
+			.metric span {
+				display: block;
+				color: var(--muted);
+				font-size: 0.73rem;
+				font-weight: 760;
+			}
+
+			.metric strong {
+				display: block;
+				margin-top: 0.45rem;
+				overflow-wrap: anywhere;
+				font-size: 0.92rem;
 			}
 
 			table {
@@ -682,7 +548,7 @@ const apiBase =
 			th,
 			td {
 				border-bottom: 1px solid var(--line-soft);
-				padding: 0.7rem 0.8rem;
+				padding: 0.72rem 0.85rem;
 				text-align: left;
 				vertical-align: middle;
 			}
@@ -693,34 +559,35 @@ const apiBase =
 				font-weight: 800;
 			}
 
-			td {
-				color: #344054;
+			.table-wrap {
+				overflow: auto;
 			}
 
 			.mono {
 				font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
 			}
 
-			.row-actions {
-				display: flex;
-				gap: 0.35rem;
+			.empty-state {
+				color: var(--muted);
+				padding: 1.2rem;
+				text-align: center;
 			}
 
 			.activity {
 				display: grid;
-				max-height: 15rem;
+				max-height: 14rem;
 				overflow: auto;
 			}
 
 			.activity-row {
 				display: grid;
-				grid-template-columns: 5.2rem minmax(0, 1fr) auto;
+				grid-template-columns: 5.5rem minmax(0, 1fr) 5.5rem;
 				gap: 0.75rem;
 				align-items: center;
 				border-top: 1px solid var(--line-soft);
-				padding: 0.68rem 0.85rem;
+				padding: 0.7rem 0.9rem;
 				color: var(--muted);
-				font-size: 0.78rem;
+				font-size: 0.8rem;
 			}
 
 			.activity-row:first-child {
@@ -728,105 +595,33 @@ const apiBase =
 			}
 
 			.activity-row strong {
-				color: var(--text);
-				font-weight: 720;
-			}
-
-			.diag-section {
-				display: grid;
-				gap: 0.7rem;
-				border-bottom: 1px solid var(--line);
-				padding: 0.9rem 0;
-			}
-
-			.diag-section:first-child {
-				padding-top: 0;
-			}
-
-			.diag-section:last-child {
-				border-bottom: 0;
-			}
-
-			.diag-title {
-				display: flex;
-				align-items: center;
-				gap: 0.55rem;
-				font-size: 0.88rem;
-				font-weight: 800;
-			}
-
-			.diag-list {
-				display: grid;
-				gap: 0.46rem;
-				color: var(--muted);
-				font-size: 0.78rem;
-			}
-
-			.diag-row {
-				display: flex;
-				justify-content: space-between;
-				gap: 0.65rem;
-			}
-
-			.diag-row strong {
 				min-width: 0;
-				overflow-wrap: anywhere;
+				overflow: hidden;
 				color: var(--text);
-				font-weight: 700;
-				text-align: right;
+				text-overflow: ellipsis;
+				white-space: nowrap;
 			}
 
-			.empty-state {
-				padding: 1.2rem;
-				color: var(--muted);
-				font-size: 0.84rem;
-				text-align: center;
-			}
-
-			.modal-backdrop {
-				position: fixed;
-				inset: 0;
-				z-index: 30;
-				display: none;
-				place-items: center;
-				background: rgba(18, 26, 39, 0.36);
-				padding: 1rem;
-			}
-
-			.modal-backdrop.show {
+			.settings-grid {
 				display: grid;
+				grid-template-columns: minmax(18rem, 0.8fr) minmax(24rem, 1.2fr);
+				gap: 1rem;
 			}
 
-			.modal {
+			.secret-box {
 				display: grid;
-				gap: 0.9rem;
-				width: min(28rem, 100%);
-				border-radius: 12px;
-				background: #ffffff;
-				padding: 1.1rem;
-				box-shadow: 0 28px 90px rgba(18, 26, 39, 0.28);
-			}
-
-			.modal h2 {
-				font-size: 1.05rem;
-			}
-
-			.modal p {
-				color: var(--muted);
-				font-size: 0.86rem;
-				line-height: 1.5;
-			}
-
-			.modal-actions {
-				display: flex;
-				justify-content: flex-end;
-				gap: 0.55rem;
+				gap: 0.4rem;
+				border: 1px solid var(--line);
+				border-radius: var(--radius);
+				background: var(--surface-soft);
+				padding: 0.75rem;
+				overflow-wrap: anywhere;
 			}
 
 			.notice {
 				position: fixed;
 				left: 50%;
-				bottom: 1.1rem;
+				bottom: 1rem;
 				z-index: 40;
 				transform: translateX(-50%) translateY(0.5rem);
 				border-radius: var(--radius);
@@ -846,15 +641,7 @@ const apiBase =
 				opacity: 1;
 			}
 
-			.hidden {
-				display: none !important;
-			}
-
-			@media (max-width: 1180px) {
-				body {
-					overflow: auto;
-				}
-
+			@media (max-width: 1080px) {
 				.app {
 					grid-template-columns: 1fr;
 					height: auto;
@@ -862,75 +649,40 @@ const apiBase =
 					padding: 0;
 				}
 
-				.rail {
-					position: sticky;
-					top: 0;
-					z-index: 10;
-					grid-template-columns: auto 1fr auto;
-					grid-template-rows: auto;
-					align-items: center;
-					border-radius: 0;
-				}
-
-				.nav {
-					grid-auto-flow: column;
-					overflow: auto;
-				}
-
-				.nav-label,
-				.rail-status {
-					display: none;
-				}
-
+				.rail,
 				.shell {
 					border-radius: 0;
-					border-left: 0;
-					border-right: 0;
 				}
 
-				.workspace {
+				.rail {
+					grid-template-rows: auto auto auto auto;
+				}
+
+				.bot-list {
+					grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+					max-height: none;
+				}
+
+				.grid,
+				.settings-grid {
 					grid-template-columns: 1fr;
-				}
-
-				.diagnostics {
-					border-left: 0;
-					border-top: 1px solid var(--line);
 				}
 			}
 
-			@media (max-width: 820px) {
-				body {
-					overflow: auto;
-				}
-
+			@media (max-width: 720px) {
 				.topbar,
-				.selector,
-				.primary-grid,
-				.metric-grid {
-					grid-template-columns: 1fr;
+				.method-head {
+					align-items: stretch;
+					flex-direction: column;
 				}
 
-				.top-actions {
-					justify-content: stretch;
-				}
-
-				.status-pill,
-				.button,
-				.rail-action {
-					width: 100%;
-				}
-
-				.main {
+				.content {
 					padding: 0.85rem;
 				}
 
-				.auth-state,
-				.bot-session,
+				.code-row,
+				.metric-grid,
 				.activity-row {
-					grid-template-columns: 1fr;
-				}
-
-				.progress {
 					grid-template-columns: 1fr;
 				}
 
@@ -942,39 +694,25 @@ const apiBase =
 				.metric:first-child {
 					border-top: 0;
 				}
-			}
 
-			@media (prefers-reduced-motion: reduce) {
-				*,
-				*::before,
-				*::after {
-					animation-duration: 0.01ms !important;
-					animation-iteration-count: 1 !important;
-					scroll-behavior: auto !important;
-					transition-duration: 0.01ms !important;
+				.button {
+					width: 100%;
 				}
 			}
 		</style>
 	</head>
 	<body>
 		<svg aria-hidden="true" width="0" height="0" class="hidden">
-			<symbol id="icon-dashboard" viewBox="0 0 24 24"><path d="M3 13h8V3H3z" /><path d="M13 21h8V11h-8z" /><path d="M13 3h8v6h-8z" /><path d="M3 21h8v-6H3z" /></symbol>
-			<symbol id="icon-bot" viewBox="0 0 24 24"><rect x="5" y="8" width="14" height="10" rx="3" /><path d="M12 8V4" /><path d="M9 4h6" /><path d="M9 13h.01" /><path d="M15 13h.01" /><path d="M9 18v2" /><path d="M15 18v2" /></symbol>
-			<symbol id="icon-activity" viewBox="0 0 24 24"><path d="M3 12h4l3 8 4-16 3 8h4" /></symbol>
-			<symbol id="icon-diag" viewBox="0 0 24 24"><path d="M12 20v-6" /><path d="M18 20V10" /><path d="M6 20v-3" /><path d="M18 4v2" /><path d="M12 4v6" /><path d="M6 4v9" /></symbol>
-			<symbol id="icon-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></symbol>
-			<symbol id="icon-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4 20-7Z" /><path d="M22 2 11 13" /></symbol>
-			<symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.5 6.2" /><path d="M3 12A9 9 0 0 1 18.5 5.8" /><path d="M18 2v4h4" /><path d="M6 22v-4H2" /></symbol>
-			<symbol id="icon-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3" /><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5" /><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" /></symbol>
-			<symbol id="icon-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2" /><rect x="4" y="4" width="11" height="11" rx="2" /></symbol>
-			<symbol id="icon-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 11v5" /><path d="M12 8h.01" /></symbol>
-			<symbol id="icon-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></symbol>
-			<symbol id="icon-check" viewBox="0 0 24 24"><path d="m20 6-11 11-5-5" /></symbol>
-			<symbol id="icon-x" viewBox="0 0 24 24"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></symbol>
+			<symbol id="icon-bot" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="5" y="8" width="14" height="10" rx="3" /><path d="M12 8V4" /><path d="M9 4h6" /><path d="M9 13h.01" /><path d="M15 13h.01" /></symbol>
+			<symbol id="icon-send" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m22 2-7 20-4-9-9-4 20-7Z" /><path d="M22 2 11 13" /></symbol>
+			<symbol id="icon-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></symbol>
+			<symbol id="icon-db" viewBox="0 0 24 24" fill="none" stroke="currentColor"><ellipse cx="12" cy="5" rx="8" ry="3" /><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5" /><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" /></symbol>
+			<symbol id="icon-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 12a9 9 0 0 1-15.5 6.2" /><path d="M3 12A9 9 0 0 1 18.5 5.8" /><path d="M18 2v4h4" /><path d="M6 22v-4H2" /></symbol>
+			<symbol id="icon-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.4.2.73.5 1 .9.27.4.4.8.4 1.1V11a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.31 1Z" /></symbol>
 		</svg>
 
-		<div class="app">
-			<aside class="rail">
+		<section id="login-page" class="login-page">
+			<div class="login-card">
 				<div class="brand">
 					<div class="brand-mark">SF</div>
 					<div>
@@ -982,388 +720,243 @@ const apiBase =
 						<span>Bot operations</span>
 					</div>
 				</div>
-				<nav class="nav" aria-label="Bot management navigation">
-					<p class="nav-label">Bot management</p>
-					<button type="button" class="active" data-scroll-target="dashboard">
-						<svg class="icon"><use href="#icon-dashboard"></use></svg>
+				<div>
+					<h1>Telegram Bot Management</h1>
+					<p>Sign in as the Owner first. After verification, choose which bot to operate.</p>
+				</div>
+				<div class="method-grid">
+					<section class="method-card">
+						<div class="method-head">
+							<div>
+								<h2>Telegram Bot authorization</h2>
+								<p>Send a one-time approval request to the fixed Owner account.</p>
+							</div>
+							<button id="login-telegram" type="button" class="button primary">
+								<svg class="icon"><use href="#icon-send"></use></svg>
+								<span>Send approval request</span>
+							</button>
+						</div>
+						<div id="login-telegram-message" class="message">Waiting to send an approval request.</div>
+					</section>
+					<section class="method-card">
+						<div>
+							<h2>Authenticator 2FA</h2>
+							<p>Use the six-digit code from the configured Owner authenticator.</p>
+						</div>
+						<form id="login-totp-form" class="code-row" autocomplete="off">
+							<input id="login-totp-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000" aria-label="Six-digit authentication code" />
+							<button id="login-totp-submit" type="submit" class="button">
+								<svg class="icon"><use href="#icon-lock"></use></svg>
+								<span>Verify 2FA</span>
+							</button>
+						</form>
+					</section>
+				</div>
+				<div id="login-message" class="message">Checking available login methods.</div>
+			</div>
+		</section>
+
+		<section id="app-page" class="app hidden">
+			<aside class="rail">
+				<div class="brand">
+					<div class="brand-mark">SF</div>
+					<div>
+						<strong>SilentFlare</strong>
+						<span>Owner console</span>
+					</div>
+				</div>
+				<nav class="nav" aria-label="Console navigation">
+					<p class="nav-label">Console</p>
+					<button id="nav-dashboard" type="button" class="active" data-view="dashboard">
+						<svg class="icon"><use href="#icon-db"></use></svg>
 						<span>Dashboard</span>
 					</button>
-					<button type="button" data-scroll-target="backups">
-						<svg class="icon"><use href="#icon-database"></use></svg>
-						<span>Backups</span>
-					</button>
-					<button type="button" data-scroll-target="activity-panel">
-						<svg class="icon"><use href="#icon-activity"></use></svg>
-						<span>Activity</span>
-					</button>
-					<button type="button" data-scroll-target="diagnostics-panel">
-						<svg class="icon"><use href="#icon-diag"></use></svg>
-						<span>Diagnostics</span>
+					<button id="nav-settings" type="button" data-view="settings">
+						<svg class="icon"><use href="#icon-settings"></use></svg>
+						<span>Settings</span>
 					</button>
 				</nav>
+				<div>
+					<p class="nav-label">Bots</p>
+					<div id="bot-list" class="bot-list"></div>
+				</div>
 				<div class="rail-status">
-					<div>
-						<div id="rail-api" class="status-line">Checking API</div>
-						<small>api.silentflare.com</small>
-					</div>
-					<div>
-						<div id="rail-session" class="status-line">Session locked</div>
-						<small>Bot-scoped secure cookie</small>
-					</div>
-					<button id="rail-lock" type="button" class="rail-action">
+					<div><strong id="rail-api">API online</strong></div>
+					<div>Session: <strong id="rail-session">Owner verified</strong></div>
+					<button id="logout" type="button" class="logout">
 						<svg class="icon"><use href="#icon-lock"></use></svg>
 						<span>Lock session</span>
 					</button>
 				</div>
 			</aside>
 
-			<main class="shell" aria-label="Telegram Bot Management">
+			<main class="shell">
 				<header class="topbar">
 					<div>
-						<h1>Telegram Bot Management</h1>
-						<p>Owner-approved operations for SilentFlare infrastructure bots.</p>
+						<h1 id="page-title">Select a bot</h1>
+						<p id="page-subtitle">Choose one bot from the left rail to open its management backend.</p>
 					</div>
-					<div class="top-actions">
-						<div id="api-health" class="status-pill">Checking API</div>
-						<div id="last-updated" class="last-updated">Not refreshed</div>
-						<button id="refresh-all" type="button" class="icon-button" aria-label="Refresh">
-							<svg class="icon"><use href="#icon-refresh"></use></svg>
-						</button>
-					</div>
+					<div class="status-pill">Owner verified</div>
 				</header>
 
-				<div class="workspace">
-					<section id="dashboard" class="main">
-						<div class="selector">
-							<p class="selector-label">Selected bot</p>
-							<div id="bot-list" class="bot-list">
-								<button type="button" class="bot-card" disabled>
-									<span class="bot-icon"><svg class="icon"><use href="#icon-bot"></use></svg></span>
-									<span><strong>Loading bots</strong><small>Waiting for API metadata</small></span>
-									<span class="chip">pending</span>
-								</button>
-							</div>
-						</div>
-
-						<div class="primary-grid">
-							<section class="panel">
-								<div class="panel-head">
-									<div class="panel-title">
-										<span class="step-num">1</span>
-										<h2>Owner approval</h2>
-									</div>
-									<span id="auth-method-chip" class="chip">Telegram authorization</span>
-								</div>
-								<div class="panel-body auth-flow">
-									<div class="auth-state">
-										<div class="auth-illustration">
-											<svg class="icon" style="width:2.2rem;height:2.2rem"><use href="#icon-lock"></use></svg>
-										</div>
-										<div>
-											<h3 id="auth-title">Select a bot</h3>
-											<p id="auth-copy">Choose an infrastructure bot to begin a bot-scoped authorization flow.</p>
-										</div>
-									</div>
-
-									<div class="progress" aria-label="Authorization progress">
-										<div id="progress-request" class="progress-step">
-											<span class="progress-dot"><svg class="icon"><use href="#icon-send"></use></svg></span>
-											<span>Request not sent</span>
-										</div>
-										<div id="progress-wait" class="progress-step">
-											<span class="progress-dot"><svg class="icon"><use href="#icon-clock"></use></svg></span>
-											<span id="challenge-countdown">Waiting for selection</span>
-										</div>
-										<div id="progress-grant" class="progress-step">
-											<span class="progress-dot"><svg class="icon"><use href="#icon-lock"></use></svg></span>
-											<span>Access pending</span>
-										</div>
-									</div>
-
-									<form id="auth-form" class="auth-flow hidden" autocomplete="off">
-										<input
-											id="auth-code"
-											name="code"
-											inputmode="numeric"
-											pattern="[0-9]{6}"
-											minlength="6"
-											maxlength="6"
-											autocomplete="one-time-code"
-											placeholder="000000"
-											aria-label="Six-digit authentication code"
-											required
-										/>
-										<button id="auth-submit" type="submit" class="button primary">Verify 2FA</button>
-									</form>
-
-									<div class="button-row">
-										<button id="telegram-start" type="button" class="button primary" disabled>
-											<svg class="icon"><use href="#icon-send"></use></svg>
-											<span>Send approval request</span>
-										</button>
-										<button id="telegram-resend" type="button" class="button" disabled>
-											<svg class="icon"><use href="#icon-refresh"></use></svg>
-											<span>Resend</span>
-										</button>
-										<button id="telegram-cancel" type="button" class="button danger" disabled>
-											<svg class="icon"><use href="#icon-x"></use></svg>
-											<span>Cancel request</span>
-										</button>
-									</div>
-									<div id="auth-message" class="message">Waiting for bot selection.</div>
-								</div>
-							</section>
-
-							<section class="panel">
-								<div class="panel-head">
-									<div class="panel-title">
-										<span class="step-num">2</span>
-										<h2>Operations</h2>
-									</div>
-									<span class="chip">Backup control</span>
-								</div>
-								<div class="panel-body ops-card">
-									<div class="bot-session">
-										<span class="bot-icon"><svg class="icon"><use href="#icon-database"></use></svg></span>
-										<div>
-											<strong id="selected-bot-name">Ghost database backup</strong>
-											<span id="selected-bot-purpose">Bot ID: not selected</span>
-										</div>
-										<span id="session-state" class="small-pill" data-tone="warning">Locked</span>
-									</div>
-									<div class="button-row">
-										<button id="run-backup" type="button" class="button primary" disabled>
-											<svg class="icon"><use href="#icon-database"></use></svg>
-											<span>Run backup</span>
-										</button>
-										<button id="telegram-test" type="button" class="button" disabled>
-											<svg class="icon"><use href="#icon-send"></use></svg>
-											<span>Test Telegram</span>
-										</button>
-										<button id="logout" type="button" class="button ghost" disabled>
-											<svg class="icon"><use href="#icon-lock"></use></svg>
-											<span>Lock session</span>
-										</button>
-									</div>
-									<div class="metric-grid">
-										<div class="metric">
-											<span>Timer active</span>
-											<strong id="backup-timer">Unknown</strong>
-										</div>
-										<div class="metric">
-											<span>Latest backup</span>
-											<strong id="backup-latest">Unknown</strong>
-										</div>
-										<div class="metric">
-											<span>Local backups</span>
-											<strong id="backup-count">0 files</strong>
-										</div>
-									</div>
-									<div id="backup-message" class="message">Authorize a bot-scoped session to load backup status.</div>
-								</div>
-							</section>
-						</div>
-
-						<section id="backups" class="panel table-panel">
+				<section id="dashboard-view" class="content">
+					<div class="grid">
+						<section class="panel">
 							<div class="panel-head">
-								<div class="panel-title">
-									<svg class="icon"><use href="#icon-database"></use></svg>
-									<h2>Recent backups</h2>
-								</div>
-								<div class="button-row">
+								<h2>Selected bot</h2>
+								<span id="selected-status" class="chip neutral">None selected</span>
+							</div>
+							<div class="panel-body">
+								<div class="message" id="selected-message">Select a bot to load operations.</div>
+								<div class="action-row">
 									<button id="refresh-status" type="button" class="button" disabled>
 										<svg class="icon"><use href="#icon-refresh"></use></svg>
 										<span>Refresh</span>
 									</button>
-									<span id="auto-refresh" class="chip">Auto refresh: paused</span>
+									<button id="telegram-test" type="button" class="button" disabled>
+										<svg class="icon"><use href="#icon-send"></use></svg>
+										<span>Test Telegram</span>
+									</button>
+									<button id="run-backup" type="button" class="button primary" disabled>
+										<svg class="icon"><use href="#icon-db"></use></svg>
+										<span>Run backup</span>
+									</button>
 								</div>
-							</div>
-							<div class="table-wrap">
-								<table>
-									<thead>
-										<tr>
-											<th>Filename</th>
-											<th>Created at</th>
-											<th>Size</th>
-											<th>SHA256 short</th>
-											<th>Result</th>
-											<th>Actions</th>
-										</tr>
-									</thead>
-									<tbody id="backup-history">
-										<tr>
-											<td colspan="6"><div class="empty-state">No backup history loaded.</div></td>
-										</tr>
-									</tbody>
-								</table>
+								<div class="metric-grid">
+									<div class="metric"><span>Timer active</span><strong id="backup-timer">Unknown</strong></div>
+									<div class="metric"><span>Latest backup</span><strong id="backup-latest">Unknown</strong></div>
+									<div class="metric"><span>Local backups</span><strong id="backup-count">0 files</strong></div>
+								</div>
 							</div>
 						</section>
 
-						<section id="activity-panel" class="panel" style="margin-top:1rem">
+						<section class="panel">
 							<div class="panel-head">
-								<div class="panel-title">
-									<svg class="icon"><use href="#icon-activity"></use></svg>
-									<h2>Activity</h2>
-								</div>
+								<h2>Activity</h2>
 								<button id="clear-activity" type="button" class="button ghost">Clear</button>
 							</div>
 							<div id="activity" class="activity"></div>
 						</section>
+					</div>
+
+					<section class="panel" style="margin-top: 1rem">
+						<div class="panel-head">
+							<h2>Recent backups</h2>
+							<span id="backup-auto" class="chip neutral">Auto refresh paused</span>
+						</div>
+						<div class="table-wrap">
+							<table>
+								<thead>
+									<tr>
+										<th>Filename</th>
+										<th>Created at</th>
+										<th>Size</th>
+										<th>SHA256 short</th>
+										<th>Result</th>
+									</tr>
+								</thead>
+								<tbody id="backup-history">
+									<tr><td colspan="5"><div class="empty-state">No bot selected.</div></td></tr>
+								</tbody>
+							</table>
+						</div>
 					</section>
+				</section>
 
-					<aside id="diagnostics-panel" class="diagnostics">
-						<section class="diag-section">
-							<div class="diag-title">
-								<svg class="icon"><use href="#icon-diag"></use></svg>
-								<span>Diagnostics</span>
+				<section id="settings-view" class="content hidden">
+					<div class="settings-grid">
+						<section class="panel">
+							<div class="panel-head">
+								<h2>Account security</h2>
+								<span id="totp-state" class="chip neutral">2FA unknown</span>
 							</div>
-							<div class="diag-list">
-								<div class="diag-row"><span>API status</span><strong id="diag-api">Checking</strong></div>
-								<div class="diag-row"><span>API host</span><strong>api.silentflare.com</strong></div>
-								<div class="diag-row"><span>Response</span><strong id="diag-response">Unknown</strong></div>
-							</div>
-						</section>
-						<section class="diag-section">
-							<div class="diag-title">
-								<svg class="icon"><use href="#icon-lock"></use></svg>
-								<span>Session</span>
-							</div>
-							<div class="diag-list">
-								<div class="diag-row"><span>State</span><strong id="diag-session">Locked</strong></div>
-								<div class="diag-row"><span>Bot ID</span><strong id="diag-bot">None</strong></div>
-								<div class="diag-row"><span>CSRF</span><strong id="diag-csrf">Not loaded</strong></div>
+							<div class="panel-body">
+								<p class="message">Telegram approval remains available. Use this panel to reset the Owner authenticator for future 2FA logins.</p>
+								<button id="generate-totp" type="button" class="button primary">Generate new 2FA setup</button>
 							</div>
 						</section>
-						<section class="diag-section">
-							<div class="diag-title">
-								<svg class="icon"><use href="#icon-bot"></use></svg>
-								<span>Auth method</span>
+
+						<section class="panel">
+							<div class="panel-head">
+								<h2>Authenticator setup</h2>
+								<span class="chip neutral">Owner only</span>
 							</div>
-							<div class="diag-list">
-								<div class="diag-row"><span>Method</span><strong id="diag-auth-method">Unknown</strong></div>
-								<div class="diag-row"><span>Owner ID</span><strong>8737100423</strong></div>
-								<div class="diag-row"><span>Challenge</span><strong id="diag-challenge">None</strong></div>
-							</div>
-						</section>
-						<section class="diag-section">
-							<div class="diag-title">
-								<svg class="icon"><use href="#icon-database"></use></svg>
-								<span>Environment</span>
-							</div>
-							<div class="diag-list">
-								<div class="diag-row"><span>Host</span><strong>FNS1</strong></div>
-								<div class="diag-row"><span>Service</span><strong>silentflare-api.service</strong></div>
-								<div class="diag-row"><span>Mode</span><strong>Production</strong></div>
+							<div class="panel-body">
+								<div id="totp-secret-box" class="secret-box hidden">
+									<strong>Manual secret</strong>
+									<span id="totp-secret" class="mono"></span>
+									<strong>otpauth URI</strong>
+									<span id="totp-uri" class="mono"></span>
+								</div>
+								<form id="enable-totp-form" class="code-row hidden" autocomplete="off">
+									<input id="enable-totp-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000" aria-label="Six-digit setup confirmation code" />
+									<button id="enable-totp" type="submit" class="button primary">Enable 2FA</button>
+								</form>
+								<div id="settings-message" class="message">Generate a setup code first.</div>
 							</div>
 						</section>
-					</aside>
-				</div>
+					</div>
+				</section>
 			</main>
-		</div>
+		</section>
 
-		<div id="modal-backdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-			<section class="modal">
-				<h2 id="modal-title">Confirm action</h2>
-				<p id="modal-body">Confirm this operation.</p>
-				<div class="modal-actions">
-					<button id="modal-cancel" type="button" class="button">Cancel</button>
-					<button id="modal-confirm" type="button" class="button primary">Confirm</button>
-				</div>
-			</section>
-		</div>
 		<div id="notice" class="notice" role="status" aria-live="polite"></div>
 
 		<script is:inline define:vars={{ apiBase }}>
-			const nodes = {
-				apiHealth: document.getElementById("api-health"),
-				authCode: document.getElementById("auth-code"),
-				authCopy: document.getElementById("auth-copy"),
-				authForm: document.getElementById("auth-form"),
-				authMessage: document.getElementById("auth-message"),
-				authMethodChip: document.getElementById("auth-method-chip"),
-				authSubmit: document.getElementById("auth-submit"),
-				authTitle: document.getElementById("auth-title"),
-				autoRefresh: document.getElementById("auto-refresh"),
-				backupCount: document.getElementById("backup-count"),
-				backupHistory: document.getElementById("backup-history"),
-				backupLatest: document.getElementById("backup-latest"),
-				backupMessage: document.getElementById("backup-message"),
-				backupTimer: document.getElementById("backup-timer"),
-				botList: document.getElementById("bot-list"),
-				challengeCountdown: document.getElementById("challenge-countdown"),
-				diagApi: document.getElementById("diag-api"),
-				diagAuthMethod: document.getElementById("diag-auth-method"),
-				diagBot: document.getElementById("diag-bot"),
-				diagChallenge: document.getElementById("diag-challenge"),
-				diagCsrf: document.getElementById("diag-csrf"),
-				diagResponse: document.getElementById("diag-response"),
-				diagSession: document.getElementById("diag-session"),
-				lastUpdated: document.getElementById("last-updated"),
-				logout: document.getElementById("logout"),
-				modalBackdrop: document.getElementById("modal-backdrop"),
-				modalBody: document.getElementById("modal-body"),
-				modalCancel: document.getElementById("modal-cancel"),
-				modalConfirm: document.getElementById("modal-confirm"),
-				modalTitle: document.getElementById("modal-title"),
-				notice: document.getElementById("notice"),
-				progressGrant: document.getElementById("progress-grant"),
-				progressRequest: document.getElementById("progress-request"),
-				progressWait: document.getElementById("progress-wait"),
-				railApi: document.getElementById("rail-api"),
-				railLock: document.getElementById("rail-lock"),
-				railSession: document.getElementById("rail-session"),
-				refreshAll: document.getElementById("refresh-all"),
-				refreshStatus: document.getElementById("refresh-status"),
-				runBackup: document.getElementById("run-backup"),
-				selectedBotName: document.getElementById("selected-bot-name"),
-				selectedBotPurpose: document.getElementById("selected-bot-purpose"),
-				sessionState: document.getElementById("session-state"),
-				telegramCancel: document.getElementById("telegram-cancel"),
-				telegramResend: document.getElementById("telegram-resend"),
-				telegramStart: document.getElementById("telegram-start"),
-				telegramTest: document.getElementById("telegram-test"),
+			const state = {
+				activeChallenge: "",
+				activity: [],
+				bots: [],
+				challengeExpiresAt: null,
+				countdownTimer: null,
+				csrf: sessionStorage.getItem("silentflare_console_csrf") ?? "",
+				pollTimer: null,
+				selectedBot: null,
+				statusTimer: null,
+				totpSecret: "",
 			};
 
-			let csrfToken = sessionStorage.getItem("silentflare_bot_csrf") ?? "";
-			let bots = [];
-			let selectedBot = null;
-			let activeChallenge = null;
-			let challengeExpiresAt = null;
-			let telegramPoll = null;
-			let countdownTimer = null;
-			let statusTimer = null;
-			let modalHandler = null;
-			let activity = [];
-			let apiOnline = false;
+			const $ = (id) => document.getElementById(id);
+			const nodes = {
+				activity: $("activity"),
+				appPage: $("app-page"),
+				backupAuto: $("backup-auto"),
+				backupCount: $("backup-count"),
+				backupHistory: $("backup-history"),
+				backupLatest: $("backup-latest"),
+				backupTimer: $("backup-timer"),
+				botList: $("bot-list"),
+				dashboardView: $("dashboard-view"),
+				enableTotpCode: $("enable-totp-code"),
+				enableTotpForm: $("enable-totp-form"),
+				generateTotp: $("generate-totp"),
+				loginMessage: $("login-message"),
+				loginPage: $("login-page"),
+				loginTelegram: $("login-telegram"),
+				loginTelegramMessage: $("login-telegram-message"),
+				loginTotpCode: $("login-totp-code"),
+				loginTotpForm: $("login-totp-form"),
+				logout: $("logout"),
+				navDashboard: $("nav-dashboard"),
+				navSettings: $("nav-settings"),
+				notice: $("notice"),
+				pageSubtitle: $("page-subtitle"),
+				pageTitle: $("page-title"),
+				refreshStatus: $("refresh-status"),
+				runBackup: $("run-backup"),
+				selectedMessage: $("selected-message"),
+				selectedStatus: $("selected-status"),
+				settingsMessage: $("settings-message"),
+				settingsView: $("settings-view"),
+				telegramTest: $("telegram-test"),
+				totpSecret: $("totp-secret"),
+				totpSecretBox: $("totp-secret-box"),
+				totpState: $("totp-state"),
+				totpUri: $("totp-uri"),
+			};
 
 			function icon(name) {
 				return `<svg class="icon"><use href="#icon-${name}"></use></svg>`;
-			}
-
-			function formatAuthMethod(method) {
-				if (method === "totp") return "2FA";
-				if (method === "telegram") return "Telegram";
-				return method || "Unknown";
-			}
-
-			function formatSize(value) {
-				if (!Number.isFinite(value)) return "0 B";
-				if (value < 1024) return `${value} B`;
-				if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-				return `${(value / 1024 / 1024).toFixed(1)} MB`;
-			}
-
-			function formatTime(date = new Date()) {
-				return date.toLocaleTimeString([], {
-					hour: "2-digit",
-					minute: "2-digit",
-					second: "2-digit",
-				});
-			}
-
-			function shortSha(value) {
-				if (!value) return "Unavailable";
-				return `${value.slice(0, 10)}...${value.slice(-8)}`;
 			}
 
 			function setMessage(node, message, tone = "neutral") {
@@ -1371,97 +964,49 @@ const apiBase =
 				node.dataset.tone = tone;
 			}
 
-			function setApiState(message, tone = "neutral") {
-				nodes.apiHealth.textContent = message;
-				nodes.apiHealth.dataset.tone = tone;
-				nodes.railApi.textContent = message;
-				nodes.diagApi.textContent = message;
-			}
-
-			function setProgress(state) {
-				for (const item of [nodes.progressRequest, nodes.progressWait, nodes.progressGrant]) {
-					item.classList.remove("active", "success");
-				}
-				if (state === "idle") {
-					nodes.challengeCountdown.textContent = selectedBot ? "Ready to request" : "Waiting for selection";
-				}
-				if (state === "pending") {
-					nodes.progressRequest.classList.add("success");
-					nodes.progressWait.classList.add("active");
-				}
-				if (state === "approved") {
-					nodes.progressRequest.classList.add("success");
-					nodes.progressWait.classList.add("success");
-					nodes.progressGrant.classList.add("success");
-					nodes.challengeCountdown.textContent = "Approved";
-				}
-			}
-
 			function toast(message) {
 				nodes.notice.textContent = message;
 				nodes.notice.classList.add("show");
-				window.setTimeout(() => nodes.notice.classList.remove("show"), 2600);
+				window.setTimeout(() => nodes.notice.classList.remove("show"), 2400);
 			}
 
 			function addActivity(label, detail = "", tone = "neutral") {
-				activity.unshift({
-					detail,
-					label,
-					time: formatTime(),
-					tone,
-				});
-				activity = activity.slice(0, 30);
+				state.activity.unshift({ label, detail, tone, time: new Date().toLocaleTimeString() });
+				state.activity = state.activity.slice(0, 30);
 				renderActivity();
+				if (tone !== "neutral") toast(label);
 			}
 
 			function renderActivity() {
-				const target = document.getElementById("activity");
-				target.textContent = "";
-				if (activity.length === 0) {
+				nodes.activity.textContent = "";
+				if (state.activity.length === 0) {
 					const empty = document.createElement("div");
 					empty.className = "empty-state";
 					empty.textContent = "No activity yet.";
-					target.append(empty);
+					nodes.activity.append(empty);
 					return;
 				}
-				for (const item of activity) {
+				for (const item of state.activity) {
 					const row = document.createElement("div");
 					row.className = "activity-row";
 					const time = document.createElement("span");
 					time.textContent = item.time;
 					const label = document.createElement("strong");
 					label.textContent = item.label;
-					const detail = document.createElement("span");
-					detail.textContent = item.detail;
-					const chip = document.createElement("span");
-					chip.className = "chip";
-					if (item.tone === "success") chip.dataset.tone = "success";
-					chip.textContent = item.tone;
-					row.append(time, label, chip);
-					if (item.detail) row.title = item.detail;
-					target.append(row);
+					if (item.detail) label.title = item.detail;
+					const tone = document.createElement("span");
+					tone.className = "chip neutral";
+					tone.textContent = item.tone;
+					row.append(time, label, tone);
+					nodes.activity.append(row);
 				}
 			}
 
-			function showModal(title, body, confirmText, onConfirm) {
-				nodes.modalTitle.textContent = title;
-				nodes.modalBody.textContent = body;
-				nodes.modalConfirm.textContent = confirmText;
-				modalHandler = onConfirm;
-				nodes.modalBackdrop.classList.add("show");
-			}
-
-			function closeModal() {
-				nodes.modalBackdrop.classList.remove("show");
-				modalHandler = null;
-			}
-
 			async function api(path, options = {}) {
-				const started = performance.now();
 				const headers = {
 					Accept: "application/json",
 					...(options.body ? { "Content-Type": "application/json" } : {}),
-					...(options.csrf ? { "X-CSRF-Token": csrfToken } : {}),
+					...(options.csrf ? { "X-CSRF-Token": state.csrf } : {}),
 					...(options.headers ?? {}),
 				};
 				const response = await fetch(`${apiBase}${path}`, {
@@ -1469,10 +1014,6 @@ const apiBase =
 					credentials: "include",
 					headers,
 				});
-				nodes.diagResponse.textContent = `${Math.max(1, Math.round(performance.now() - started))}ms`;
-				if (response.status === 401 || response.status === 403) {
-					setSessionState(false);
-				}
 				if (!response.ok) {
 					let detail = `API ${response.status}`;
 					try {
@@ -1486,127 +1027,140 @@ const apiBase =
 				return response.json();
 			}
 
-			function setSessionState(authenticated, bot = selectedBot) {
-				nodes.sessionState.textContent = authenticated ? "Authorized" : "Locked";
-				nodes.sessionState.dataset.tone = authenticated ? "neutral" : "warning";
-				nodes.diagSession.textContent = authenticated ? "Bot-scoped session" : "Locked";
-				nodes.diagBot.textContent = bot?.id ?? "None";
-				nodes.diagCsrf.textContent = authenticated && csrfToken ? "Loaded" : "Not loaded";
-				nodes.railSession.textContent = authenticated ? "Session active" : "Session locked";
-				nodes.runBackup.disabled = !authenticated;
-				nodes.telegramTest.disabled = !authenticated;
-				nodes.logout.disabled = !authenticated;
-				nodes.railLock.disabled = !authenticated;
-				nodes.refreshStatus.disabled = !authenticated;
-				nodes.autoRefresh.textContent = authenticated ? "Auto refresh: 30s" : "Auto refresh: paused";
-				if (authenticated) startStatusAutoRefresh();
-				else stopStatusAutoRefresh();
+			function stopLoginPolling() {
+				if (state.pollTimer) window.clearInterval(state.pollTimer);
+				if (state.countdownTimer) window.clearInterval(state.countdownTimer);
+				state.pollTimer = null;
+				state.countdownTimer = null;
+				state.activeChallenge = "";
+				state.challengeExpiresAt = null;
+				nodes.loginTelegram.disabled = false;
 			}
 
-			function stopTelegramPolling() {
-				if (telegramPoll) window.clearInterval(telegramPoll);
-				if (countdownTimer) window.clearInterval(countdownTimer);
-				telegramPoll = null;
-				countdownTimer = null;
-				activeChallenge = null;
-				challengeExpiresAt = null;
-				nodes.diagChallenge.textContent = "None";
-				nodes.telegramCancel.disabled = true;
-				nodes.telegramResend.disabled = !selectedBot;
-				nodes.telegramStart.disabled = !selectedBot;
-			}
-
-			function startStatusAutoRefresh() {
-				if (statusTimer) return;
-				statusTimer = window.setInterval(() => {
-					if (document.visibilityState !== "hidden") loadStatus({ quiet: true });
-				}, 30000);
-			}
-
-			function stopStatusAutoRefresh() {
-				if (statusTimer) window.clearInterval(statusTimer);
-				statusTimer = null;
-			}
-
-			function updateCountdown() {
-				if (!challengeExpiresAt) return;
-				const remaining = Math.max(0, Math.round((challengeExpiresAt.getTime() - Date.now()) / 1000));
+			function updateLoginCountdown() {
+				if (!state.challengeExpiresAt) return;
+				const remaining = Math.max(0, Math.round((state.challengeExpiresAt.getTime() - Date.now()) / 1000));
 				const minutes = Math.floor(remaining / 60);
 				const seconds = String(remaining % 60).padStart(2, "0");
-				nodes.challengeCountdown.textContent =
-					remaining > 0 ? `Waiting for approval (${minutes}:${seconds})` : "Login request expired";
-				if (remaining <= 0) {
-					stopTelegramPolling();
-					setProgress("idle");
-					setMessage(nodes.authMessage, "Login request expired. Send a new approval request.", "warning");
-					addActivity("Approval request expired", selectedBot?.id ?? "", "warning");
+				setMessage(
+					nodes.loginTelegramMessage,
+					remaining > 0
+						? `Approval request sent. Waiting for Telegram approval (${minutes}:${seconds}).`
+						: "Approval request expired. Send a new request.",
+					remaining > 0 ? "neutral" : "warning",
+				);
+				if (remaining <= 0) stopLoginPolling();
+			}
+
+			async function startTelegramLogin() {
+				stopLoginPolling();
+				nodes.loginTelegram.disabled = true;
+				try {
+					const result = await api("/auth/telegram/start", {
+						method: "POST",
+						body: JSON.stringify({}),
+						lockOnAuthFailure: false,
+					});
+					state.activeChallenge = result.challenge_id;
+					state.challengeExpiresAt = new Date(result.expires_at);
+					updateLoginCountdown();
+					state.countdownTimer = window.setInterval(updateLoginCountdown, 1000);
+					state.pollTimer = window.setInterval(checkTelegramLogin, 1600);
+					await checkTelegramLogin();
+				} catch (error) {
+					stopLoginPolling();
+					setMessage(nodes.loginTelegramMessage, `Unable to send approval request: ${error.message}`, "error");
 				}
 			}
 
-			function selectBot(bot) {
-				selectedBot = bot;
-				sessionStorage.setItem("silentflare_selected_bot", bot.id);
-				nodes.selectedBotName.textContent = bot.name;
-				nodes.selectedBotPurpose.textContent = `Bot ID: ${bot.id}`;
-				nodes.authMethodChip.textContent = `${formatAuthMethod(bot.auth_method)} authorization`;
-				nodes.diagAuthMethod.textContent = bot.auth_method;
-				nodes.diagBot.textContent = bot.id;
-				nodes.authTitle.textContent = bot.auth_method === "telegram" ? "Ready for Owner approval" : "Ready for 2FA";
-				nodes.authCopy.textContent =
-					bot.auth_method === "telegram"
-						? "Send a one-time login request to the fixed Owner account, then approve it in Telegram."
-						: "Enter the six-digit authenticator code assigned to this bot.";
-				nodes.authForm.classList.toggle("hidden", bot.auth_method !== "totp");
-				nodes.telegramStart.classList.toggle("hidden", bot.auth_method !== "telegram");
-				nodes.telegramResend.classList.toggle("hidden", bot.auth_method !== "telegram");
-				nodes.telegramCancel.classList.toggle("hidden", bot.auth_method !== "telegram");
-				nodes.telegramStart.disabled = false;
-				nodes.telegramResend.disabled = false;
-				nodes.telegramCancel.disabled = true;
-				setProgress("idle");
-				setSessionState(false, bot);
-				setMessage(nodes.authMessage, "Waiting for Owner-approved verification.");
-				stopTelegramPolling();
+			async function checkTelegramLogin() {
+				if (!state.activeChallenge) return;
+				try {
+					const result = await api(`/auth/telegram/status/${state.activeChallenge}`, {
+						lockOnAuthFailure: false,
+					});
+					if (result.status !== "approved") return;
+					await enterApp(result);
+				} catch (error) {
+					stopLoginPolling();
+					setMessage(nodes.loginTelegramMessage, `Authorization failed: ${error.message}`, "error");
+				}
+			}
+
+			async function enterApp(session) {
+				stopLoginPolling();
+				state.csrf = session.csrf;
+				sessionStorage.setItem("silentflare_console_csrf", state.csrf);
+				state.bots = session.bots ?? [];
+				nodes.totpState.textContent = session.totp_enabled ? "2FA enabled" : "2FA not configured";
+				nodes.loginPage.classList.add("hidden");
+				nodes.appPage.classList.remove("hidden");
 				renderBots();
-				addActivity("Bot selected", bot.id, "neutral");
+				renderActivity();
+				if (state.bots.length > 0) selectBot(state.bots[0]);
+				addActivity("Owner login verified", "Console session started", "success");
 			}
 
 			function renderBots() {
 				nodes.botList.textContent = "";
-				if (bots.length === 0) {
+				if (state.bots.length === 0) {
 					const empty = document.createElement("div");
 					empty.className = "message";
-					empty.textContent = "No bots returned by API.";
+					empty.textContent = "No bots available.";
 					nodes.botList.append(empty);
 					return;
 				}
-				for (const bot of bots) {
+				for (const bot of state.bots) {
 					const button = document.createElement("button");
 					button.type = "button";
 					button.className = "bot-card";
-					button.dataset.botId = bot.id;
-					button.setAttribute("aria-pressed", String(selectedBot?.id === bot.id));
-
-					const iconWrap = document.createElement("span");
-					iconWrap.className = "bot-icon";
-					iconWrap.innerHTML = icon("bot");
-
-					const copy = document.createElement("span");
-					const name = document.createElement("strong");
-					name.textContent = bot.id;
-					const purpose = document.createElement("small");
-					purpose.textContent = bot.purpose;
-					copy.append(name, purpose);
-
-					const status = document.createElement("span");
-					status.className = "chip";
-					if (bot.status === "active") status.dataset.tone = "success";
-					status.textContent = bot.status;
-
-					button.append(iconWrap, copy, status);
+					button.setAttribute("aria-pressed", String(state.selectedBot?.id === bot.id));
+					button.innerHTML = `<span class="bot-icon">${icon("bot")}</span><span><strong></strong><small></small></span>`;
+					button.querySelector("strong").textContent = bot.id;
+					button.querySelector("small").textContent = `${bot.purpose} / ${bot.status}`;
 					button.addEventListener("click", () => selectBot(bot));
 					nodes.botList.append(button);
 				}
+			}
+
+			function selectBot(bot) {
+				state.selectedBot = bot;
+				nodes.pageTitle.textContent = bot.name;
+				nodes.pageSubtitle.textContent = `Managing ${bot.id}. Operations require this Owner session and CSRF.`;
+				nodes.selectedStatus.textContent = bot.status;
+				nodes.selectedStatus.className = "chip";
+				setMessage(nodes.selectedMessage, `${bot.purpose} backend loaded for ${bot.id}.`, "success");
+				for (const button of [nodes.refreshStatus, nodes.telegramTest, nodes.runBackup]) button.disabled = false;
+				renderBots();
+				loadStatus();
+				startStatusAutoRefresh();
+				addActivity("Bot selected", bot.id, "neutral");
+			}
+
+			function startStatusAutoRefresh() {
+				if (state.statusTimer) return;
+				nodes.backupAuto.textContent = "Auto refresh: 30s";
+				state.statusTimer = window.setInterval(() => {
+					if (document.visibilityState !== "hidden" && state.selectedBot) loadStatus({ quiet: true });
+				}, 30000);
+			}
+
+			function stopStatusAutoRefresh() {
+				if (state.statusTimer) window.clearInterval(state.statusTimer);
+				state.statusTimer = null;
+				nodes.backupAuto.textContent = "Auto refresh paused";
+			}
+
+			function formatSize(value) {
+				if (!Number.isFinite(value)) return "0 B";
+				if (value < 1024) return `${value} B`;
+				if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+				return `${(value / 1024 / 1024).toFixed(1)} MB`;
+			}
+
+			function shortSha(value) {
+				if (!value) return "Unavailable";
+				return `${value.slice(0, 10)}...${value.slice(-8)}`;
 			}
 
 			function renderStatus(status) {
@@ -1614,347 +1168,201 @@ const apiBase =
 				nodes.backupLatest.textContent = status.latest?.created_at ?? "None";
 				nodes.backupCount.textContent = `${status.backups.length} files`;
 				nodes.backupHistory.textContent = "";
-
 				if (status.backups.length === 0) {
-					const row = document.createElement("tr");
-					const cell = document.createElement("td");
-					cell.colSpan = 6;
-					const empty = document.createElement("div");
-					empty.className = "empty-state";
-					empty.textContent = "No local backups found.";
-					cell.append(empty);
-					row.append(cell);
-					nodes.backupHistory.append(row);
+					nodes.backupHistory.innerHTML = '<tr><td colspan="5"><div class="empty-state">No local backups found.</div></td></tr>';
 					return;
 				}
-
 				for (const item of status.backups) {
 					const row = document.createElement("tr");
-					const filename = document.createElement("td");
-					filename.className = "mono";
-					filename.textContent = item.filename;
-					const created = document.createElement("td");
-					created.textContent = item.created_at;
-					const size = document.createElement("td");
-					size.textContent = formatSize(item.size);
-					const sha = document.createElement("td");
-					sha.className = "mono";
-					sha.textContent = shortSha(item.sha256);
-					const result = document.createElement("td");
-					const chip = document.createElement("span");
-					chip.className = "chip";
-					chip.dataset.tone = "success";
-					chip.textContent = "Success";
-					result.append(chip);
-					const actions = document.createElement("td");
-					const rowActions = document.createElement("div");
-					rowActions.className = "row-actions";
-					const copyName = document.createElement("button");
-					copyName.type = "button";
-					copyName.className = "icon-button";
-					copyName.title = "Copy filename";
-					copyName.innerHTML = icon("copy");
-					copyName.addEventListener("click", () => copyText(item.filename, "Filename copied."));
-					const copySha = document.createElement("button");
-					copySha.type = "button";
-					copySha.className = "icon-button";
-					copySha.title = "Copy SHA256";
-					copySha.innerHTML = icon("info");
-					copySha.addEventListener("click", () => copyText(item.sha256, "SHA256 copied."));
-					rowActions.append(copyName, copySha);
-					actions.append(rowActions);
-					row.append(filename, created, size, sha, result, actions);
+					for (const value of [
+						item.filename,
+						item.created_at,
+						formatSize(item.size),
+						shortSha(item.sha256),
+						"Success",
+					]) {
+						const cell = document.createElement("td");
+						cell.textContent = value;
+						if (value === item.filename || value === shortSha(item.sha256)) cell.className = "mono";
+						row.append(cell);
+					}
 					nodes.backupHistory.append(row);
-				}
-			}
-
-			async function copyText(text, successMessage) {
-				try {
-					await navigator.clipboard.writeText(text);
-					toast(successMessage);
-				} catch {
-					toast(text);
 				}
 			}
 
 			async function loadStatus(options = {}) {
-				if (!selectedBot) return;
+				if (!state.selectedBot) return;
 				try {
-					const status = await api(`/bots/${selectedBot.id}/backup/status`);
+					const status = await api(`/bots/${state.selectedBot.id}/backup/status`);
 					renderStatus(status);
-					setMessage(nodes.backupMessage, status.message ?? "Backup status loaded.", "success");
-					nodes.lastUpdated.textContent = `Last updated: ${formatTime()}`;
-					if (!options.quiet) addActivity("Backup status loaded", selectedBot.id, "success");
+					if (!options.quiet) addActivity("Backup status loaded", state.selectedBot.id, "success");
 				} catch (error) {
-					setMessage(nodes.backupMessage, `Unable to load backup status: ${error.message}`, "error");
+					setMessage(nodes.selectedMessage, `Unable to load backup status: ${error.message}`, "error");
 					if (!options.quiet) addActivity("Backup status failed", error.message, "error");
 				}
 			}
 
-			async function enterOps(bot) {
-				stopTelegramPolling();
-				selectedBot = bot;
-				nodes.selectedBotName.textContent = bot.name;
-				nodes.selectedBotPurpose.textContent = `Bot ID: ${bot.id}`;
-				nodes.diagBot.textContent = bot.id;
-				setSessionState(true, bot);
-				setProgress("approved");
-				setMessage(nodes.authMessage, "Telegram authorization approved. Session is bot-scoped.", "success");
-				addActivity("Session started", bot.id, "success");
-				await loadStatus();
-			}
-
-			async function checkTelegramChallenge() {
-				if (!selectedBot || !activeChallenge) return;
+			async function runBackup() {
+				if (!state.selectedBot) return;
+				nodes.runBackup.disabled = true;
+				setMessage(nodes.selectedMessage, "Backup job started.");
+				addActivity("Backup started", state.selectedBot.id, "pending");
 				try {
-					const result = await api(
-						`/auth/telegram/status/${activeChallenge}?bot_id=${encodeURIComponent(selectedBot.id)}`,
-						{ lockOnAuthFailure: false },
-					);
-					if (result.status !== "approved") return;
-					csrfToken = result.csrf;
-					sessionStorage.setItem("silentflare_bot_csrf", csrfToken);
-					await enterOps(result.bot);
-				} catch (error) {
-					stopTelegramPolling();
-					setProgress("idle");
-					setMessage(nodes.authMessage, `Authorization failed: ${error.message}`, "error");
-					addActivity("Authorization failed", error.message, "error");
-				}
-			}
-
-			async function startTelegramAuthorization() {
-				if (!selectedBot) return;
-				stopTelegramPolling();
-				nodes.telegramStart.disabled = true;
-				nodes.telegramResend.disabled = true;
-				nodes.telegramCancel.disabled = false;
-				try {
-					const result = await api("/auth/telegram/start", {
+					const result = await api(`/bots/${state.selectedBot.id}/backup/run`, {
 						method: "POST",
-						body: JSON.stringify({ bot_id: selectedBot.id }),
-						lockOnAuthFailure: false,
+						csrf: true,
 					});
-					activeChallenge = result.challenge_id;
-					challengeExpiresAt = new Date(result.expires_at);
-					nodes.diagChallenge.textContent = "Pending";
-					setProgress("pending");
-					setMessage(nodes.authMessage, "Approval request sent to Telegram. Confirm from the Owner account.");
-					addActivity("Approval request sent", selectedBot.id, "pending");
-					updateCountdown();
-					countdownTimer = window.setInterval(updateCountdown, 1000);
-					telegramPoll = window.setInterval(checkTelegramChallenge, 1800);
-					await checkTelegramChallenge();
+					setMessage(nodes.selectedMessage, result.message ?? "Backup completed.", "success");
+					addActivity("Backup completed", result.latest?.filename ?? state.selectedBot.id, "success");
+					await loadStatus({ quiet: true });
 				} catch (error) {
-					stopTelegramPolling();
-					setProgress("idle");
-					setMessage(nodes.authMessage, `Unable to send approval request: ${error.message}`, "error");
-					addActivity("Approval request failed", error.message, "error");
+					setMessage(nodes.selectedMessage, `Backup failed: ${error.message}`, "error");
+					addActivity("Backup failed", error.message, "error");
+				} finally {
+					nodes.runBackup.disabled = false;
 				}
 			}
 
-			async function cancelTelegramAuthorization() {
-				if (!selectedBot || !activeChallenge) {
-					stopTelegramPolling();
-					setProgress("idle");
-					return;
-				}
-				const challengeId = activeChallenge;
+			async function testTelegram() {
+				if (!state.selectedBot) return;
+				nodes.telegramTest.disabled = true;
 				try {
-					await api("/auth/telegram/cancel", {
+					const result = await api(`/bots/${state.selectedBot.id}/telegram/test`, {
 						method: "POST",
+						csrf: true,
+					});
+					setMessage(nodes.selectedMessage, result.message ?? "Telegram test notification sent.", "success");
+					addActivity("Telegram test sent", state.selectedBot.id, "success");
+				} catch (error) {
+					setMessage(nodes.selectedMessage, `Telegram test failed: ${error.message}`, "error");
+					addActivity("Telegram test failed", error.message, "error");
+				} finally {
+					nodes.telegramTest.disabled = false;
+				}
+			}
+
+			function showView(view) {
+				const settings = view === "settings";
+				nodes.dashboardView.classList.toggle("hidden", settings);
+				nodes.settingsView.classList.toggle("hidden", !settings);
+				nodes.navDashboard.classList.toggle("active", !settings);
+				nodes.navSettings.classList.toggle("active", settings);
+			}
+
+			async function generateTotp() {
+				nodes.generateTotp.disabled = true;
+				try {
+					const result = await api("/settings/totp/generate", {
+						method: "POST",
+						csrf: true,
+					});
+					state.totpSecret = result.secret;
+					nodes.totpSecret.textContent = result.secret;
+					nodes.totpUri.textContent = result.otpauth_uri;
+					nodes.totpSecretBox.classList.remove("hidden");
+					nodes.enableTotpForm.classList.remove("hidden");
+					setMessage(nodes.settingsMessage, "Add the otpauth URI or manual secret to your authenticator, then enter the current code.", "warning");
+					addActivity("2FA setup generated", "Secret returned to current browser only", "warning");
+				} catch (error) {
+					setMessage(nodes.settingsMessage, `Unable to generate 2FA setup: ${error.message}`, "error");
+				} finally {
+					nodes.generateTotp.disabled = false;
+				}
+			}
+
+			async function enableTotp(event) {
+				event.preventDefault();
+				if (!state.totpSecret) return;
+				try {
+					const result = await api("/settings/totp/enable", {
+						method: "POST",
+						csrf: true,
 						body: JSON.stringify({
-							bot_id: selectedBot.id,
-							challenge_id: challengeId,
+							code: nodes.enableTotpCode.value,
+							secret: state.totpSecret,
 						}),
-						lockOnAuthFailure: false,
 					});
-					addActivity("Approval request cancelled", selectedBot.id, "neutral");
+					nodes.totpState.textContent = result.totp_enabled ? "2FA enabled" : "2FA not configured";
+					state.totpSecret = "";
+					nodes.enableTotpCode.value = "";
+					nodes.totpSecretBox.classList.add("hidden");
+					nodes.enableTotpForm.classList.add("hidden");
+					setMessage(nodes.settingsMessage, "2FA reset complete.", "success");
+					addActivity("2FA reset complete", "Owner authenticator updated", "success");
 				} catch (error) {
-					addActivity("Cancel request failed", error.message, "warning");
-				}
-				stopTelegramPolling();
-				setProgress("idle");
-				setMessage(nodes.authMessage, "Approval request cancelled. Send a new request when ready.", "warning");
-			}
-
-			async function checkHealth() {
-				try {
-					const health = await api("/health", { lockOnAuthFailure: false });
-					apiOnline = Boolean(health.ok);
-					setApiState(apiOnline ? "API online" : "API degraded", apiOnline ? "neutral" : "warning");
-				} catch {
-					apiOnline = false;
-					setApiState("API offline", "error");
-				}
-			}
-
-			async function loadBots() {
-				try {
-					const list = await api("/bots", { lockOnAuthFailure: false });
-					bots = list.bots;
-					const remembered = sessionStorage.getItem("silentflare_selected_bot");
-					selectedBot = bots.find((bot) => bot.id === remembered) ?? bots[0] ?? null;
-					renderBots();
-					if (selectedBot) selectBot(selectedBot);
-				} catch (error) {
-					nodes.botList.textContent = "";
-					const item = document.createElement("div");
-					item.className = "message";
-					item.dataset.tone = "error";
-					item.textContent = `Unable to load bots: ${error.message}`;
-					nodes.botList.append(item);
-					addActivity("Bot list failed", error.message, "error");
+					setMessage(nodes.settingsMessage, `Unable to enable 2FA: ${error.message}`, "error");
 				}
 			}
 
 			async function restoreSession() {
 				try {
 					const session = await api("/auth/me", { lockOnAuthFailure: false });
-					csrfToken = session.csrf;
-					sessionStorage.setItem("silentflare_bot_csrf", csrfToken);
-					await enterOps(session.bot);
+					await enterApp(session);
 				} catch {
-					setSessionState(false);
+					nodes.loginPage.classList.remove("hidden");
+					nodes.appPage.classList.add("hidden");
 				}
 			}
 
 			async function boot() {
 				renderActivity();
-				await checkHealth();
-				await loadBots();
+				try {
+					const options = await api("/auth/options", { lockOnAuthFailure: false });
+					nodes.loginTelegram.disabled = !options.methods.telegram;
+					nodes.loginTotpCode.disabled = !options.methods.totp;
+					$("login-totp-submit").disabled = !options.methods.totp;
+					setMessage(
+						nodes.loginMessage,
+						`Login methods: Telegram ${options.methods.telegram ? "available" : "unavailable"}, 2FA ${options.methods.totp ? "configured" : "not configured"}.`,
+						options.methods.telegram || options.methods.totp ? "success" : "error",
+					);
+				} catch (error) {
+					setMessage(nodes.loginMessage, `Unable to load login methods: ${error.message}`, "error");
+				}
 				await restoreSession();
 			}
 
-			nodes.authForm?.addEventListener("submit", async (event) => {
+			nodes.loginTelegram.addEventListener("click", startTelegramLogin);
+			nodes.loginTotpForm.addEventListener("submit", async (event) => {
 				event.preventDefault();
-				if (!selectedBot || selectedBot.auth_method !== "totp") return;
-				nodes.authSubmit.disabled = true;
-				nodes.authSubmit.textContent = "Verifying";
 				try {
 					const result = await api("/auth/login", {
 						method: "POST",
 						body: JSON.stringify({
-							bot_id: selectedBot.id,
-							code: nodes.authCode.value,
-							method: selectedBot.auth_method,
+							code: nodes.loginTotpCode.value,
+							method: "totp",
 						}),
 						lockOnAuthFailure: false,
 					});
-					csrfToken = result.csrf;
-					sessionStorage.setItem("silentflare_bot_csrf", csrfToken);
-					await enterOps(result.bot);
+					await enterApp(result);
 				} catch (error) {
-					setMessage(nodes.authMessage, `Verification failed: ${error.message}`, "error");
-					addActivity("2FA verification failed", error.message, "error");
-				} finally {
-					nodes.authSubmit.disabled = false;
-					nodes.authSubmit.textContent = "Verify 2FA";
+					setMessage(nodes.loginMessage, `2FA login failed: ${error.message}`, "error");
 				}
 			});
-
-			nodes.telegramStart.addEventListener("click", startTelegramAuthorization);
-			nodes.telegramResend.addEventListener("click", startTelegramAuthorization);
-			nodes.telegramCancel.addEventListener("click", cancelTelegramAuthorization);
-
-			async function logout() {
+			nodes.logout.addEventListener("click", async () => {
 				try {
 					await api("/auth/logout", { method: "POST", csrf: true });
 				} catch {
-					// Local state still clears if the remote session already expired.
+					// The local state still clears if the server session already expired.
 				}
-				csrfToken = "";
-				sessionStorage.removeItem("silentflare_bot_csrf");
-				setSessionState(false);
-				stopTelegramPolling();
-				setProgress("idle");
-				setMessage(nodes.authMessage, "Session locked. Send a new approval request to continue.", "warning");
-				addActivity("Session locked", selectedBot?.id ?? "", "neutral");
-			}
-
-			nodes.logout.addEventListener("click", logout);
-			nodes.railLock.addEventListener("click", logout);
-
-			nodes.runBackup.addEventListener("click", () => {
-				if (!selectedBot) return;
-				showModal(
-					"Run Ghost database backup",
-					"This starts the production backup script on FNS1 for the selected bot. Continue only if you intended to create a new Ghost DB backup now.",
-					"Run backup",
-					async () => {
-						closeModal();
-						nodes.runBackup.disabled = true;
-						setMessage(nodes.backupMessage, "Backup job started.");
-						addActivity("Backup started", selectedBot.id, "pending");
-						try {
-							const result = await api(`/bots/${selectedBot.id}/backup/run`, {
-								method: "POST",
-								csrf: true,
-							});
-							setMessage(nodes.backupMessage, result.message ?? "Backup completed.", "success");
-							addActivity("Backup completed", result.latest?.filename ?? selectedBot.id, "success");
-							await loadStatus({ quiet: true });
-						} catch (error) {
-							setMessage(nodes.backupMessage, `Backup failed: ${error.message}`, "error");
-							addActivity("Backup failed", error.message, "error");
-						} finally {
-							nodes.runBackup.disabled = false;
-						}
-					},
-				);
+				state.csrf = "";
+				sessionStorage.removeItem("silentflare_console_csrf");
+				state.selectedBot = null;
+				stopStatusAutoRefresh();
+				nodes.appPage.classList.add("hidden");
+				nodes.loginPage.classList.remove("hidden");
 			});
-
-			nodes.telegramTest.addEventListener("click", async () => {
-				if (!selectedBot) return;
-				nodes.telegramTest.disabled = true;
-				try {
-					const result = await api(`/bots/${selectedBot.id}/telegram/test`, {
-						method: "POST",
-						csrf: true,
-					});
-					setMessage(nodes.backupMessage, result.message ?? "Telegram test notification sent.", "success");
-					addActivity("Telegram test sent", selectedBot.id, "success");
-				} catch (error) {
-					setMessage(nodes.backupMessage, `Telegram test failed: ${error.message}`, "error");
-					addActivity("Telegram test failed", error.message, "error");
-				} finally {
-					nodes.telegramTest.disabled = false;
-				}
-			});
-
 			nodes.refreshStatus.addEventListener("click", () => loadStatus());
-			nodes.refreshAll.addEventListener("click", async () => {
-				await checkHealth();
-				await restoreSession();
-				if (csrfToken) await loadStatus();
-				toast("Refreshed.");
-			});
-
-			document.getElementById("clear-activity").addEventListener("click", () => {
-				activity = [];
+			nodes.runBackup.addEventListener("click", runBackup);
+			nodes.telegramTest.addEventListener("click", testTelegram);
+			nodes.navDashboard.addEventListener("click", () => showView("dashboard"));
+			nodes.navSettings.addEventListener("click", () => showView("settings"));
+			nodes.generateTotp.addEventListener("click", generateTotp);
+			nodes.enableTotpForm.addEventListener("submit", enableTotp);
+			$("clear-activity").addEventListener("click", () => {
+				state.activity = [];
 				renderActivity();
 			});
-
-			nodes.modalCancel.addEventListener("click", closeModal);
-			nodes.modalBackdrop.addEventListener("click", (event) => {
-				if (event.target === nodes.modalBackdrop) closeModal();
-			});
-			nodes.modalConfirm.addEventListener("click", () => {
-				if (modalHandler) modalHandler();
-				else closeModal();
-			});
-
-			for (const button of document.querySelectorAll("[data-scroll-target]")) {
-				button.addEventListener("click", () => {
-					for (const item of document.querySelectorAll("[data-scroll-target]")) {
-						item.classList.toggle("active", item === button);
-					}
-					document.getElementById(button.dataset.scrollTarget)?.scrollIntoView({
-						behavior: "smooth",
-						block: "start",
-					});
-				});
-			}
 
 			boot();
 		</script>
