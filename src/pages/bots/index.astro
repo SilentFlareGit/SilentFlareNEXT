@@ -13,37 +13,34 @@ const apiBase =
 		<style>
 			:root {
 				color-scheme: dark;
-				--bg: #05090d;
-				--bg-lift: #0b1218;
-				--panel: #111922;
-				--panel-2: #162230;
-				--panel-3: #203247;
-				--line: rgba(153, 178, 204, 0.16);
-				--line-strong: rgba(153, 178, 204, 0.28);
-				--text: #f3f8ff;
-				--muted: #9aabbf;
-				--muted-2: #718399;
-				--blue: #62b4ff;
-				--green: #8ee0a6;
-				--red: #ff7b7b;
-				--shadow: 0 28px 90px rgba(0, 0, 0, 0.34);
+				--bg: #070b0f;
+				--panel: #111820;
+				--panel-soft: #172332;
+				--panel-raised: #1d2b3c;
+				--line: rgba(164, 187, 213, 0.16);
+				--line-strong: rgba(164, 187, 213, 0.28);
+				--text: #f5f8fb;
+				--muted: #a4b1c0;
+				--subtle: #6f8194;
+				--blue: #69b7ff;
+				--cyan: #7de3ff;
+				--green: #8fe3ac;
+				--red: #ff7c7c;
+				--radius: 8px;
+				--shadow: 0 26px 90px rgba(0, 0, 0, 0.38);
 			}
 
 			* {
 				box-sizing: border-box;
 			}
 
-			html {
-				min-height: 100%;
-				background: var(--bg);
-			}
-
 			body {
 				margin: 0;
 				min-height: 100vh;
 				background:
-					linear-gradient(135deg, rgba(98, 180, 255, 0.13), transparent 28rem),
-					radial-gradient(circle at 78% 14%, rgba(142, 224, 166, 0.08), transparent 22rem),
+					linear-gradient(135deg, rgba(105, 183, 255, 0.18), transparent 32rem),
+					radial-gradient(circle at 84% 12%, rgba(125, 227, 255, 0.11), transparent 22rem),
+					radial-gradient(circle at 18% 86%, rgba(143, 227, 172, 0.08), transparent 28rem),
 					var(--bg);
 				color: var(--text);
 				font-family:
@@ -58,114 +55,164 @@ const apiBase =
 
 			.shell {
 				display: grid;
-				width: min(100% - 2rem, 1080px);
+				width: min(100% - 2rem, 1180px);
 				min-height: 100vh;
 				margin: 0 auto;
-				padding: 3rem 0;
-				align-content: center;
-				gap: 1rem;
+				padding: 2rem 0;
+				place-items: center;
 			}
 
-			.hero,
-			.panel {
+			.console {
+				width: 100%;
+				overflow: hidden;
 				border: 1px solid var(--line);
-				border-radius: 8px;
-				background: color-mix(in srgb, var(--panel) 94%, transparent);
+				border-radius: var(--radius);
+				background: rgba(17, 24, 32, 0.94);
 				box-shadow: var(--shadow);
 			}
 
-			.hero {
+			.topbar {
 				display: grid;
 				grid-template-columns: minmax(0, 1fr) auto;
-				gap: 2rem;
-				align-items: start;
-				padding: 2rem 2.25rem;
+				gap: 1.5rem;
+				align-items: center;
+				border-bottom: 1px solid var(--line);
+				background: linear-gradient(180deg, rgba(29, 43, 60, 0.76), rgba(17, 24, 32, 0.7));
+				padding: 1.25rem 1.4rem;
 			}
 
-			.hero h1 {
+			.brand {
+				display: flex;
+				min-width: 0;
+				align-items: center;
+				gap: 0.9rem;
+			}
+
+			.brand-mark {
+				display: grid;
+				width: 2.7rem;
+				height: 2.7rem;
+				flex: none;
+				place-items: center;
+				border: 1px solid rgba(105, 183, 255, 0.32);
+				border-radius: 8px;
+				background: linear-gradient(135deg, rgba(105, 183, 255, 0.24), rgba(125, 227, 255, 0.08));
+				color: var(--blue);
+				font-weight: 860;
+			}
+
+			h1,
+			h2,
+			p {
 				margin: 0;
-				font-size: clamp(2rem, 4vw, 2.75rem);
-				font-weight: 760;
-				letter-spacing: 0;
-				line-height: 1.06;
 			}
 
-			.hero p {
-				max-width: 48rem;
-				margin: 0.9rem 0 0;
+			h1 {
+				font-size: clamp(1.45rem, 3vw, 2rem);
+				font-weight: 780;
+				letter-spacing: 0;
+				line-height: 1.15;
+			}
+
+			.topbar p {
+				margin-top: 0.28rem;
 				color: var(--muted);
-				font-size: 1rem;
-				line-height: 1.7;
+				font-size: 0.92rem;
+				line-height: 1.45;
 			}
 
 			.status-pill {
-				min-width: 7.25rem;
-				border-radius: 6px;
-				background: var(--panel-3);
-				padding: 0.85rem 1rem;
-				color: #d9ecff;
-				font-size: 0.86rem;
-				font-weight: 760;
-				text-align: center;
+				display: inline-flex;
+				min-height: 2.4rem;
+				align-items: center;
+				justify-content: center;
+				border: 1px solid rgba(105, 183, 255, 0.22);
+				border-radius: 999px;
+				background: rgba(105, 183, 255, 0.12);
+				color: #d8ecff;
+				padding: 0.58rem 0.9rem;
+				font-size: 0.82rem;
+				font-weight: 780;
+				white-space: nowrap;
+			}
+
+			.status-pill::before {
+				width: 0.46rem;
+				height: 0.46rem;
+				margin-right: 0.48rem;
+				border-radius: 999px;
+				background: var(--green);
+				content: "";
+				box-shadow: 0 0 0 4px rgba(143, 227, 172, 0.13);
 			}
 
 			.status-pill[data-tone="error"] {
-				background: rgba(255, 123, 123, 0.12);
+				border-color: rgba(255, 124, 124, 0.28);
+				background: rgba(255, 124, 124, 0.1);
 				color: var(--red);
 			}
 
-			.flow {
+			.status-pill[data-tone="error"]::before {
+				background: var(--red);
+				box-shadow: 0 0 0 4px rgba(255, 124, 124, 0.12);
+			}
+
+			.workspace {
 				display: grid;
-				grid-template-columns: minmax(18rem, 0.72fr) minmax(0, 1fr);
-				gap: 1rem;
+				grid-template-columns: 21rem minmax(0, 1fr);
+				min-height: 34rem;
 			}
 
-			.panel {
-				min-height: 24rem;
-				padding: 1.45rem;
+			.sidebar {
+				border-right: 1px solid var(--line);
+				background: rgba(10, 15, 21, 0.34);
+				padding: 1.25rem;
 			}
 
-			.panel-title {
+			.main {
+				padding: 1.25rem;
+			}
+
+			.section-head {
 				display: flex;
 				align-items: center;
 				justify-content: space-between;
 				gap: 1rem;
-				margin-bottom: 1.1rem;
+				margin-bottom: 1rem;
 			}
 
-			.eyebrow {
-				margin: 0;
-				color: var(--muted-2);
-				font-size: 0.76rem;
-				font-weight: 820;
+			.label {
+				color: var(--subtle);
+				font-size: 0.73rem;
+				font-weight: 840;
 				letter-spacing: 0;
 				text-transform: uppercase;
 			}
 
 			.step {
 				display: inline-grid;
-				width: 2rem;
-				height: 2rem;
+				width: 1.85rem;
+				height: 1.85rem;
 				place-items: center;
 				border: 1px solid var(--line);
-				border-radius: 6px;
+				border-radius: 999px;
 				color: var(--muted);
-				font-size: 0.85rem;
+				font-size: 0.78rem;
 				font-weight: 820;
 			}
 
 			.bot-list {
 				display: grid;
-				gap: 0.75rem;
+				gap: 0.7rem;
 			}
 
 			.bot-card {
 				width: 100%;
 				border: 1px solid var(--line);
-				border-radius: 8px;
-				background: var(--bg-lift);
+				border-radius: var(--radius);
+				background: rgba(23, 35, 50, 0.52);
 				color: var(--text);
-				padding: 1rem;
+				padding: 0.95rem;
 				text-align: left;
 				cursor: pointer;
 				transition:
@@ -176,22 +223,31 @@ const apiBase =
 
 			.bot-card:hover,
 			.bot-card[aria-pressed="true"] {
-				border-color: rgba(98, 180, 255, 0.52);
-				background: var(--panel-2);
+				border-color: rgba(105, 183, 255, 0.55);
+				background: rgba(29, 43, 60, 0.95);
 				transform: translateY(-1px);
 			}
 
 			.bot-card strong {
 				display: block;
-				font-size: 1rem;
+				font-size: 0.98rem;
+				font-weight: 780;
 				line-height: 1.35;
+			}
+
+			.bot-card small {
+				display: block;
+				margin-top: 0.25rem;
+				color: var(--muted);
+				font-size: 0.82rem;
+				line-height: 1.4;
 			}
 
 			.bot-meta {
 				display: flex;
 				flex-wrap: wrap;
-				gap: 0.45rem;
-				margin-top: 0.75rem;
+				gap: 0.4rem;
+				margin-top: 0.78rem;
 			}
 
 			.chip {
@@ -199,55 +255,73 @@ const apiBase =
 				border-radius: 999px;
 				padding: 0.32rem 0.55rem;
 				color: var(--muted);
-				font-size: 0.74rem;
+				font-size: 0.72rem;
 				font-weight: 760;
 			}
 
 			.chip[data-tone="ready"] {
-				border-color: rgba(142, 224, 166, 0.28);
+				border-color: rgba(143, 227, 172, 0.28);
 				color: var(--green);
 			}
 
 			.stage {
 				display: grid;
 				min-height: 100%;
+				align-content: stretch;
+			}
+
+			.stage-card,
+			.ops-card {
+				min-height: 100%;
+				border: 1px solid var(--line);
+				border-radius: var(--radius);
+				background:
+					linear-gradient(180deg, rgba(29, 43, 60, 0.62), rgba(17, 24, 32, 0.72)),
+					var(--panel);
 			}
 
 			.stage-card {
 				display: grid;
-				align-content: center;
-				min-height: 21rem;
-				border: 1px solid var(--line);
-				border-radius: 8px;
-				background: linear-gradient(180deg, rgba(32, 50, 71, 0.4), transparent);
-				padding: 2rem;
+				grid-template-columns: minmax(0, 1fr) 12rem;
+				gap: 2rem;
+				align-items: center;
+				padding: clamp(1.4rem, 4vw, 2.5rem);
 			}
 
-			.stage-card h2 {
-				margin: 0;
-				font-size: clamp(1.65rem, 3vw, 2.35rem);
-				font-weight: 760;
+			.stage-card h2,
+			.ops-head h2 {
+				font-size: clamp(1.7rem, 4vw, 2.45rem);
+				font-weight: 780;
 				letter-spacing: 0;
-				line-height: 1.1;
+				line-height: 1.08;
 			}
 
 			.stage-card p {
-				max-width: 37rem;
-				margin: 0.9rem 0 0;
+				max-width: 39rem;
+				margin-top: 0.85rem;
 				color: var(--muted);
 				line-height: 1.65;
 			}
 
-			.auth-form {
+			.visual-token {
 				display: grid;
-				max-width: 24rem;
-				gap: 0.85rem;
-				margin-top: 1.35rem;
+				width: 12rem;
+				height: 12rem;
+				place-items: center;
+				border: 1px solid rgba(105, 183, 255, 0.18);
+				border-radius: 8px;
+				background:
+					linear-gradient(135deg, rgba(105, 183, 255, 0.18), rgba(125, 227, 255, 0.04)),
+					radial-gradient(circle at center, rgba(105, 183, 255, 0.2), transparent 62%);
+				color: rgba(216, 236, 255, 0.88);
+				font-size: 3.2rem;
+				font-weight: 860;
 			}
 
-			.telegram-auth {
+			.telegram-auth,
+			.auth-form {
 				display: grid;
-				max-width: 28rem;
+				max-width: 25rem;
 				gap: 0.85rem;
 				margin-top: 1.35rem;
 			}
@@ -255,19 +329,19 @@ const apiBase =
 			.code-input {
 				width: 100%;
 				border: 1px solid var(--line-strong);
-				border-radius: 8px;
-				background: #0d141c;
+				border-radius: var(--radius);
+				background: rgba(7, 11, 15, 0.72);
 				color: var(--text);
-				padding: 1rem 1.05rem;
-				font-size: 1.3rem;
+				padding: 1rem;
+				font-size: 1.25rem;
 				font-weight: 760;
 				letter-spacing: 0.12em;
 				outline: none;
 			}
 
 			.code-input:focus {
-				border-color: rgba(98, 180, 255, 0.7);
-				box-shadow: 0 0 0 3px rgba(98, 180, 255, 0.1);
+				border-color: rgba(105, 183, 255, 0.72);
+				box-shadow: 0 0 0 3px rgba(105, 183, 255, 0.11);
 			}
 
 			.button {
@@ -275,48 +349,55 @@ const apiBase =
 				min-height: 2.85rem;
 				align-items: center;
 				justify-content: center;
-				border: 0;
-				border-radius: 8px;
-				background: var(--panel-3);
+				border: 1px solid rgba(105, 183, 255, 0.22);
+				border-radius: var(--radius);
+				background: linear-gradient(180deg, rgba(105, 183, 255, 0.24), rgba(105, 183, 255, 0.12));
 				color: var(--text);
-				padding: 0.8rem 1.05rem;
+				padding: 0.78rem 1rem;
 				font-weight: 820;
 				cursor: pointer;
 			}
 
 			.button:hover {
-				background: #2a425e;
+				border-color: rgba(105, 183, 255, 0.45);
+				background: linear-gradient(180deg, rgba(105, 183, 255, 0.32), rgba(105, 183, 255, 0.16));
 			}
 
 			.button:disabled {
-				cursor: not-allowed;
-				opacity: 0.55;
+				cursor: wait;
+				opacity: 0.62;
 			}
 
 			.button.secondary {
-				border: 1px solid var(--line);
+				border-color: var(--line);
 				background: transparent;
 				color: var(--muted);
 			}
 
 			.message {
+				max-width: 40rem;
 				margin-top: 1rem;
-				border: 1px dashed var(--line);
-				border-radius: 8px;
-				padding: 0.95rem 1rem;
+				border: 1px solid var(--line);
+				border-radius: var(--radius);
+				background: rgba(7, 11, 15, 0.42);
+				padding: 0.9rem 1rem;
 				color: var(--muted);
 				font-size: 0.9rem;
 				line-height: 1.5;
 			}
 
 			.message[data-tone="error"] {
-				border-color: rgba(255, 123, 123, 0.34);
+				border-color: rgba(255, 124, 124, 0.34);
 				color: var(--red);
 			}
 
 			.message[data-tone="success"] {
-				border-color: rgba(142, 224, 166, 0.3);
+				border-color: rgba(143, 227, 172, 0.3);
 				color: var(--green);
+			}
+
+			.ops-card {
+				padding: 1.25rem;
 			}
 
 			.ops-head {
@@ -324,37 +405,38 @@ const apiBase =
 				align-items: flex-start;
 				justify-content: space-between;
 				gap: 1rem;
-				margin-bottom: 1.25rem;
+				margin-bottom: 1rem;
 			}
 
-			.ops-head h2 {
-				margin: 0.35rem 0 0;
-				font-size: 1.65rem;
+			.action-row {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 0.7rem;
 			}
 
 			.metric-grid {
 				display: grid;
 				grid-template-columns: repeat(3, minmax(0, 1fr));
-				gap: 0.7rem;
+				gap: 0.75rem;
 			}
 
 			.metric {
-				min-height: 5.7rem;
+				min-height: 5.85rem;
 				border: 1px solid var(--line);
-				border-radius: 8px;
-				background: var(--panel-2);
+				border-radius: var(--radius);
+				background: rgba(23, 35, 50, 0.76);
 				padding: 0.95rem;
 			}
 
 			.metric span {
-				color: var(--muted-2);
-				font-size: 0.78rem;
-				font-weight: 760;
+				color: var(--subtle);
+				font-size: 0.76rem;
+				font-weight: 780;
 			}
 
 			.metric strong {
 				display: block;
-				margin-top: 0.55rem;
+				margin-top: 0.56rem;
 				overflow-wrap: anywhere;
 				font-size: 1.05rem;
 				line-height: 1.25;
@@ -364,8 +446,8 @@ const apiBase =
 				margin-top: 1rem;
 				overflow: hidden;
 				border: 1px solid var(--line);
-				border-radius: 8px;
-				background: var(--panel-2);
+				border-radius: var(--radius);
+				background: rgba(10, 15, 21, 0.44);
 			}
 
 			.history-row {
@@ -373,9 +455,9 @@ const apiBase =
 				grid-template-columns: 1fr 6.5rem;
 				gap: 0.75rem;
 				border-top: 1px solid var(--line);
-				padding: 0.82rem 1rem;
+				padding: 0.8rem 1rem;
 				color: var(--muted);
-				font-size: 0.86rem;
+				font-size: 0.85rem;
 			}
 
 			.history-row:first-child {
@@ -385,7 +467,7 @@ const apiBase =
 			.history-row strong {
 				min-width: 0;
 				overflow: hidden;
-				color: #d4e2f1;
+				color: #d6e3f0;
 				font-weight: 760;
 				text-overflow: ellipsis;
 				white-space: nowrap;
@@ -399,32 +481,32 @@ const apiBase =
 				display: none !important;
 			}
 
-			@media (max-width: 820px) {
+			@media (max-width: 860px) {
 				.shell {
-					width: min(100% - 1rem, 1080px);
+					width: min(100% - 1rem, 1180px);
 					padding: 0.5rem 0 1rem;
-					align-content: start;
+					place-items: start center;
 				}
 
-				.hero,
-				.flow,
+				.topbar,
+				.workspace,
+				.stage-card,
 				.metric-grid {
 					grid-template-columns: 1fr;
 				}
 
-				.hero,
-				.panel,
-				.stage-card {
-					padding: 1.25rem;
-				}
-
-				.panel {
-					min-height: auto;
+				.sidebar {
+					border-right: 0;
+					border-bottom: 1px solid var(--line);
 				}
 
 				.status-pill,
 				.button {
 					width: 100%;
+				}
+
+				.visual-token {
+					display: none;
 				}
 
 				.ops-head {
@@ -435,97 +517,106 @@ const apiBase =
 	</head>
 	<body>
 		<main class="shell">
-			<section class="hero" aria-labelledby="page-title">
-				<div>
-					<h1 id="page-title">Telegram Bot Management</h1>
-					<p>
-						Choose a bot first, then unlock that bot with its own verification method.
-					</p>
-				</div>
-				<div id="api-health" class="status-pill">Checking API</div>
-			</section>
-
-			<section class="flow" aria-label="Bot authentication and operations">
-				<div class="panel">
-					<div class="panel-title">
-						<p class="eyebrow">Select bot</p>
-						<span class="step">1</span>
-					</div>
-					<div id="bot-list" class="bot-list">
-						<button type="button" class="bot-card" disabled>Loading bots</button>
-					</div>
-				</div>
-
-				<div class="panel stage">
-					<div id="select-stage" class="stage-card">
-						<p class="eyebrow">Verification</p>
-						<h2>Select a bot</h2>
-						<p>Each bot has its own login method. Select the bot you want to manage before entering a 2FA code or approving access.</p>
-					</div>
-
-					<div id="auth-stage" class="stage-card hidden">
-						<p id="auth-method-label" class="eyebrow">2FA verification</p>
-						<h2 id="auth-title">Unlock bot</h2>
-						<p id="auth-copy">Enter the 6-digit authenticator code for this bot.</p>
-						<div id="telegram-auth" class="telegram-auth hidden">
-							<button id="telegram-start" type="button" class="button">
-								Send approval request
-							</button>
+			<section class="console" aria-label="Telegram bot management console">
+				<header class="topbar">
+					<div class="brand">
+						<div class="brand-mark">SF</div>
+						<div>
+							<h1>Telegram Bot Management</h1>
+							<p>Owner-approved operations for SilentFlare infrastructure bots.</p>
 						</div>
-						<form id="auth-form" class="auth-form" autocomplete="off">
-							<input
-								id="auth-code"
-								class="code-input"
-								name="code"
-								inputmode="numeric"
-								pattern="[0-9]{6}"
-								minlength="6"
-								maxlength="6"
-								autocomplete="one-time-code"
-								placeholder="000000"
-								aria-label="Six-digit authentication code"
-								required
-							/>
-							<button id="auth-submit" type="submit" class="button">Verify</button>
-						</form>
-						<div id="auth-message" class="message">Waiting for verification.</div>
 					</div>
+					<div id="api-health" class="status-pill">Checking API</div>
+				</header>
 
-					<div id="ops-stage" class="hidden">
-						<div class="ops-head">
+				<div class="workspace">
+					<aside class="sidebar">
+						<div class="section-head">
+							<p class="label">Select bot</p>
+							<span class="step">1</span>
+						</div>
+						<div id="bot-list" class="bot-list">
+							<button type="button" class="bot-card" disabled>Loading bots</button>
+						</div>
+					</aside>
+
+					<section class="main stage">
+						<div id="select-stage" class="stage-card">
 							<div>
-								<p id="selected-bot-purpose" class="eyebrow">Database backup</p>
-								<h2 id="selected-bot-name">Ghost database backup bot</h2>
+								<p class="label">Verification</p>
+								<h2>Select a bot</h2>
+								<p>Choose the infrastructure bot you want to unlock. Each bot keeps its own authorization method and session boundary.</p>
 							</div>
+							<div class="visual-token">01</div>
+						</div>
+
+						<div id="auth-stage" class="stage-card hidden">
+							<div>
+								<p id="auth-method-label" class="label">Telegram authorization</p>
+								<h2 id="auth-title">Unlock bot</h2>
+								<p id="auth-copy">Approve the request from the fixed Owner account in Telegram.</p>
+								<div id="telegram-auth" class="telegram-auth hidden">
+									<button id="telegram-start" type="button" class="button">
+										Send approval request
+									</button>
+								</div>
+								<form id="auth-form" class="auth-form" autocomplete="off">
+									<input
+										id="auth-code"
+										class="code-input"
+										name="code"
+										inputmode="numeric"
+										pattern="[0-9]{6}"
+										minlength="6"
+										maxlength="6"
+										autocomplete="one-time-code"
+										placeholder="000000"
+										aria-label="Six-digit authentication code"
+										required
+									/>
+									<button id="auth-submit" type="submit" class="button">Verify</button>
+								</form>
+								<div id="auth-message" class="message">Waiting for verification.</div>
+							</div>
+							<div class="visual-token">TG</div>
+						</div>
+
+						<div id="ops-stage" class="ops-card hidden">
 							<div class="ops-head">
-								<button id="run-backup" type="button" class="button">Run backup</button>
-								<button id="logout" type="button" class="button secondary">Lock</button>
+								<div>
+									<p id="selected-bot-purpose" class="label">Database backup</p>
+									<h2 id="selected-bot-name">Ghost database backup bot</h2>
+								</div>
+								<div class="action-row">
+									<button id="run-backup" type="button" class="button">Run backup</button>
+									<button id="logout" type="button" class="button secondary">Lock</button>
+								</div>
 							</div>
-						</div>
 
-						<div class="metric-grid">
-							<div class="metric">
-								<span>Timer</span>
-								<strong id="backup-timer">Unknown</strong>
+							<div class="metric-grid">
+								<div class="metric">
+									<span>Timer</span>
+									<strong id="backup-timer">Unknown</strong>
+								</div>
+								<div class="metric">
+									<span>Latest backup</span>
+									<strong id="backup-latest">Unknown</strong>
+								</div>
+								<div class="metric">
+									<span>Local files</span>
+									<strong id="backup-count">0</strong>
+								</div>
 							</div>
-							<div class="metric">
-								<span>Latest backup</span>
-								<strong id="backup-latest">Unknown</strong>
-							</div>
-							<div class="metric">
-								<span>Local files</span>
-								<strong id="backup-count">0</strong>
-							</div>
-						</div>
 
-						<div id="backup-message" class="message">Waiting for API status.</div>
-						<div id="backup-history" class="history">
-							<div class="history-row">
-								<strong>No backup history loaded.</strong>
-								<span></span>
+							<div id="backup-message" class="message">Waiting for API status.</div>
+							<div id="backup-history" class="history">
+								<div class="history-row">
+									<strong>No backup history loaded.</strong>
+									<span></span>
+								</div>
 							</div>
 						</div>
-					</div>
+					</section>
 				</div>
 			</section>
 		</main>
@@ -642,7 +733,7 @@ const apiBase =
 				authCopy.textContent =
 					bot.auth_method === "totp"
 						? "Enter the 6-digit authenticator code assigned to this bot."
-						: "Approve the login request from the selected Telegram bot.";
+						: "Approve the login request from the fixed Owner account in Telegram.";
 				authCode.value = "";
 				stopTelegramPolling();
 				authForm.classList.toggle("hidden", bot.auth_method !== "totp");
@@ -664,12 +755,14 @@ const apiBase =
 					button.setAttribute("aria-pressed", String(selectedBot?.id === bot.id));
 					button.innerHTML = `
 						<strong></strong>
+						<small></small>
 						<div class="bot-meta">
 							<span class="chip" data-tone="ready"></span>
 							<span class="chip"></span>
 						</div>
 					`;
 					button.querySelector("strong").textContent = bot.name;
+					button.querySelector("small").textContent = bot.purpose;
 					const chips = button.querySelectorAll(".chip");
 					chips[0].textContent = bot.status;
 					chips[1].textContent = formatAuthMethod(bot.auth_method);
@@ -749,7 +842,7 @@ const apiBase =
 			async function startTelegramAuthorization() {
 				if (!selectedBot) return;
 				telegramStart.disabled = true;
-				telegramStart.textContent = "Request sent";
+				telegramStart.textContent = "Waiting for Owner approval";
 				stopTelegramPolling();
 				try {
 					const result = await api("/auth/telegram/start", {
@@ -758,7 +851,7 @@ const apiBase =
 						lockOnAuthFailure: false,
 					});
 					activeChallenge = result.challenge_id;
-					setAuthMessage("Approval request sent to the Owner account in Telegram.");
+					setAuthMessage("Approval request sent to Telegram. Confirm from the Owner account.");
 					telegramPoll = window.setInterval(checkTelegramChallenge, 1800);
 					await checkTelegramChallenge();
 				} catch (error) {
