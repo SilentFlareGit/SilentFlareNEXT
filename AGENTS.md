@@ -14,6 +14,7 @@ SilentFlareNEXT is an Astro/Fuwari front end for a Ghost Headless CMS. Treat thi
 - `public`: static public files served as-is.
 - `docs`: operational documentation and setup notes.
 - `scripts`: local verification and authoring helpers.
+- `server/api`: FastAPI custom API used by management surfaces such as Telegram bot management. This is deployed manually to FNS1 under `/opt/silentflare/api`; it is not bundled into the Astro static site.
 - `dist`: generated output. Do not edit by hand.
 - `ghost-cms`: local Ghost artifacts may exist for experimentation. Do not treat this as production Ghost source and do not wire it into the front end.
 
@@ -25,8 +26,59 @@ SilentFlareNEXT is an Astro/Fuwari front end for a Ghost Headless CMS. Treat thi
 - Production public blog domain: `blog.silentflare.com`.
 - Ghost owns content only: posts, tags, authors, cover images, SEO metadata, and media under `/content/`.
 - Astro owns public rendering, RSS, sitemap, layout, search index, and public route shape.
+- Custom management UI route: `/bots/`, also served from `tgbot.silentflare.com` and `tgbotmanagement.silentflare.com`.
+- Custom API domain: `api.silentflare.com`, backed by FastAPI on FNS1.
 - Ghost Admin API keys are forbidden in this repo. The front end may only use a Ghost Content API key.
 - `GHOST_ALLOW_EMPTY=true` is a local or CI fallback for layout/build checks. It must not be used to prove production content integration.
+
+## Custom API And Bot Management
+
+The bot management surface is split across this repo and FNS1 infrastructure:
+
+- Front end source: `src/pages/bots/index.astro`.
+- API source: `server/api/app.py`.
+- API requirements: `server/api/requirements.txt`.
+- Production API service: `silentflare-api.service`.
+- Production API app directory: `/opt/silentflare/api`.
+- Production API env file: `/opt/silentflare/api/api.env`.
+- Production API bind address: `127.0.0.1:9010`.
+- Public API domain: `api.silentflare.com`.
+- Bot management domains: `tgbot.silentflare.com` and `tgbotmanagement.silentflare.com`.
+
+The `/bots/` UI is a standalone management console, not the public blog layout. Do not wrap it in `MainGridLayout`, do not show blog nav/sidebar/footer there, and do not add global username/password login.
+
+Current bot auth model:
+
+- The UI first loads public bot metadata from `GET /bots`.
+- The user selects one bot.
+- Each bot has its own auth method via `auth_method`.
+- `ghost-db-backup` uses `auth_method=telegram` in production.
+- Telegram authorization creates a one-time pending challenge.
+- The Telegram bot sends an inline approval button to the fixed Owner account.
+- The web UI polls challenge status and receives a bot-scoped session after approval.
+- Sessions are bound to `bot_id`; a session for one bot must not authorize another bot.
+- Write operations require the session cookie plus `X-CSRF-Token`.
+
+Current fixed Telegram Owner ID:
+
+```text
+8737100423
+```
+
+Do not generalize Owner ID or share auth across bots unless explicitly requested.
+
+Important FastAPI endpoints:
+
+- `GET /health`: public health check.
+- `GET /bots`: public bot list used before login.
+- `GET /auth/me`: current session and CSRF, requires session.
+- `POST /auth/telegram/start`: starts a Telegram approval challenge for a selected bot.
+- `GET /auth/telegram/status/{challenge_id}?bot_id=...`: polls approval and creates the session when approved.
+- `POST /telegram/update?token=...`: Telegram webhook receiver for inline button callbacks.
+- `GET /bots/{bot_id}/backup/status`: bot-scoped session required.
+- `POST /bots/{bot_id}/backup/run`: bot-scoped session and CSRF required, or server-only `X-Admin-Token` fallback.
+
+Do not print values from `/opt/silentflare/api/api.env`. Reading variable names and checking whether a key is present is acceptable.
 
 ## Environment Variables
 
@@ -40,6 +92,28 @@ GHOST_CONTENT_API_KEY=<content-api-key>
 GHOST_API_VERSION=v5.0
 SITE_URL=https://blog.silentflare.com
 ```
+
+Production FastAPI variables live on FNS1 in `/opt/silentflare/api/api.env`, not in this repo. Known variable names include:
+
+```env
+API_ADMIN_TOKEN=<server-only fallback admin token>
+TELEGRAM_BOT_TOKEN=<bot token>
+TELEGRAM_OWNER_ID=8737100423
+TELEGRAM_WEBHOOK_SECRET=<webhook receiver token>
+GHOST_DB_BACKUP_AUTH_METHOD=telegram
+WEB_COOKIE_SECURE=1
+WEB_SESSION_TTL=43200
+WEB_LOGIN_ATTEMPTS=5
+WEB_LOGIN_WINDOW_SECONDS=900
+```
+
+Optional per-bot TOTP fallback variables may exist, for example:
+
+```env
+BOT_GHOST_DB_BACKUP_TOTP_SECRET=<totp-secret>
+```
+
+Never commit or print any actual values from FastAPI env files.
 
 Optional build-time override variables:
 
@@ -72,6 +146,7 @@ Use pnpm. `preinstall` enforces pnpm.
 - `pnpm verify:ghost`: strict production-style Ghost build plus content route verification.
 - `pnpm preview`: preview `dist` locally.
 - `pnpm new-post`: run `scripts/new-post.js`.
+- `python -m py_compile server\api\app.py`: validate FastAPI syntax locally.
 
 On this Windows machine, `pnpm` may be missing from PATH. Prefer Corepack:
 
@@ -173,13 +248,27 @@ Then it should:
 6. keep only recent releases,
 7. append details to `/var/log/silentflare-deploy.log`.
 
+The deploy script only deploys the Astro static site. It does not copy `server/api/app.py` into `/opt/silentflare/api`. When changing `server/api/app.py`, explicitly copy it to FNS1 and restart the API service:
+
+```powershell
+$key = Join-Path $env:USERPROFILE '.ssh\hetzner_cx23'
+scp -i $key server\api\app.py root@167.233.129.17:/opt/silentflare/api/app.py
+ssh -i $key root@167.233.129.17 'systemctl restart silentflare-api.service; systemctl is-active silentflare-api.service'
+```
+
+Expected API service status: `active`.
+
 Do not print or commit values from:
 
 - `/opt/silentflare/deploy/deploy.env`
+- `/opt/silentflare/api/api.env`
 - `/opt/silentflare/deploy/hook-url.txt`
 - `/opt/silentflare/deploy/hook-url-origin.txt`
 - Ghost Content API key
 - deploy webhook token
+- Telegram bot token
+- Telegram webhook secret
+- API admin token
 
 Reading variable names is acceptable. Printing values is not.
 
@@ -264,6 +353,81 @@ curl.exe --ssl-no-revoke -L -sS -o NUL -w "PUBLIC_POST=%{http_code}\n" https://b
 
 Expected: both `200`.
 
+Verify bot management origin and API:
+
+```powershell
+$key = Join-Path $env:USERPROFILE '.ssh\hetzner_cx23'
+ssh -i $key root@167.233.129.17 'set -Eeuo pipefail; echo HEAD=$(git -C /opt/silentflare/app rev-parse --short HEAD); echo STATUS=$(git -C /opt/silentflare/app status --short | wc -l); echo CURRENT=$(readlink -f /opt/silentflare/blog/current); test -f /opt/silentflare/blog/current/bots/index.html && echo BOTS_FILE=present; curl -sS -o /dev/null -w TGBOT=%{http_code} -H Host:tgbot.silentflare.com http://127.0.0.1/; echo; curl -sS -o /dev/null -w TGBOTMGMT=%{http_code} -H Host:tgbotmanagement.silentflare.com http://127.0.0.1/; echo; curl -sS -o /dev/null -w API_BOTS=%{http_code} -H Host:api.silentflare.com http://127.0.0.1/bots; echo; curl -sS -o /dev/null -w API_STATUS_UNAUTH=%{http_code} -H Host:api.silentflare.com http://127.0.0.1/bots/ghost-db-backup/backup/status; echo'
+```
+
+Expected:
+
+- `HEAD` matches latest pushed commit.
+- `STATUS=0`.
+- `BOTS_FILE=present`.
+- `TGBOT=200`.
+- `TGBOTMGMT=200`.
+- `API_BOTS=200`.
+- `API_STATUS_UNAUTH=401`.
+
+Verify bot management public edge:
+
+```powershell
+curl.exe --ssl-no-revoke -L -sS -o NUL -w "TGBOT_PUBLIC=%{http_code}\n" https://tgbot.silentflare.com/
+curl.exe --ssl-no-revoke -L -sS -o NUL -w "TGBOTMGMT_PUBLIC=%{http_code}\n" https://tgbotmanagement.silentflare.com/
+curl.exe --ssl-no-revoke -L -sS -o NUL -w "API_BOTS_PUBLIC=%{http_code}\n" https://api.silentflare.com/bots
+```
+
+Expected: all `200`.
+
+Verify deployed `/bots/` content without dumping secrets:
+
+```powershell
+$key = Join-Path $env:USERPROFILE '.ssh\hetzner_cx23'
+ssh -i $key root@167.233.129.17 @'
+python3 - <<'PY'
+import json
+import urllib.request
+
+html = urllib.request.urlopen(urllib.request.Request("http://127.0.0.1/", headers={"Host": "tgbot.silentflare.com"}), timeout=30).read().decode("utf-8", "replace")
+for needle in ["Owner-approved operations", "Send approval request", "login-username", "console"]:
+    print(f"PAGE_{needle}=" + str(needle in html))
+
+bots = json.loads(urllib.request.urlopen(urllib.request.Request("http://127.0.0.1/bots", headers={"Host": "api.silentflare.com"}), timeout=30).read().decode())
+print("AUTH_METHOD=" + bots["bots"][0]["auth_method"])
+PY
+'@
+```
+
+Expected:
+
+- `PAGE_Owner-approved operations=True`.
+- `PAGE_Send approval request=True`.
+- `PAGE_login-username=False`.
+- `PAGE_console=True`.
+- `AUTH_METHOD=telegram`.
+
+To test Telegram approval request creation without printing tokens:
+
+```powershell
+$key = Join-Path $env:USERPROFILE '.ssh\hetzner_cx23'
+ssh -i $key root@167.233.129.17 @'
+python3 - <<'PY'
+import json
+import urllib.request
+
+payload = json.dumps({"bot_id": "ghost-db-backup"}).encode()
+req = urllib.request.Request("http://127.0.0.1:9010/auth/telegram/start", data=payload, method="POST")
+req.add_header("Content-Type", "application/json")
+with urllib.request.urlopen(req, timeout=60) as resp:
+    body = json.loads(resp.read().decode())
+print("TG_START=" + str(resp.status) + " CHALLENGE=" + str(bool(body.get("challenge_id"))))
+PY
+'@
+```
+
+Expected: `TG_START=200 CHALLENGE=True`. This sends an approval message to the fixed Owner account.
+
 ## Webhook And Ghost Automation
 
 Ghost webhooks should call the origin webhook URL, not the Cloudflare-proxied URL, if Cloudflare challenges block webhook delivery.
@@ -286,6 +450,49 @@ cat /tmp/silentflare-hook-response.txt
 ```
 
 Do not run this in a way that prints the token.
+
+## Telegram Webhook Automation
+
+Telegram bot login approval depends on a Bot API webhook:
+
+- FastAPI receiver: `POST /telegram/update?token=<TELEGRAM_WEBHOOK_SECRET>`.
+- Public receiver URL: `https://api.silentflare.com/telegram/update?token=<TELEGRAM_WEBHOOK_SECRET>`.
+- Nginx routes `api.silentflare.com` to FastAPI on `127.0.0.1:9010`.
+- Callback data prefix: `sf_login:`.
+- Only callback queries from `TELEGRAM_OWNER_ID=8737100423` may approve a challenge.
+
+To check webhook configuration without printing secrets, prefer status-only scripts. Do not paste bot tokens or webhook URLs with tokens into logs or final replies.
+
+If the API app changes and Telegram authorization breaks:
+
+1. Confirm `silentflare-api.service` is active.
+2. Confirm `/opt/silentflare/api/api.env` contains the required variable names.
+3. Confirm `GET https://api.silentflare.com/bots` returns `auth_method=telegram`.
+4. Confirm `POST /auth/telegram/start` returns a challenge.
+5. Confirm the Owner Telegram account receives the approval message.
+6. Confirm clicking `Approve login` makes the web UI move into the management view.
+
+Do not use browser username/password login for this surface.
+
+## Ghost Database Backup Bot
+
+The current bot management surface controls Ghost DB backups:
+
+- Bot id: `ghost-db-backup`.
+- Backup script: `/opt/silentflare/deploy/ghost-db-backup.sh`.
+- Backup dir: `/opt/silentflare/backups/ghost-db`.
+- Timer: `silentflare-ghost-db-backup.timer`.
+- API status endpoint: `GET /bots/ghost-db-backup/backup/status`.
+- API trigger endpoint: `POST /bots/ghost-db-backup/backup/run`.
+
+Backup trigger requires a bot-scoped web session plus CSRF, unless using the server-only `X-Admin-Token` fallback. The fallback is for internal checks only and must not be exposed in the front end.
+
+To inspect backup status from the server after web login is not available, use status-only checks and avoid printing secrets:
+
+```powershell
+$key = Join-Path $env:USERPROFILE '.ssh\hetzner_cx23'
+ssh -i $key root@167.233.129.17 'set -Eeuo pipefail; systemctl is-active silentflare-ghost-db-backup.timer; ls -1 /opt/silentflare/backups/ghost-db | tail -n 5'
+```
 
 ## Rollback
 
@@ -314,6 +521,7 @@ curl -sS -o /dev/null -w 'HOME=%{http_code}\n' -H Host:blog.silentflare.com http
 - PowerShell `Start-Process` can fail in this environment because of duplicate `Path/PATH` environment keys. Prefer direct foreground commands for short checks.
 - Background preview servers may be unreliable in the sandbox. If `pnpm preview` is needed, verify that `http://127.0.0.1:4321/` actually responds before claiming browser QA.
 - Git writes to `.git` may require elevated approval in restricted mode.
+- Browser/IAB may be unavailable. If rendered UI verification is needed and Browser cannot connect, use the best available fallback and clearly state the limitation.
 
 ## Known Non-Blocking Warnings
 
@@ -407,6 +615,7 @@ fix: reduce frontend debug noise
 - Never print Ghost Content API keys.
 - Never add a Ghost Admin API key to this front end.
 - Never expose `DEPLOY_HOOK_TOKEN`.
+- Never expose `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `API_ADMIN_TOKEN`, session cookies, CSRF values, or TOTP secrets.
 - Do not paste secrets into GitHub issues, PR comments, logs, docs, or final responses.
 - If a command would print a secret, rewrite it to print only key names, masked values, status codes, or file existence.
 - Treat Cloudflare challenge pages and webhook URLs as sensitive when tokens are present.
