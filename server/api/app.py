@@ -728,7 +728,7 @@ def backup_run(
 	notification_sent = False
 	if latest:
 		notification_sent = notify_telegram(
-			"SilentFlare Ghost DB backup completed: "
+			"SilentFlare full MySQL backup completed: "
 			f"{latest['filename']} sha256={latest['sha256']} size={latest['size']}"
 		)
 	message = "Backup completed and local file was created."
