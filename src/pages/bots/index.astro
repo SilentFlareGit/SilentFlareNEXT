@@ -336,6 +336,26 @@ const apiBase =
 				overflow: auto;
 			}
 
+			.login-bot-list {
+				max-height: 15rem;
+			}
+
+			.login-bot-list .bot-card {
+				border-color: var(--line);
+				background: #ffffff;
+				color: var(--text);
+			}
+
+			.login-bot-list .bot-card[aria-pressed="true"],
+			.login-bot-list .bot-card:hover {
+				border-color: #9fc2ff;
+				background: var(--blue-soft);
+			}
+
+			.login-bot-list .bot-card small {
+				color: var(--muted);
+			}
+
 			.bot-card {
 				display: grid;
 				grid-template-columns: 2rem minmax(0, 1fr);
@@ -618,6 +638,15 @@ const apiBase =
 				overflow-wrap: anywhere;
 			}
 
+			.totp-qr {
+				width: 11rem;
+				height: 11rem;
+				border: 1px solid var(--line);
+				border-radius: var(--radius);
+				background: #ffffff;
+				padding: 0.5rem;
+			}
+
 			.notice {
 				position: fixed;
 				left: 50%;
@@ -701,7 +730,7 @@ const apiBase =
 			}
 		</style>
 	</head>
-	<body>
+	<body data-api-base={apiBase}>
 		<svg aria-hidden="true" width="0" height="0" class="hidden">
 			<symbol id="icon-bot" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="5" y="8" width="14" height="10" rx="3" /><path d="M12 8V4" /><path d="M9 4h6" /><path d="M9 13h.01" /><path d="M15 13h.01" /></symbol>
 			<symbol id="icon-send" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m22 2-7 20-4-9-9-4 20-7Z" /><path d="M22 2 11 13" /></symbol>
@@ -722,16 +751,23 @@ const apiBase =
 				</div>
 				<div>
 					<h1>Telegram Bot Management</h1>
-					<p>Sign in as the Owner first. After verification, choose which bot to operate.</p>
+					<p>Choose a bot first, then verify access for that bot.</p>
 				</div>
 				<div class="method-grid">
 					<section class="method-card">
+						<div>
+							<h2>1. Select bot</h2>
+							<p>Pick the bot backend you want to operate.</p>
+						</div>
+						<div id="login-bot-list" class="bot-list login-bot-list"></div>
+					</section>
+					<section class="method-card">
 						<div class="method-head">
 							<div>
-								<h2>Telegram Bot authorization</h2>
-								<p>Send a one-time approval request to the fixed Owner account.</p>
+								<h2>2. Telegram Bot authorization</h2>
+								<p>Send a one-time approval request for the selected bot.</p>
 							</div>
-							<button id="login-telegram" type="button" class="button primary">
+							<button id="login-telegram" type="button" class="button primary" disabled>
 								<svg class="icon"><use href="#icon-send"></use></svg>
 								<span>Send approval request</span>
 							</button>
@@ -740,12 +776,12 @@ const apiBase =
 					</section>
 					<section class="method-card">
 						<div>
-							<h2>Authenticator 2FA</h2>
-							<p>Use the six-digit code from the configured Owner authenticator.</p>
+							<h2>2. Authenticator 2FA</h2>
+							<p>Use the six-digit Owner code for the selected bot.</p>
 						</div>
 						<form id="login-totp-form" class="code-row" autocomplete="off">
-							<input id="login-totp-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000" aria-label="Six-digit authentication code" />
-							<button id="login-totp-submit" type="submit" class="button">
+							<input id="login-totp-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000" aria-label="Six-digit authentication code" disabled />
+							<button id="login-totp-submit" type="submit" class="button" disabled>
 								<svg class="icon"><use href="#icon-lock"></use></svg>
 								<span>Verify 2FA</span>
 							</button>
@@ -883,6 +919,8 @@ const apiBase =
 							</div>
 							<div class="panel-body">
 								<div id="totp-secret-box" class="secret-box hidden">
+									<strong>Scan QR code</strong>
+									<canvas id="totp-qr" class="totp-qr" aria-label="Authenticator QR code"></canvas>
 									<strong>Manual secret</strong>
 									<span id="totp-secret" class="mono"></span>
 									<strong>otpauth URI</strong>
@@ -902,14 +940,19 @@ const apiBase =
 
 		<div id="notice" class="notice" role="status" aria-live="polite"></div>
 
-		<script is:inline define:vars={{ apiBase }}>
+		<script>
+			// @ts-nocheck
+			import QRCode from "qrcode";
+
+			const apiBase = document.body.dataset.apiBase ?? "https://api.silentflare.com";
 			const state = {
 				activeChallenge: "",
 				activity: [],
 				bots: [],
 				challengeExpiresAt: null,
 				countdownTimer: null,
-				csrf: sessionStorage.getItem("silentflare_console_csrf") ?? "",
+				csrf: sessionStorage.getItem("silentflare_bot_csrf") ?? "",
+				loginMethods: { telegram: false, totp: false },
 				pollTimer: null,
 				selectedBot: null,
 				statusTimer: null,
@@ -930,6 +973,7 @@ const apiBase =
 				enableTotpCode: $("enable-totp-code"),
 				enableTotpForm: $("enable-totp-form"),
 				generateTotp: $("generate-totp"),
+				loginBotList: $("login-bot-list"),
 				loginMessage: $("login-message"),
 				loginPage: $("login-page"),
 				loginTelegram: $("login-telegram"),
@@ -951,6 +995,7 @@ const apiBase =
 				telegramTest: $("telegram-test"),
 				totpSecret: $("totp-secret"),
 				totpSecretBox: $("totp-secret-box"),
+				totpQr: $("totp-qr"),
 				totpState: $("totp-state"),
 				totpUri: $("totp-uri"),
 			};
@@ -1002,6 +1047,43 @@ const apiBase =
 				}
 			}
 
+			function renderLoginBots() {
+				nodes.loginBotList.textContent = "";
+				if (state.bots.length === 0) {
+					const empty = document.createElement("div");
+					empty.className = "message";
+					empty.textContent = "No bots available.";
+					nodes.loginBotList.append(empty);
+					return;
+				}
+				for (const bot of state.bots) {
+					const button = document.createElement("button");
+					button.type = "button";
+					button.className = "bot-card";
+					button.setAttribute("aria-pressed", String(state.selectedBot?.id === bot.id));
+					button.innerHTML = `<span class="bot-icon">${icon("bot")}</span><span><strong></strong><small></small></span>`;
+					button.querySelector("strong").textContent = bot.id;
+					button.querySelector("small").textContent = `${bot.purpose} / ${bot.status}`;
+					button.addEventListener("click", () => selectLoginBot(bot));
+					nodes.loginBotList.append(button);
+				}
+			}
+
+			function setAuthControlsEnabled(enabled) {
+				nodes.loginTelegram.disabled = !enabled || !state.loginMethods.telegram;
+				nodes.loginTotpCode.disabled = !enabled || !state.loginMethods.totp;
+				$("login-totp-submit").disabled = !enabled || !state.loginMethods.totp;
+			}
+
+			function selectLoginBot(bot) {
+				state.selectedBot = bot;
+				sessionStorage.setItem("silentflare_selected_bot", bot.id);
+				renderLoginBots();
+				setAuthControlsEnabled(true);
+				setMessage(nodes.loginMessage, `Selected ${bot.id}. Verify access to continue.`, "success");
+				setMessage(nodes.loginTelegramMessage, "Ready to send an approval request for the selected bot.");
+			}
+
 			async function api(path, options = {}) {
 				const headers = {
 					Accept: "application/json",
@@ -1034,7 +1116,7 @@ const apiBase =
 				state.countdownTimer = null;
 				state.activeChallenge = "";
 				state.challengeExpiresAt = null;
-				nodes.loginTelegram.disabled = false;
+				setAuthControlsEnabled(Boolean(state.selectedBot));
 			}
 
 			function updateLoginCountdown() {
@@ -1053,12 +1135,16 @@ const apiBase =
 			}
 
 			async function startTelegramLogin() {
+				if (!state.selectedBot) {
+					setMessage(nodes.loginMessage, "Select a bot before verification.", "warning");
+					return;
+				}
 				stopLoginPolling();
 				nodes.loginTelegram.disabled = true;
 				try {
 					const result = await api("/auth/telegram/start", {
 						method: "POST",
-						body: JSON.stringify({}),
+						body: JSON.stringify({ bot_id: state.selectedBot.id }),
 						lockOnAuthFailure: false,
 					});
 					state.activeChallenge = result.challenge_id;
@@ -1074,11 +1160,14 @@ const apiBase =
 			}
 
 			async function checkTelegramLogin() {
-				if (!state.activeChallenge) return;
+				if (!state.activeChallenge || !state.selectedBot) return;
 				try {
-					const result = await api(`/auth/telegram/status/${state.activeChallenge}`, {
+					const result = await api(
+						`/auth/telegram/status/${state.activeChallenge}?bot_id=${encodeURIComponent(state.selectedBot.id)}`,
+						{
 						lockOnAuthFailure: false,
-					});
+						},
+					);
 					if (result.status !== "approved") return;
 					await enterApp(result);
 				} catch (error) {
@@ -1090,15 +1179,17 @@ const apiBase =
 			async function enterApp(session) {
 				stopLoginPolling();
 				state.csrf = session.csrf;
-				sessionStorage.setItem("silentflare_console_csrf", state.csrf);
-				state.bots = session.bots ?? [];
+				sessionStorage.setItem("silentflare_bot_csrf", state.csrf);
+				const sessionBot = session.bot;
+				if (sessionBot) state.bots = [sessionBot];
+				state.selectedBot = sessionBot ?? state.selectedBot;
 				nodes.totpState.textContent = session.totp_enabled ? "2FA enabled" : "2FA not configured";
 				nodes.loginPage.classList.add("hidden");
 				nodes.appPage.classList.remove("hidden");
 				renderBots();
 				renderActivity();
-				if (state.bots.length > 0) selectBot(state.bots[0]);
-				addActivity("Owner login verified", "Console session started", "success");
+				if (state.selectedBot) selectBot(state.selectedBot);
+				addActivity("Bot access verified", state.selectedBot?.id ?? "", "success");
 			}
 
 			function renderBots() {
@@ -1259,6 +1350,11 @@ const apiBase =
 					state.totpSecret = result.secret;
 					nodes.totpSecret.textContent = result.secret;
 					nodes.totpUri.textContent = result.otpauth_uri;
+					await QRCode.toCanvas(nodes.totpQr, result.otpauth_uri, {
+						errorCorrectionLevel: "M",
+						margin: 1,
+						width: 176,
+					});
 					nodes.totpSecretBox.classList.remove("hidden");
 					nodes.enableTotpForm.classList.remove("hidden");
 					setMessage(nodes.settingsMessage, "Add the otpauth URI or manual secret to your authenticator, then enter the current code.", "warning");
@@ -1304,16 +1400,38 @@ const apiBase =
 				}
 			}
 
+			async function loadPublicBots() {
+				try {
+					const list = await api("/bots", { lockOnAuthFailure: false });
+					state.bots = list.bots ?? [];
+					const remembered = sessionStorage.getItem("silentflare_selected_bot");
+					state.selectedBot = state.bots.find((bot) => bot.id === remembered) ?? state.bots[0] ?? null;
+					renderLoginBots();
+					setAuthControlsEnabled(Boolean(state.selectedBot));
+					if (state.selectedBot) {
+						setMessage(nodes.loginMessage, `Selected ${state.selectedBot.id}. Verify access to continue.`, "success");
+					}
+				} catch (error) {
+					state.bots = [];
+					renderLoginBots();
+					setAuthControlsEnabled(false);
+					setMessage(nodes.loginMessage, `Unable to load bots: ${error.message}`, "error");
+				}
+			}
+
 			async function boot() {
 				renderActivity();
+				setAuthControlsEnabled(false);
+				await loadPublicBots();
 				try {
 					const options = await api("/auth/options", { lockOnAuthFailure: false });
-					nodes.loginTelegram.disabled = !options.methods.telegram;
-					nodes.loginTotpCode.disabled = !options.methods.totp;
-					$("login-totp-submit").disabled = !options.methods.totp;
+					state.loginMethods = options.methods;
+					setAuthControlsEnabled(Boolean(state.selectedBot));
 					setMessage(
 						nodes.loginMessage,
-						`Login methods: Telegram ${options.methods.telegram ? "available" : "unavailable"}, 2FA ${options.methods.totp ? "configured" : "not configured"}.`,
+						state.selectedBot
+							? `Selected ${state.selectedBot.id}. Telegram ${options.methods.telegram ? "available" : "unavailable"}, 2FA ${options.methods.totp ? "configured" : "not configured"}.`
+							: "Select a bot before verification.",
 						options.methods.telegram || options.methods.totp ? "success" : "error",
 					);
 				} catch (error) {
@@ -1325,10 +1443,15 @@ const apiBase =
 			nodes.loginTelegram.addEventListener("click", startTelegramLogin);
 			nodes.loginTotpForm.addEventListener("submit", async (event) => {
 				event.preventDefault();
+				if (!state.selectedBot) {
+					setMessage(nodes.loginMessage, "Select a bot before verification.", "warning");
+					return;
+				}
 				try {
 					const result = await api("/auth/login", {
 						method: "POST",
 						body: JSON.stringify({
+							bot_id: state.selectedBot.id,
 							code: nodes.loginTotpCode.value,
 							method: "totp",
 						}),
@@ -1346,11 +1469,12 @@ const apiBase =
 					// The local state still clears if the server session already expired.
 				}
 				state.csrf = "";
-				sessionStorage.removeItem("silentflare_console_csrf");
+				sessionStorage.removeItem("silentflare_bot_csrf");
 				state.selectedBot = null;
 				stopStatusAutoRefresh();
 				nodes.appPage.classList.add("hidden");
 				nodes.loginPage.classList.remove("hidden");
+				await loadPublicBots();
 			});
 			nodes.refreshStatus.addEventListener("click", () => loadStatus());
 			nodes.runBackup.addEventListener("click", runBackup);

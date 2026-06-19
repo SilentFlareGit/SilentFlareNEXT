@@ -112,11 +112,12 @@ def cleanup_sessions() -> None:
 		LOGIN_CHALLENGES.pop(challenge_id, None)
 
 
-def create_session(response: Response) -> dict[str, str]:
+def create_session(response: Response, bot_id: str) -> dict[str, str]:
 	cleanup_sessions()
 	session_id = secrets.token_urlsafe(32)
 	csrf = secrets.token_urlsafe(32)
 	SESSIONS[session_id] = {
+		"bot_id": bot_id,
 		"csrf": csrf,
 		"expires_at": time.time() + WEB_SESSION_TTL,
 		"login_epoch": WEB_LOGIN_SESSION_EPOCH,
@@ -130,7 +131,7 @@ def create_session(response: Response) -> dict[str, str]:
 		max_age=WEB_SESSION_TTL,
 		path="/",
 	)
-	return {"csrf": csrf}
+	return {"bot_id": bot_id, "csrf": csrf}
 
 
 def destroy_session(request: Request, response: Response) -> None:
@@ -162,8 +163,8 @@ def require_session(
 	require_csrf: bool = False,
 ) -> dict[str, Any]:
 	session = get_session(request)
-	if bot_id is not None:
-		ensure_bot(bot_id)
+	if bot_id is not None and session.get("bot_id") != bot_id:
+		raise HTTPException(status_code=403, detail="Session is not authorized for this bot")
 	if require_csrf and (
 		not x_csrf_token or not hmac.compare_digest(x_csrf_token, session["csrf"])
 	):
@@ -213,12 +214,12 @@ def ensure_telegram_auth_bot(bot: dict[str, str]) -> None:
 		raise HTTPException(status_code=503, detail="Telegram bot token is not configured")
 
 
-def create_login_challenge(client: str) -> dict[str, Any]:
+def create_login_challenge(bot_id: str, client: str) -> dict[str, Any]:
 	cleanup_sessions()
 	challenge_id = secrets.token_urlsafe(18)
 	challenge = {
 		"id": challenge_id,
-		"bot_id": CONSOLE_AUTH_ID,
+		"bot_id": bot_id,
 		"client": client,
 		"status": "pending",
 		"created_at": time.time(),
@@ -228,12 +229,12 @@ def create_login_challenge(client: str) -> dict[str, Any]:
 	return challenge
 
 
-def get_login_challenge(challenge_id: str, client: str) -> dict[str, Any]:
+def get_login_challenge(challenge_id: str, bot_id: str, client: str) -> dict[str, Any]:
 	cleanup_sessions()
 	challenge = LOGIN_CHALLENGES.get(challenge_id)
 	if not challenge:
 		raise HTTPException(status_code=404, detail="Login request expired")
-	if challenge["bot_id"] != CONSOLE_AUTH_ID or not hmac.compare_digest(challenge["client"], client):
+	if challenge["bot_id"] != bot_id or not hmac.compare_digest(challenge["client"], client):
 		raise HTTPException(status_code=403, detail="Login request is not valid for this client")
 	return challenge
 
@@ -255,14 +256,14 @@ def telegram_api(method: str, payload: dict[str, Any]) -> dict[str, Any]:
 	return body
 
 
-def send_login_approval(challenge: dict[str, Any]) -> None:
+def send_login_approval(bot: dict[str, str], challenge: dict[str, Any]) -> None:
 	telegram_api(
 		"sendMessage",
 		{
 			"chat_id": TELEGRAM_OWNER_ID,
 			"text": (
 				"SilentFlare Bot Management login requested.\n"
-				"Scope: Owner console\n"
+				f"Bot: {bot['name']} ({bot['id']})\n"
 				"Approve only if this was you."
 			),
 			"reply_markup": {
@@ -506,9 +507,10 @@ def auth_options() -> dict[str, Any]:
 @app.get("/auth/me")
 def auth_me(request: Request) -> dict[str, Any]:
 	session = get_session(request)
+	bot = ensure_bot(str(session["bot_id"]))
 	return {
 		"authenticated": True,
-		"bots": [public_bot(bot) for bot in BOTS],
+		"bot": public_bot(bot),
 		"csrf": session["csrf"],
 		"totp_enabled": bool(console_totp_secret()),
 	}
@@ -521,16 +523,17 @@ def auth_login(
 	response: Response,
 ) -> dict[str, Any]:
 	check_login_rate_limit(request)
+	bot = ensure_bot(str(payload.bot_id or ""))
 	try:
 		verify_console_login(payload)
 	except HTTPException:
 		record_login_failure(request)
 		raise
 	LOGIN_FAILURES.pop(client_key(request), None)
-	session = create_session(response)
+	session = create_session(response, bot["id"])
 	return {
 		"ok": True,
-		"bots": [public_bot(bot) for bot in BOTS],
+		"bot": public_bot(bot),
 		"totp_enabled": bool(console_totp_secret()),
 		**session,
 	}
@@ -539,17 +542,18 @@ def auth_login(
 @app.post("/auth/telegram/start")
 def auth_telegram_start(payload: TelegramStartPayload, request: Request) -> dict[str, Any]:
 	check_login_rate_limit(request)
-	if not TELEGRAM_BOT_TOKEN:
-		raise HTTPException(status_code=503, detail="Telegram bot token is not configured")
-	challenge = create_login_challenge(client_key(request))
+	bot = ensure_bot(str(payload.bot_id or ""))
+	ensure_telegram_auth_bot(bot)
+	challenge = create_login_challenge(bot["id"], client_key(request))
 	try:
-		send_login_approval(challenge)
+		send_login_approval(bot, challenge)
 	except HTTPException:
 		LOGIN_CHALLENGES.pop(challenge["id"], None)
 		record_login_failure(request)
 		raise
 	return {
 		"ok": True,
+		"bot": public_bot(bot),
 		"challenge_id": challenge["id"],
 		"expires_at": datetime.fromtimestamp(
 			challenge["expires_at"],
@@ -563,19 +567,21 @@ def auth_telegram_start(payload: TelegramStartPayload, request: Request) -> dict
 @app.get("/auth/telegram/status/{challenge_id}")
 def auth_telegram_status(
 	challenge_id: str,
+	bot_id: str,
 	request: Request,
 	response: Response,
 ) -> dict[str, Any]:
-	challenge = get_login_challenge(challenge_id, client_key(request))
+	bot = ensure_bot(bot_id)
+	challenge = get_login_challenge(challenge_id, bot["id"], client_key(request))
 	if challenge["status"] != "approved":
 		return {"ok": True, "status": "pending"}
 	LOGIN_CHALLENGES.pop(challenge_id, None)
 	LOGIN_FAILURES.pop(client_key(request), None)
-	session = create_session(response)
+	session = create_session(response, bot["id"])
 	return {
 		"ok": True,
 		"status": "approved",
-		"bots": [public_bot(bot) for bot in BOTS],
+		"bot": public_bot(bot),
 		"totp_enabled": bool(console_totp_secret()),
 		**session,
 	}
@@ -585,6 +591,7 @@ def auth_telegram_status(
 def auth_telegram_cancel(payload: TelegramCancelPayload, request: Request) -> dict[str, Any]:
 	challenge = get_login_challenge(
 		payload.challenge_id,
+		str(payload.bot_id or ""),
 		client_key(request),
 	)
 	if challenge["status"] == "pending":
@@ -627,8 +634,7 @@ async def telegram_update(request: Request, token: str = "") -> dict[str, Any]:
 
 
 @app.get("/bots")
-def bots(request: Request) -> dict[str, Any]:
-	require_session(request)
+def bots() -> dict[str, Any]:
 	return {"bots": [public_bot(bot) for bot in BOTS]}
 
 
