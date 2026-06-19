@@ -435,7 +435,10 @@ def list_backups() -> list[dict[str, Any]]:
 	if not BACKUP_DIR.exists():
 		return []
 	files = sorted(
-		BACKUP_DIR.glob("ghost-db-*.sql.gz"),
+		[
+			*BACKUP_DIR.glob("ghost-db-*.sql.gz.age"),
+			*BACKUP_DIR.glob("ghost-db-*.sql.gz"),
+		],
 		key=lambda item: item.stat().st_mtime,
 		reverse=True,
 	)
