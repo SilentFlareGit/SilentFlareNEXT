@@ -61,8 +61,8 @@ app.add_middleware(
 BOTS = [
 	{
 		"id": "ghost-db-backup",
-		"name": "Ghost database backup bot",
-		"purpose": "Database backup",
+		"name": "SilentFlare DB Backup",
+		"purpose": "All database backup",
 		"status": "active",
 		"auth_method": os.getenv("GHOST_DB_BACKUP_AUTH_METHOD", "telegram"),
 	}
@@ -692,7 +692,7 @@ def backup_status(bot_id: str, request: Request) -> dict[str, Any]:
 		"timer_active": timer_active(),
 		"latest": backups[0] if backups else None,
 		"backups": backups,
-		"message": "Local Ghost database backups are available."
+		"message": "Local SilentFlare database backups are available."
 		if backups
 		else "No local backups found.",
 	}
