@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 APP_NAME = "SilentFlare Bot API"
+TELEGRAM_OWNER_ID = int(os.getenv("TELEGRAM_OWNER_ID", "8737100423"))
 BACKUP_SCRIPT = Path(
 	os.getenv("BACKUP_SCRIPT", "/opt/silentflare/deploy/ghost-db-backup.sh")
 )
@@ -28,12 +29,14 @@ BACKUP_DIR = Path(os.getenv("BACKUP_DIR", "/opt/silentflare/backups/ghost-db"))
 ADMIN_TOKEN = os.getenv("API_ADMIN_TOKEN", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
 WEB_SESSION_TTL = int(os.getenv("WEB_SESSION_TTL", "43200"))
 WEB_COOKIE_SECURE = os.getenv("WEB_COOKIE_SECURE", "1") != "0"
 WEB_LOGIN_ATTEMPTS = int(os.getenv("WEB_LOGIN_ATTEMPTS", "5"))
 WEB_LOGIN_WINDOW_SECONDS = int(os.getenv("WEB_LOGIN_WINDOW_SECONDS", "900"))
 WEB_LOGIN_SESSION_EPOCH = os.getenv("WEB_LOGIN_SESSION_EPOCH", "")
 SESSION_COOKIE = "sf_bot_session"
+LOGIN_CHALLENGE_TTL = 5 * 60
 PBKDF2_PREFIX = "pbkdf2_sha256"
 
 app = FastAPI(title=APP_NAME)
@@ -58,11 +61,12 @@ BOTS = [
 		"name": "Ghost database backup bot",
 		"purpose": "Database backup",
 		"status": "active",
-		"auth_method": os.getenv("GHOST_DB_BACKUP_AUTH_METHOD", "totp"),
+		"auth_method": os.getenv("GHOST_DB_BACKUP_AUTH_METHOD", "telegram"),
 	}
 ]
 
 SESSIONS: dict[str, dict[str, Any]] = {}
+LOGIN_CHALLENGES: dict[str, dict[str, Any]] = {}
 LOGIN_FAILURES: dict[str, list[float]] = {}
 
 
@@ -70,6 +74,10 @@ class LoginPayload(BaseModel):
 	bot_id: str
 	method: str
 	code: str
+
+
+class TelegramStartPayload(BaseModel):
+	bot_id: str
 
 
 def cleanup_sessions() -> None:
@@ -82,6 +90,13 @@ def cleanup_sessions() -> None:
 	]
 	for session_id in expired:
 		SESSIONS.pop(session_id, None)
+	expired_challenges = [
+		challenge_id
+		for challenge_id, challenge in LOGIN_CHALLENGES.items()
+		if challenge["expires_at"] <= now
+	]
+	for challenge_id in expired_challenges:
+		LOGIN_CHALLENGES.pop(challenge_id, None)
 
 
 def create_session(response: Response, bot_id: str) -> dict[str, str]:
@@ -179,6 +194,104 @@ def public_bot(bot: dict[str, str]) -> dict[str, str]:
 	}
 
 
+def ensure_telegram_auth_bot(bot: dict[str, str]) -> None:
+	if bot["auth_method"] != "telegram":
+		raise HTTPException(status_code=400, detail="This bot does not use Telegram authorization")
+	if not TELEGRAM_BOT_TOKEN:
+		raise HTTPException(status_code=503, detail="Telegram bot token is not configured")
+
+
+def create_login_challenge(bot_id: str, client: str) -> dict[str, Any]:
+	cleanup_sessions()
+	challenge_id = secrets.token_urlsafe(18)
+	challenge = {
+		"id": challenge_id,
+		"bot_id": bot_id,
+		"client": client,
+		"status": "pending",
+		"created_at": time.time(),
+		"expires_at": time.time() + LOGIN_CHALLENGE_TTL,
+	}
+	LOGIN_CHALLENGES[challenge_id] = challenge
+	return challenge
+
+
+def get_login_challenge(challenge_id: str, bot_id: str, client: str) -> dict[str, Any]:
+	cleanup_sessions()
+	challenge = LOGIN_CHALLENGES.get(challenge_id)
+	if not challenge:
+		raise HTTPException(status_code=404, detail="Login request expired")
+	if challenge["bot_id"] != bot_id or not hmac.compare_digest(challenge["client"], client):
+		raise HTTPException(status_code=403, detail="Login request is not valid for this client")
+	return challenge
+
+
+def telegram_api(method: str, payload: dict[str, Any]) -> dict[str, Any]:
+	if not TELEGRAM_BOT_TOKEN:
+		raise HTTPException(status_code=503, detail="Telegram bot token is not configured")
+	data = json.dumps(payload).encode()
+	request = UrlRequest(
+		f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/{method}",
+		data=data,
+		method="POST",
+	)
+	request.add_header("Content-Type", "application/json")
+	with urlopen(request, timeout=20) as response:
+		body = json.loads(response.read().decode("utf-8"))
+	if not body.get("ok"):
+		raise HTTPException(status_code=502, detail="Telegram API request failed")
+	return body
+
+
+def send_login_approval(bot: dict[str, str], challenge: dict[str, Any]) -> None:
+	telegram_api(
+		"sendMessage",
+		{
+			"chat_id": TELEGRAM_OWNER_ID,
+			"text": (
+				"SilentFlare Bot Management login requested.\n"
+				f"Bot: {bot['name']}\n"
+				"Approve only if this was you."
+			),
+			"reply_markup": {
+				"inline_keyboard": [
+					[
+						{
+							"text": "Approve login",
+							"callback_data": f"sf_login:{challenge['id']}",
+						}
+					]
+				]
+			},
+		},
+	)
+
+
+def answer_callback(callback_id: str, text: str, alert: bool = False) -> None:
+	telegram_api(
+		"answerCallbackQuery",
+		{
+			"callback_query_id": callback_id,
+			"text": text,
+			"show_alert": alert,
+		},
+	)
+
+
+def approve_login_challenge(challenge_id: str, telegram_user_id: int) -> bool:
+	challenge = LOGIN_CHALLENGES.get(challenge_id)
+	if not challenge or challenge["expires_at"] <= time.time():
+		LOGIN_CHALLENGES.pop(challenge_id, None)
+		return False
+	if telegram_user_id != TELEGRAM_OWNER_ID:
+		return False
+	if challenge["status"] == "approved":
+		return True
+	challenge["status"] = "approved"
+	challenge["approved_at"] = time.time()
+	return True
+
+
 def bot_totp_env_name(bot_id: str) -> str:
 	return f"BOT_{bot_id.upper().replace('-', '_')}_TOTP_SECRET"
 
@@ -219,6 +332,8 @@ def verify_bot_login(bot: dict[str, str], payload: LoginPayload) -> None:
 		if not verify_totp(bot_totp_secret(bot["id"]), payload.code):
 			raise HTTPException(status_code=401, detail="Invalid authentication code")
 		return
+	if method == "telegram":
+		raise HTTPException(status_code=400, detail="Use Telegram authorization")
 	raise HTTPException(status_code=503, detail="Authentication method is not available")
 
 
@@ -346,6 +461,53 @@ def auth_login(
 	return {"ok": True, "bot": public_bot(bot), **session}
 
 
+@app.post("/auth/telegram/start")
+def auth_telegram_start(payload: TelegramStartPayload, request: Request) -> dict[str, Any]:
+	check_login_rate_limit(request)
+	bot = ensure_bot(payload.bot_id)
+	ensure_telegram_auth_bot(bot)
+	challenge = create_login_challenge(bot["id"], client_key(request))
+	try:
+		send_login_approval(bot, challenge)
+	except HTTPException:
+		LOGIN_CHALLENGES.pop(challenge["id"], None)
+		record_login_failure(request)
+		raise
+	return {
+		"ok": True,
+		"bot": public_bot(bot),
+		"challenge_id": challenge["id"],
+		"expires_at": datetime.fromtimestamp(
+			challenge["expires_at"],
+			tz=timezone.utc,
+		)
+		.isoformat()
+		.replace("+00:00", "Z"),
+	}
+
+
+@app.get("/auth/telegram/status/{challenge_id}")
+def auth_telegram_status(
+	challenge_id: str,
+	bot_id: str,
+	request: Request,
+	response: Response,
+) -> dict[str, Any]:
+	challenge = get_login_challenge(challenge_id, bot_id, client_key(request))
+	if challenge["status"] != "approved":
+		return {"ok": True, "status": "pending"}
+	bot = ensure_bot(bot_id)
+	LOGIN_CHALLENGES.pop(challenge_id, None)
+	LOGIN_FAILURES.pop(client_key(request), None)
+	session = create_session(response, bot["id"])
+	return {
+		"ok": True,
+		"status": "approved",
+		"bot": public_bot(bot),
+		**session,
+	}
+
+
 @app.post("/auth/logout")
 def auth_logout(
 	request: Request,
@@ -355,6 +517,29 @@ def auth_logout(
 	require_session(request, x_csrf_token=x_csrf_token, require_csrf=True)
 	destroy_session(request, response)
 	return {"ok": True}
+
+
+@app.post("/telegram/update")
+async def telegram_update(request: Request, token: str = "") -> dict[str, Any]:
+	if TELEGRAM_WEBHOOK_SECRET and not hmac.compare_digest(token, TELEGRAM_WEBHOOK_SECRET):
+		raise HTTPException(status_code=401, detail="Invalid webhook token")
+	update = await request.json()
+	callback = update.get("callback_query") or {}
+	data = callback.get("data") or ""
+	if not data.startswith("sf_login:"):
+		return {"ok": True}
+	challenge_id = data.removeprefix("sf_login:")
+	from_user = callback.get("from") or {}
+	user_id = int(from_user.get("id") or 0)
+	callback_id = callback.get("id") or ""
+	approved = approve_login_challenge(challenge_id, user_id)
+	if callback_id:
+		answer_callback(
+			callback_id,
+			"Login approved. Return to the web page." if approved else "Login request expired or unauthorized.",
+			alert=not approved,
+		)
+	return {"ok": True, "approved": approved}
 
 
 @app.get("/bots")

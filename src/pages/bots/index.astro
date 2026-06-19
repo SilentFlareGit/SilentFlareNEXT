@@ -245,6 +245,13 @@ const apiBase =
 				margin-top: 1.35rem;
 			}
 
+			.telegram-auth {
+				display: grid;
+				max-width: 28rem;
+				gap: 0.85rem;
+				margin-top: 1.35rem;
+			}
+
 			.code-input {
 				width: 100%;
 				border: 1px solid var(--line-strong);
@@ -460,6 +467,11 @@ const apiBase =
 						<p id="auth-method-label" class="eyebrow">2FA verification</p>
 						<h2 id="auth-title">Unlock bot</h2>
 						<p id="auth-copy">Enter the 6-digit authenticator code for this bot.</p>
+						<div id="telegram-auth" class="telegram-auth hidden">
+							<button id="telegram-start" type="button" class="button">
+								Send approval request
+							</button>
+						</div>
 						<form id="auth-form" class="auth-form" autocomplete="off">
 							<input
 								id="auth-code"
@@ -531,6 +543,8 @@ const apiBase =
 			const authCopy = document.getElementById("auth-copy");
 			const authMethodLabel = document.getElementById("auth-method-label");
 			const authMessage = document.getElementById("auth-message");
+			const telegramAuth = document.getElementById("telegram-auth");
+			const telegramStart = document.getElementById("telegram-start");
 			const logout = document.getElementById("logout");
 			const runBackup = document.getElementById("run-backup");
 			const selectedBotName = document.getElementById("selected-bot-name");
@@ -544,6 +558,8 @@ const apiBase =
 			let csrfToken = sessionStorage.getItem("silentflare_bot_csrf") ?? "";
 			let bots = [];
 			let selectedBot = null;
+			let telegramPoll = null;
+			let activeChallenge = null;
 
 			function setHealth(message, tone = "neutral") {
 				apiHealth.textContent = message;
@@ -564,6 +580,12 @@ const apiBase =
 				selectStage.classList.toggle("hidden", stage !== "select");
 				authStage.classList.toggle("hidden", stage !== "auth");
 				opsStage.classList.toggle("hidden", stage !== "ops");
+			}
+
+			function stopTelegramPolling() {
+				if (telegramPoll) window.clearInterval(telegramPoll);
+				telegramPoll = null;
+				activeChallenge = null;
 			}
 
 			function formatAuthMethod(method) {
@@ -622,9 +644,14 @@ const apiBase =
 						? "Enter the 6-digit authenticator code assigned to this bot."
 						: "Approve the login request from the selected Telegram bot.";
 				authCode.value = "";
+				stopTelegramPolling();
+				authForm.classList.toggle("hidden", bot.auth_method !== "totp");
+				telegramAuth.classList.toggle("hidden", bot.auth_method !== "telegram");
+				telegramStart.disabled = false;
+				telegramStart.textContent = "Send approval request";
 				setAuthMessage("Waiting for verification.");
 				showStage("auth");
-				window.setTimeout(() => authCode?.focus(), 0);
+				if (bot.auth_method === "totp") window.setTimeout(() => authCode?.focus(), 0);
 			}
 
 			function renderBots() {
@@ -691,11 +718,54 @@ const apiBase =
 			}
 
 			async function enterOps(bot) {
+				stopTelegramPolling();
 				selectedBot = bot;
 				selectedBotName.textContent = bot.name;
 				selectedBotPurpose.textContent = bot.purpose;
 				showStage("ops");
 				await loadStatus();
+			}
+
+			async function checkTelegramChallenge() {
+				if (!selectedBot || !activeChallenge) return;
+				try {
+					const result = await api(
+						`/auth/telegram/status/${activeChallenge}?bot_id=${encodeURIComponent(selectedBot.id)}`,
+						{ lockOnAuthFailure: false },
+					);
+					if (result.status !== "approved") return;
+					csrfToken = result.csrf;
+					sessionStorage.setItem("silentflare_bot_csrf", csrfToken);
+					setAuthMessage("Telegram authorization approved.", "success");
+					await enterOps(result.bot);
+				} catch (error) {
+					stopTelegramPolling();
+					telegramStart.disabled = false;
+					telegramStart.textContent = "Send approval request";
+					setAuthMessage(`Authorization failed: ${error.message}`, "error");
+				}
+			}
+
+			async function startTelegramAuthorization() {
+				if (!selectedBot) return;
+				telegramStart.disabled = true;
+				telegramStart.textContent = "Request sent";
+				stopTelegramPolling();
+				try {
+					const result = await api("/auth/telegram/start", {
+						method: "POST",
+						body: JSON.stringify({ bot_id: selectedBot.id }),
+						lockOnAuthFailure: false,
+					});
+					activeChallenge = result.challenge_id;
+					setAuthMessage("Approval request sent to the Owner account in Telegram.");
+					telegramPoll = window.setInterval(checkTelegramChallenge, 1800);
+					await checkTelegramChallenge();
+				} catch (error) {
+					telegramStart.disabled = false;
+					telegramStart.textContent = "Send approval request";
+					setAuthMessage(`Unable to send approval request: ${error.message}`, "error");
+				}
 			}
 
 			async function boot() {
@@ -734,6 +804,7 @@ const apiBase =
 			authForm?.addEventListener("submit", async (event) => {
 				event.preventDefault();
 				if (!selectedBot) return;
+				if (selectedBot.auth_method !== "totp") return;
 				authSubmit.disabled = true;
 				authSubmit.textContent = "Verifying";
 				try {
@@ -758,6 +829,10 @@ const apiBase =
 				}
 			});
 
+			telegramStart?.addEventListener("click", () => {
+				startTelegramAuthorization();
+			});
+
 			logout?.addEventListener("click", async () => {
 				try {
 					await api("/auth/logout", { method: "POST", csrf: true });
@@ -766,6 +841,7 @@ const apiBase =
 				}
 				csrfToken = "";
 				sessionStorage.removeItem("silentflare_bot_csrf");
+				stopTelegramPolling();
 				showStage(selectedBot ? "auth" : "select");
 			});
 
