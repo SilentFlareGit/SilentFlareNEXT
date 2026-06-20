@@ -28,15 +28,17 @@ let loginMessage = "Loading...";
 let loginMessageTone = "neutral";
 let authMessage = "";
 let authMessageTone = "neutral";
-let loginTelegramMessage =
-	"Ready to send an approval request for the selected bot.";
+let loginTelegramMessage = "";
 let loginTelegramMessageTone = "neutral";
-let settingsMessage = "Generate a setup code first.";
+let settingsMessage = "";
 let settingsMessageTone = "neutral";
 let dashboardMessage = "Select a bot to load operations.";
 let dashboardMessageTone = "neutral";
 let githubMessage = "GitHub backup status has not loaded.";
 let githubMessageTone = "neutral";
+let unifiedCheck: any = null;
+let unifiedCheckMessage = "API checks have not loaded.";
+let unifiedCheckTone = "neutral";
 
 let noticeMessage = "";
 let noticeVisible = false;
@@ -66,6 +68,10 @@ function icon(name: string) {
 		return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" class="w-4 h-4"><path d="M21 12a9 9 0 0 1-15.5 6.2" /><path d="M3 12A9 9 0 0 1 18.5 5.8" /><path d="M18 2v4h4" /><path d="M6 22v-4H2" /></svg>`;
 	if (name === "settings")
 		return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" class="w-4 h-4"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.4.2.73.5 1 .9.27.4.4.8.4 1.1V11a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.31 1Z" /></svg>`;
+	if (name === "switch")
+		return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" class="w-4 h-4"><path d="M8 7h11" /><path d="m16 4 3 3-3 3" /><path d="M16 17H5" /><path d="m8 14-3 3 3 3" /></svg>`;
+	if (name === "check")
+		return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" class="w-4 h-4"><path d="M20 6 9 17l-5-5" /></svg>`;
 	return "";
 }
 
@@ -83,6 +89,11 @@ function formatSize(value: number) {
 function shortSha(value: string) {
 	if (!value) return "Unavailable";
 	return `${value.slice(0, 10)}...${value.slice(-8)}`;
+}
+
+function compactTime(value: string) {
+	if (!value) return "Unknown";
+	return value.replace(/:\d{2}(?:\s|$)/, " ").trim();
 }
 
 function scheduleLabel(schedule: any) {
@@ -164,10 +175,9 @@ function showBotStep() {
 function showAuthStep() {
 	if (!selectedBot) return;
 	currentStep = "auth";
-	authMessage = "Choose Telegram approval or 2FA to continue.";
+	authMessage = "";
 	authMessageTone = "neutral";
-	loginTelegramMessage =
-		"Ready to send an approval request for the selected bot.";
+	loginTelegramMessage = "";
 	loginTelegramMessageTone = "neutral";
 }
 
@@ -286,9 +296,10 @@ async function enterApp(session: any) {
 
 function selectAppBot(bot: any) {
 	selectedBot = bot;
-	dashboardMessage = "Ready to run encrypted all-database backups.";
-	dashboardMessageTone = "success";
+	dashboardMessage = "";
+	dashboardMessageTone = "neutral";
 	loadStatus();
+	loadUnifiedCheck();
 	startStatusAutoRefresh();
 }
 
@@ -316,7 +327,7 @@ async function loadStatus(options: any = {}) {
 
 		if (status.github?.configured) {
 			const latest = status.github.latest;
-			githubMessageTone = status.github.error ? "warning" : "success";
+			githubMessageTone = status.github.error ? "warning" : "neutral";
 			githubMessage =
 				status.github.error ??
 				(latest
@@ -332,6 +343,25 @@ async function loadStatus(options: any = {}) {
 		dashboardMessage = `Unable to load backup status: ${error.message}`;
 		dashboardMessageTone = "error";
 		if (!options.quiet) toast("Backup status failed");
+	}
+}
+
+async function loadUnifiedCheck(options: any = {}) {
+	if (!selectedBot) return;
+	try {
+		const result = await api(
+			`/bots/${encodeURIComponent(selectedBot.id)}/checks/unified`,
+		);
+		unifiedCheck = result;
+		unifiedCheckTone = result.ok ? "neutral" : "warning";
+		unifiedCheckMessage = result.ok
+			? "All monitored API checks are responding."
+			: "One or more API checks need attention.";
+		if (!options.quiet) toast("API checks refreshed");
+	} catch (error: any) {
+		unifiedCheck = null;
+		unifiedCheckTone = "error";
+		unifiedCheckMessage = `API check failed: ${error.message}`;
 	}
 }
 
@@ -353,6 +383,7 @@ async function runBackup() {
 		dashboardMessageTone = "success";
 		toast("Backup completed");
 		await loadStatus({ quiet: true });
+		await loadUnifiedCheck({ quiet: true });
 	} catch (error: any) {
 		dashboardMessage = `Backup failed: ${error.message}`;
 		dashboardMessageTone = "error";
@@ -404,9 +435,8 @@ async function generateTotp() {
 				width: 176,
 			});
 		}
-		settingsMessage =
-			"Add the otpauth URI or manual secret to your authenticator, then enter the current code.";
-		settingsMessageTone = "warning";
+		settingsMessage = "Enter the current authenticator code to enable 2FA.";
+		settingsMessageTone = "neutral";
 	} catch (error: any) {
 		settingsMessage = `Unable to generate 2FA setup: ${error.message}`;
 		settingsMessageTone = "error";
@@ -470,7 +500,7 @@ onMount(async () => {
 		loginMethods = options.methods;
 		loginMessage = "Select a bot to continue to verification.";
 		loginMessageTone =
-			loginMethods.telegram || loginMethods.totp ? "success" : "error";
+			loginMethods.telegram || loginMethods.totp ? "neutral" : "error";
 	} catch (error: any) {
 		loginMessage = `Unable to load login methods: ${error.message}`;
 		loginMessageTone = "error";
@@ -558,9 +588,11 @@ $: toneToClass = (tone: string) => {
 								{/each}
 							</div>
 						</div>
-						<div class="text-sm p-3 rounded-lg border {toneToClass(loginMessageTone)}">
-							{loginMessage}
-						</div>
+						{#if loginMessageTone !== "neutral"}
+							<div class="text-sm p-3 rounded-lg border {toneToClass(loginMessageTone)}">
+								{loginMessage}
+							</div>
+						{/if}
 					</div>
 				{/if}
 
@@ -571,8 +603,8 @@ $: toneToClass = (tone: string) => {
 								<h2 class="font-semibold text-zinc-900 dark:text-zinc-100">Verify {botLabel(selectedBot)}</h2>
 								<p class="text-sm text-zinc-500 dark:text-zinc-400">{selectedBot?.purpose} / {selectedBot?.status}</p>
 							</div>
-							<button type="button" class="px-3 py-1.5 text-sm font-medium text-zinc-600 dark:text-zinc-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors" on:click={showBotStep}>
-								Change bot
+							<button type="button" aria-label="Change bot" title="Change bot" class="grid h-10 w-10 place-items-center rounded-lg border border-zinc-200 bg-white text-zinc-600 shadow-sm transition-colors hover:border-indigo-300 hover:text-indigo-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:border-indigo-700 dark:hover:text-indigo-400" on:click={showBotStep}>
+								{@html icon("switch")}
 							</button>
 						</div>
 
@@ -580,7 +612,6 @@ $: toneToClass = (tone: string) => {
 							<div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
 								<div>
 									<h2 class="font-semibold text-zinc-900 dark:text-zinc-100">Telegram Bot authorization</h2>
-									<p class="text-sm text-zinc-500 dark:text-zinc-400">Send a one-time approval request.</p>
 								</div>
 								<button type="button" 
 									class="flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors shadow-sm" 
@@ -590,33 +621,41 @@ $: toneToClass = (tone: string) => {
 									{isSendingTelegram ? 'Sending...' : 'Send request'}
 								</button>
 							</div>
-							<div class="text-sm p-3 rounded-lg border {toneToClass(loginTelegramMessageTone)}">
-								{loginTelegramMessage}
-							</div>
+							{#if loginTelegramMessage}
+								<div class="text-sm p-3 rounded-lg border {toneToClass(loginTelegramMessageTone)}">
+									{loginTelegramMessage}
+								</div>
+							{/if}
 						</div>
 
-						<div class="bg-zinc-50/50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700 rounded-xl p-5">
-							<div class="mb-4">
-								<h2 class="font-semibold text-zinc-900 dark:text-zinc-100">Authenticator 2FA</h2>
-								<p class="text-sm text-zinc-500 dark:text-zinc-400">Use the six-digit Owner code for the selected bot.</p>
+						{#if loginMethods.totp}
+							<div class="bg-zinc-50/50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700 rounded-xl p-5">
+								<div class="mb-4">
+									<h2 class="font-semibold text-zinc-900 dark:text-zinc-100">Authenticator 2FA</h2>
+								</div>
+								<form on:submit={loginWithTotp} class="flex flex-col gap-3 sm:flex-row">
+									<input type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000"
+										bind:value={loginTotpCode}
+										class="flex-1 px-4 py-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-zinc-900 dark:text-zinc-100 transition-shadow" />
+									<button type="submit"
+										disabled={loginTotpCode.length !== 6}
+										class="flex items-center justify-center gap-2 px-4 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed text-zinc-900 dark:text-zinc-100 text-sm font-medium rounded-lg transition-colors shadow-sm">
+										{@html icon("lock")}
+										Verify 2FA
+									</button>
+								</form>
 							</div>
-							<form on:submit={loginWithTotp} class="flex gap-3">
-								<input type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000" 
-									bind:value={loginTotpCode}
-									disabled={!loginMethods.totp}
-									class="flex-1 px-4 py-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-zinc-900 dark:text-zinc-100 disabled:opacity-50 transition-shadow" />
-								<button type="submit" 
-									disabled={!loginMethods.totp || loginTotpCode.length !== 6}
-									class="flex items-center justify-center gap-2 px-4 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed text-zinc-900 dark:text-zinc-100 text-sm font-medium rounded-lg transition-colors shadow-sm">
-									{@html icon("lock")}
-									Verify 2FA
-								</button>
-							</form>
-						</div>
+						{:else}
+							<div class="rounded-xl border border-dashed border-zinc-200 bg-zinc-50/70 p-4 text-sm text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800/40 dark:text-zinc-400">
+								Authenticator 2FA is not configured.
+							</div>
+						{/if}
 
-						<div class="text-sm p-3 rounded-lg border {toneToClass(authMessageTone)}">
-							{authMessage}
-						</div>
+						{#if authMessage}
+							<div class="text-sm p-3 rounded-lg border {toneToClass(authMessageTone)}">
+								{authMessage}
+							</div>
+						{/if}
 					</div>
 				{/if}
 			</div>
@@ -625,7 +664,7 @@ $: toneToClass = (tone: string) => {
 
 	{#if currentStep === 'app'}
 		<!-- Main App Layout -->
-		<div class="relative z-10 flex-1 w-full max-w-7xl mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-[16rem_1fr] gap-6 items-start">
+		<div class="relative z-10 flex-1 w-full max-w-[92rem] mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-[16rem_1fr] gap-6 items-start">
 			
 			<!-- Left Rail Sidebar -->
 			<aside class="flex flex-col gap-6 bg-white/70 dark:bg-zinc-900/70 backdrop-blur-xl border border-zinc-200 dark:border-zinc-800 p-5 rounded-2xl shadow-lg shadow-zinc-200/50 dark:shadow-black/20 sticky top-6">
@@ -652,7 +691,7 @@ $: toneToClass = (tone: string) => {
 				</nav>
 
 				<div class="mt-auto flex flex-col gap-3 p-4 rounded-xl bg-zinc-50/50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700 text-xs text-zinc-600 dark:text-zinc-400">
-					<div><strong class="text-emerald-600 dark:text-emerald-400">API online</strong></div>
+					<div><strong class="{unifiedCheck?.ok ? 'text-zinc-800 dark:text-zinc-100' : 'text-amber-700 dark:text-amber-300'}">{unifiedCheck?.ok ? 'API checked' : 'API check pending'}</strong></div>
 					<div>Session: <strong>Owner verified</strong></div>
 					<button class="flex items-center gap-2 mt-2 px-3 py-1.5 rounded bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors font-medium text-zinc-700 dark:text-zinc-300" on:click={logout}>
 						{@html icon("lock")} Lock session
@@ -667,15 +706,15 @@ $: toneToClass = (tone: string) => {
 						<h1 class="text-2xl font-bold tracking-tight">{selectedBot ? botLabel(selectedBot) : 'Select a bot'}</h1>
 						<p class="text-sm text-zinc-500 dark:text-zinc-400 mt-1">Complete all-database backups remain valid across Ghost and schema updates.</p>
 					</div>
-					<div class="flex-shrink-0 px-3 py-1 bg-emerald-50 dark:bg-emerald-900/30 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400 text-xs font-bold uppercase tracking-wider rounded-full">
+					<div class="flex-shrink-0 px-3 py-1 bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-400 text-xs font-bold uppercase tracking-wider rounded-full">
 						Owner verified
 					</div>
 				</header>
 
 				{#if activeView === 'dashboard'}
-					<div class="p-5 md:p-6 flex flex-col gap-6 animate-in fade-in duration-300">
-						<!-- Top Controls -->
-						<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+					<div class="p-5 md:p-6 flex flex-col gap-8 animate-in fade-in duration-300">
+						<!-- Primary action -->
+						<div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1.15fr)_minmax(24rem,0.85fr)] gap-6">
 							<!-- Backup Control -->
 							<div class="flex flex-col bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl overflow-hidden shadow-sm">
 								<div class="flex items-center justify-between px-4 py-3 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
@@ -685,7 +724,9 @@ $: toneToClass = (tone: string) => {
 									</span>
 								</div>
 								<div class="p-4 flex flex-col gap-4">
-									<div class="text-sm p-3 rounded-lg border {toneToClass(dashboardMessageTone)}">{dashboardMessage}</div>
+									{#if dashboardMessage}
+										<div class="text-sm p-3 rounded-lg border {toneToClass(dashboardMessageTone)}">{dashboardMessage}</div>
+									{/if}
 									<div class="flex flex-wrap gap-2">
 										<button class="flex items-center gap-2 px-4 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-700 disabled:opacity-50 text-sm font-medium rounded-lg transition-colors shadow-sm" on:click={() => loadStatus()} disabled={!selectedBot}>
 											{@html icon("refresh")} Refresh
@@ -701,7 +742,8 @@ $: toneToClass = (tone: string) => {
 										</div>
 										<div class="p-2 md:p-3 flex flex-col justify-center">
 											<span class="text-xs text-zinc-500 font-medium">Latest backup</span>
-											<strong class="mt-1 truncate">{backupStatus?.latest?.created_at ?? 'None'}</strong>
+											<strong class="mt-1 truncate">{backupStatus?.latest?.created_at_de ? compactTime(backupStatus.latest.created_at_de) : 'None'}</strong>
+											<span class="mt-0.5 truncate text-[11px] text-zinc-500">{backupStatus?.latest?.created_at_beijing ? compactTime(backupStatus.latest.created_at_beijing) : 'Beijing pending'}</span>
 										</div>
 										<div class="p-2 md:p-3 flex flex-col justify-center">
 											<span class="text-xs text-zinc-500 font-medium">Local backups</span>
@@ -715,7 +757,7 @@ $: toneToClass = (tone: string) => {
 							<div class="flex flex-col bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl overflow-hidden shadow-sm">
 								<div class="flex items-center justify-between px-4 py-3 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
 									<h2 class="font-semibold text-sm">Schedule</h2>
-									<span class="px-2 py-0.5 text-xs font-medium rounded-full {backupStatus?.schedule?.active ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800' : 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700'}">
+									<span class="px-2 py-0.5 text-xs font-medium rounded-full {backupStatus?.schedule?.active ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800' : 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700'}">
 										{backupStatus?.schedule?.active ? 'Active' : 'Inactive'}
 									</span>
 								</div>
@@ -752,9 +794,64 @@ $: toneToClass = (tone: string) => {
 							</div>
 						</div>
 
-						<!-- Bottom section: History & Github -->
-						<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-							<div class="flex flex-col bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl overflow-hidden shadow-sm lg:col-span-1">
+						<!-- Secondary status -->
+						<div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-6">
+							<div class="flex flex-col bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl overflow-hidden shadow-sm h-fit">
+								<div class="flex items-center justify-between px-4 py-3 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
+									<h2 class="font-semibold text-sm">GitHub status</h2>
+									<span class="px-2 py-0.5 text-xs font-medium rounded-full {backupStatus?.github?.latest ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800' : 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400'}">
+										{backupStatus?.github?.configured ? (backupStatus.github.latest ? 'Connected' : 'No release') : 'Not configured'}
+									</span>
+								</div>
+								<div class="p-4 flex flex-col gap-4">
+									<div class="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-zinc-100 dark:divide-zinc-800 bg-zinc-50 dark:bg-zinc-800/50 rounded-lg border border-zinc-200 dark:border-zinc-700 text-sm">
+										<div class="p-3">
+											<span class="text-xs text-zinc-500 font-medium">Latest release</span>
+											<strong class="mt-1 block truncate">{backupStatus?.github?.latest?.tagName ?? (backupStatus?.github?.configured ? 'None' : 'Local only')}</strong>
+										</div>
+										<div class="p-3">
+											<span class="text-xs text-zinc-500 font-medium">Published at</span>
+											<strong class="mt-1 block truncate">{backupStatus?.github?.latest?.publishedAt ?? 'Unavailable'}</strong>
+										</div>
+										<div class="p-3">
+											<span class="text-xs text-zinc-500 font-medium">Upload status</span>
+											<strong class="mt-1 block truncate">{!backupStatus?.github?.configured ? 'Disabled' : (backupStatus?.github?.latest ? 'Uploaded' : 'Unknown')}</strong>
+										</div>
+									</div>
+									{#if githubMessageTone !== "neutral" || backupStatus?.github?.error}
+										<div class="text-sm p-3 rounded-lg border {toneToClass(githubMessageTone)}">
+											{githubMessage}
+										</div>
+									{/if}
+								</div>
+							</div>
+
+							<div class="flex flex-col bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl overflow-hidden shadow-sm h-fit">
+								<div class="flex items-center justify-between px-4 py-3 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
+									<h2 class="font-semibold text-sm">API unified check</h2>
+									<button type="button" class="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700" on:click={() => loadUnifiedCheck()}>
+										{@html icon("refresh")} Check
+									</button>
+								</div>
+								<div class="p-4 flex flex-col gap-4">
+									<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+										{#each unifiedCheck?.checks ?? [] as check}
+											<div class="flex items-center justify-between gap-3 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800/50">
+												<span class="truncate text-zinc-600 dark:text-zinc-300">{check.label}</span>
+												<span class="rounded-full px-2 py-0.5 text-xs font-medium {check.ok ? 'bg-zinc-100 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200' : 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'}">{check.status}</span>
+											</div>
+										{/each}
+									</div>
+									<div class="text-sm p-3 rounded-lg border {toneToClass(unifiedCheckTone)}">
+										{unifiedCheckMessage}
+									</div>
+								</div>
+							</div>
+						</div>
+
+						<!-- Backup files -->
+						<div class="grid grid-cols-1 gap-6">
+							<div class="flex flex-col bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl overflow-hidden shadow-sm">
 								<div class="flex items-center justify-between px-4 py-3 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
 									<h2 class="font-semibold text-sm">Latest files</h2>
 									<span class="text-xs text-zinc-500 font-medium">{statusTimer ? 'Auto refresh: 30s' : 'Auto refresh paused'}</span>
@@ -764,21 +861,23 @@ $: toneToClass = (tone: string) => {
 										<thead class="text-xs text-zinc-500 uppercase bg-zinc-50 dark:bg-zinc-800/50 border-b border-zinc-100 dark:border-zinc-800">
 											<tr>
 												<th class="px-4 py-3 font-semibold">Filename</th>
-												<th class="px-4 py-3 font-semibold">Created at</th>
+												<th class="px-4 py-3 font-semibold">Germany / VPS time</th>
+												<th class="px-4 py-3 font-semibold">Beijing time</th>
 												<th class="px-4 py-3 font-semibold">Size</th>
 												<th class="px-4 py-3 font-semibold">SHA256</th>
 											</tr>
 										</thead>
 										<tbody class="divide-y divide-zinc-100 dark:divide-zinc-800/50">
 											{#if !backupStatus}
-												<tr><td colspan="4" class="px-4 py-8 text-center text-zinc-500">No bot selected.</td></tr>
+												<tr><td colspan="5" class="px-4 py-8 text-center text-zinc-500">No bot selected.</td></tr>
 											{:else if backupStatus.backups.length === 0}
-												<tr><td colspan="4" class="px-4 py-8 text-center text-zinc-500">No local backups found.</td></tr>
+												<tr><td colspan="5" class="px-4 py-8 text-center text-zinc-500">No local backups found.</td></tr>
 											{:else}
 												{#each backupStatus.backups as item}
 													<tr class="hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors">
 														<td class="px-4 py-3 font-mono text-xs">{item.filename}</td>
-														<td class="px-4 py-3">{item.created_at}</td>
+														<td class="px-4 py-3">{item.created_at_de ?? item.created_at}</td>
+														<td class="px-4 py-3">{item.created_at_beijing ?? item.created_at}</td>
 														<td class="px-4 py-3">{formatSize(item.size)}</td>
 														<td class="px-4 py-3 font-mono text-xs text-zinc-500">{item.sha256 ? shortSha(item.sha256) : 'Deferred'}</td>
 													</tr>
@@ -788,41 +887,13 @@ $: toneToClass = (tone: string) => {
 									</table>
 								</div>
 							</div>
-
-							<div class="flex flex-col bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl overflow-hidden shadow-sm lg:col-span-1 h-fit">
-								<div class="flex items-center justify-between px-4 py-3 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
-									<h2 class="font-semibold text-sm">GitHub status</h2>
-									<span class="px-2 py-0.5 text-xs font-medium rounded-full {backupStatus?.github?.latest ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800' : 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400'}">
-										{backupStatus?.github?.configured ? (backupStatus.github.latest ? 'Connected' : 'No release') : 'Not configured'}
-									</span>
-								</div>
-								<div class="p-4 flex flex-col gap-4">
-									<div class="grid grid-cols-3 divide-x divide-zinc-100 dark:divide-zinc-800 bg-zinc-50 dark:bg-zinc-800/50 rounded-lg border border-zinc-200 dark:border-zinc-700 text-center text-sm">
-										<div class="p-2 md:p-3 flex flex-col justify-center">
-											<span class="text-xs text-zinc-500 font-medium">Latest release</span>
-											<strong class="mt-1 truncate">{backupStatus?.github?.latest?.tagName ?? (backupStatus?.github?.configured ? 'None' : 'Local only')}</strong>
-										</div>
-										<div class="p-2 md:p-3 flex flex-col justify-center">
-											<span class="text-xs text-zinc-500 font-medium">Published at</span>
-											<strong class="mt-1 truncate">{backupStatus?.github?.latest?.publishedAt ?? 'Unavailable'}</strong>
-										</div>
-										<div class="p-2 md:p-3 flex flex-col justify-center">
-											<span class="text-xs text-zinc-500 font-medium">Upload status</span>
-											<strong class="mt-1 truncate">{!backupStatus?.github?.configured ? 'Disabled' : (backupStatus?.github?.latest ? 'Uploaded' : 'Unknown')}</strong>
-										</div>
-									</div>
-									<div class="text-sm p-3 rounded-lg border {toneToClass(githubMessageTone)}">
-										{githubMessage}
-									</div>
-								</div>
-							</div>
 						</div>
 					</div>
 				{/if}
 
 				{#if activeView === 'settings'}
-					<div class="p-5 md:p-6 grid grid-cols-1 md:grid-cols-2 gap-6 animate-in fade-in duration-300">
-						<div class="flex flex-col bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl overflow-hidden shadow-sm h-fit">
+					<div class="p-5 md:p-6 animate-in fade-in duration-300">
+						<div class="mx-auto flex w-full max-w-3xl flex-col bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl overflow-hidden shadow-sm">
 							<div class="flex items-center justify-between px-4 py-3 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
 								<h2 class="font-semibold text-sm">Account security</h2>
 								<span class="px-2 py-0.5 text-xs font-medium rounded-full bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700">
@@ -830,44 +901,57 @@ $: toneToClass = (tone: string) => {
 								</span>
 							</div>
 							<div class="p-4 flex flex-col gap-4">
-								<p class="text-sm text-zinc-600 dark:text-zinc-400 p-3 bg-zinc-50 dark:bg-zinc-800/50 rounded-lg border border-zinc-200 dark:border-zinc-700">
-									Telegram approval remains available. Use this panel to reset the Owner authenticator for future 2FA logins.
-								</p>
-								<button class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors shadow-sm disabled:opacity-50 self-start" on:click={generateTotp} disabled={isGeneratingTotp}>
-									{isGeneratingTotp ? 'Generating...' : 'Generate new 2FA setup'}
-								</button>
-							</div>
-						</div>
-
-						<div class="flex flex-col bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl overflow-hidden shadow-sm">
-							<div class="flex items-center justify-between px-4 py-3 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
-								<h2 class="font-semibold text-sm">Authenticator setup</h2>
-								<span class="px-2 py-0.5 text-xs font-medium rounded-full bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700">
-									Owner only
-								</span>
-							</div>
-							<div class="p-4 flex flex-col gap-4">
-								{#if totpSecret}
-									<div class="flex flex-col gap-2 p-4 bg-zinc-50 dark:bg-zinc-800/50 rounded-lg border border-zinc-200 dark:border-zinc-700">
-										<strong class="text-sm">Scan QR code</strong>
-										<div class="bg-white p-2 rounded-lg border border-zinc-200 self-start">
-											<canvas bind:this={totpQrCanvas}></canvas>
-										</div>
-										<strong class="text-sm mt-2">Manual secret</strong>
-										<code class="text-xs bg-zinc-200 dark:bg-zinc-900 p-2 rounded break-all">{totpSecret}</code>
-										<strong class="text-sm mt-2">otpauth URI</strong>
-										<code class="text-xs bg-zinc-200 dark:bg-zinc-900 p-2 rounded break-all">{totpUri}</code>
+								<div class="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-center rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-800/50">
+									<div>
+										<strong class="block text-sm text-zinc-900 dark:text-zinc-100">Telegram approval</strong>
+										<span class="mt-1 block text-sm text-zinc-500 dark:text-zinc-400">Available for owner login approval.</span>
 									</div>
-									<form on:submit={enableTotpSubmit} class="flex gap-2">
+									<span class="rounded-full border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">Enabled</span>
+								</div>
+
+								<div class="rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-800/50">
+									<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+										<div>
+											<strong class="block text-sm text-zinc-900 dark:text-zinc-100">Authenticator setup</strong>
+											<span class="mt-1 block text-sm text-zinc-500 dark:text-zinc-400">{totpEnabled ? 'Configured for fallback login.' : '2FA is not configured.'}</span>
+										</div>
+										<button class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors shadow-sm disabled:opacity-50 sm:self-start" on:click={generateTotp} disabled={isGeneratingTotp}>
+											{isGeneratingTotp ? 'Generating...' : (totpEnabled ? 'Reset 2FA setup' : 'Generate 2FA setup')}
+										</button>
+									</div>
+								</div>
+
+								{#if totpSecret}
+									<div class="grid gap-4 rounded-lg border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-700 dark:bg-zinc-800/50 md:grid-cols-[auto_minmax(0,1fr)]">
+										<div>
+											<strong class="mb-2 block text-sm">Scan QR code</strong>
+											<div class="bg-white p-2 rounded-lg border border-zinc-200 self-start">
+												<canvas bind:this={totpQrCanvas}></canvas>
+											</div>
+										</div>
+										<div class="min-w-0 space-y-3">
+											<div>
+												<strong class="mb-1 block text-sm">Manual secret</strong>
+												<code class="block text-xs bg-zinc-200 dark:bg-zinc-900 p-2 rounded break-all">{totpSecret}</code>
+											</div>
+											<div>
+												<strong class="mb-1 block text-sm">otpauth URI</strong>
+												<code class="block text-xs bg-zinc-200 dark:bg-zinc-900 p-2 rounded break-all">{totpUri}</code>
+											</div>
+										</div>
+									</div>
+									<form on:submit={enableTotpSubmit} class="flex flex-col gap-2 sm:flex-row">
 										<input type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000" bind:value={enableTotpCode} class="flex-1 px-4 py-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm" />
 										<button type="submit" disabled={enableTotpCode.length !== 6} class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors shadow-sm">
 											Enable 2FA
 										</button>
 									</form>
 								{/if}
-								<div class="text-sm p-3 rounded-lg border {toneToClass(settingsMessageTone)}">
-									{settingsMessage}
-								</div>
+								{#if settingsMessage}
+									<div class="text-sm p-3 rounded-lg border {toneToClass(settingsMessageTone)}">
+										{settingsMessage}
+									</div>
+								{/if}
 							</div>
 						</div>
 					</div>

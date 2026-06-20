@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlencode
 from urllib.request import Request as UrlRequest, urlopen
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -286,8 +287,8 @@ def telegram_api(method: str, payload: dict[str, Any]) -> dict[str, Any]:
 	return body
 
 
-def send_login_approval(bot: dict[str, str], challenge: dict[str, Any]) -> None:
-	telegram_api(
+def send_login_approval(bot: dict[str, str], challenge: dict[str, Any]) -> dict[str, Any]:
+	return telegram_api(
 		"sendMessage",
 		{
 			"chat_id": TELEGRAM_OWNER_ID,
@@ -308,6 +309,37 @@ def send_login_approval(bot: dict[str, str], challenge: dict[str, Any]) -> None:
 			},
 		},
 	)
+
+
+def edit_login_approval_message(challenge: dict[str, Any], approved: bool) -> None:
+	message_id = challenge.get("telegram_message_id")
+	chat_id = challenge.get("telegram_chat_id") or TELEGRAM_OWNER_ID
+	if not message_id:
+		return
+	if approved:
+		text = (
+			"SilentFlare Bot Management login approved.\n"
+			f"Bot: {challenge['bot_id']}\n"
+			"This approval link is now expired."
+		)
+	else:
+		text = (
+			"SilentFlare Bot Management login request is expired or unauthorized.\n"
+			f"Bot: {challenge.get('bot_id', 'Unknown')}\n"
+			"This approval link is no longer valid."
+		)
+	try:
+		telegram_api(
+			"editMessageText",
+			{
+				"chat_id": chat_id,
+				"message_id": message_id,
+				"text": text,
+				"reply_markup": {"inline_keyboard": []},
+			},
+		)
+	except Exception:
+		pass
 
 
 def answer_callback(callback_id: str, text: str, alert: bool = False) -> None:
@@ -458,10 +490,14 @@ def sha256_file(path: Path) -> str:
 def file_info(path: Path, *, include_sha256: bool = True) -> dict[str, Any]:
 	stat = path.stat()
 	created = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+	created_de = created.astimezone(ZoneInfo("Europe/Berlin"))
+	created_beijing = created.astimezone(ZoneInfo("Asia/Shanghai"))
 	info = {
 		"filename": path.name,
 		"size": stat.st_size,
 		"created_at": created.isoformat().replace("+00:00", "Z"),
+		"created_at_de": created_de.strftime("%Y-%m-%d %H:%M:%S %Z"),
+		"created_at_beijing": created_beijing.strftime("%Y-%m-%d %H:%M:%S CST"),
 	}
 	if include_sha256:
 		info["sha256"] = sha256_file(path)
@@ -744,7 +780,10 @@ def auth_telegram_start(payload: TelegramStartPayload, request: Request) -> dict
 	ensure_telegram_auth_bot(bot)
 	challenge = create_login_challenge(bot["id"], client_key(request))
 	try:
-		send_login_approval(bot, challenge)
+		message = send_login_approval(bot, challenge)
+		result = message.get("result") or {}
+		challenge["telegram_message_id"] = result.get("message_id")
+		challenge["telegram_chat_id"] = (result.get("chat") or {}).get("id")
 	except HTTPException:
 		LOGIN_CHALLENGES.pop(challenge["id"], None)
 		record_login_failure(request)
@@ -822,7 +861,9 @@ async def telegram_update(request: Request, token: str = "") -> dict[str, Any]:
 	from_user = callback.get("from") or {}
 	user_id = int(from_user.get("id") or 0)
 	callback_id = callback.get("id") or ""
+	challenge = LOGIN_CHALLENGES.get(challenge_id, {"id": challenge_id})
 	approved = approve_login_challenge(challenge_id, user_id)
+	edit_login_approval_message(challenge, approved)
 	if callback_id:
 		answer_callback(
 			callback_id,
@@ -841,6 +882,83 @@ def bots() -> dict[str, Any]:
 def bot(bot_id: str, request: Request) -> dict[str, Any]:
 	require_session(request, bot_id=bot_id)
 	return public_bot(ensure_bot(bot_id))
+
+
+@app.get("/bots/{bot_id}/checks/unified")
+def unified_checks(bot_id: str, request: Request) -> dict[str, Any]:
+	require_session(request, bot_id=bot_id)
+	bot = ensure_bot(bot_id)
+	checks: list[dict[str, Any]] = []
+
+	def add_check(key: str, label: str, ok: bool, status: str, detail: str = "") -> None:
+		checks.append(
+			{
+				"key": key,
+				"label": label,
+				"ok": ok,
+				"status": status,
+				"detail": detail,
+			}
+		)
+
+	add_check("api", "FastAPI service", True, "OK", APP_NAME)
+	add_check("bot", "Bot registry", bot["id"] == BACKUP_BOT_ID, "OK", bot["id"])
+	add_check(
+		"telegram",
+		"Telegram authorization",
+		bool(TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID),
+		"OK" if TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID else "Missing",
+		"Owner approval path",
+	)
+	try:
+		active = timer_active()
+		add_check(
+			"timer",
+			"Backup timer",
+			active,
+			"Active" if active else "Inactive",
+			backup_timer_unit_name(),
+		)
+	except Exception:
+		add_check("timer", "Backup timer", False, "Error", backup_timer_unit_name())
+	add_check(
+		"backup_dir",
+		"Backup directory",
+		BACKUP_DIR.exists(),
+		"OK" if BACKUP_DIR.exists() else "Missing",
+		str(BACKUP_DIR),
+	)
+	backups = list_backups()
+	add_check(
+		"backup_files",
+		"Backup files",
+		bool(backups),
+		f"{len(backups[:5])} recent",
+		"Latest five local backup files",
+	)
+	github = github_backup_status()
+	add_check(
+		"github",
+		"GitHub releases",
+		bool(github.get("configured")) and not github.get("error"),
+		"Connected"
+		if github.get("configured") and not github.get("error")
+		else "Check",
+		github.get("error", "Release upload status"),
+	)
+	add_check(
+		"totp",
+		"Authenticator 2FA",
+		bool(console_totp_secret()),
+		"Configured" if console_totp_secret() else "Disabled",
+		"Optional fallback login",
+	)
+	return {
+		"ok": all(item["ok"] for item in checks if item["key"] != "totp"),
+		"bot_id": bot["id"],
+		"checked_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+		"checks": checks,
+	}
 
 
 @app.post("/settings/totp/generate")
