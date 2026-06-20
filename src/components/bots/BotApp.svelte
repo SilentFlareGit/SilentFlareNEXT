@@ -58,6 +58,7 @@ let selectedChatUserId: number | null = null;
 let chatReplyText = "";
 let chatCommandText = "";
 let chatCommandResult = "";
+let chatUploadFile: File | null = null;
 
 let isSendingTelegram = false;
 let isRunningBackup = false;
@@ -108,6 +109,11 @@ function shortSha(value: string) {
 function compactTime(value: string) {
 	if (!value) return "Unknown";
 	return value.replace(/:\d{2}(?:\s|$)/, " ").trim();
+}
+
+function chatMediaUrl(message: any) {
+	if (!selectedBot || !message?.id) return "";
+	return `${apiBase}/bots/${encodeURIComponent(selectedBot.id)}/chat/media?message_id=${encodeURIComponent(String(message.id))}`;
 }
 
 function scheduleLabel(schedule: any) {
@@ -450,10 +456,43 @@ async function markChatRead() {
 
 async function sendChatReply(e: Event) {
 	e.preventDefault();
-	if (!selectedBot || selectedChatUserId == null || !chatReplyText.trim())
+	if (
+		!selectedBot ||
+		selectedChatUserId == null ||
+		(!chatReplyText.trim() && !chatUploadFile)
+	)
 		return;
 	isSendingChat = true;
 	try {
+		if (chatUploadFile) {
+			const form = new FormData();
+			form.append("user_id", String(selectedChatUserId));
+			form.append("caption", chatReplyText.trim());
+			form.append("file", chatUploadFile);
+			const response = await fetch(
+				`${apiBase}/bots/${encodeURIComponent(selectedBot.id)}/chat/upload`,
+				{
+					method: "POST",
+					credentials: "include",
+					headers: { "X-CSRF-Token": csrf },
+					body: form,
+				},
+			);
+			if (!response.ok) {
+				let detail = `Upload ${response.status}`;
+				try {
+					const body = await response.json();
+					detail = body.detail ?? detail;
+				} catch {}
+				throw new Error(detail);
+			}
+			const result = await response.json();
+			chatData = result;
+			chatReplyText = "";
+			chatUploadFile = null;
+			toast("Upload sent");
+			return;
+		}
 		const path = chatReplyText.trim().startsWith("/") ? "command" : "send";
 		const result = await api(
 			`/bots/${encodeURIComponent(selectedBot.id)}/chat/${path}`,
@@ -469,6 +508,7 @@ async function sendChatReply(e: Event) {
 		chatData = result;
 		chatCommandResult = result.command_result ?? "";
 		chatReplyText = "";
+		chatUploadFile = null;
 		toast(path === "command" ? "Command completed" : "Message sent");
 	} catch (error: any) {
 		chatMessage = `Chat send failed: ${error.message}`;
@@ -971,7 +1011,7 @@ $: toneToClass = (tone: string) => {
 												<div class="max-w-[82%] rounded-xl border px-3 py-2 text-sm shadow-sm {message.direction === 'outbound' ? 'border-indigo-200 bg-indigo-600 text-white dark:border-indigo-700' : 'border-zinc-200 bg-white text-zinc-800 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100'}">
 													<p class="whitespace-pre-wrap break-words">{message.text || message.message_type}</p>
 													{#if message.media}
-														<p class="mt-2 rounded-lg bg-black/5 px-2 py-1 text-xs">{message.media.kind}: {message.media.filename}</p>
+														<a class="mt-2 block rounded-lg bg-black/5 px-2 py-1 text-xs underline-offset-2 hover:underline" href={chatMediaUrl(message)} target="_blank" rel="noreferrer">{message.media.kind}: {message.media.filename}</a>
 													{/if}
 													<p class="mt-1 text-[11px] opacity-70">{message.created_at}</p>
 												</div>
@@ -986,9 +1026,19 @@ $: toneToClass = (tone: string) => {
 									</div>
 									<form class="border-t border-zinc-100 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900" on:submit={sendChatReply}>
 										<textarea class="min-h-20 w-full resize-y rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-indigo-400 dark:border-zinc-700 dark:bg-zinc-900" bind:value={chatReplyText} placeholder={chatData?.settings?.operations_enabled ? 'Write a reply or /command' : 'Web control is locked'} disabled={!chatData?.profile || !chatData?.settings?.operations_enabled || isSendingChat}></textarea>
+										<div class="mt-2 flex flex-wrap items-center gap-2">
+											<label class="cursor-pointer rounded-lg border border-zinc-200 px-3 py-2 text-xs text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
+												Attach file
+												<input class="hidden" type="file" disabled={!chatData?.profile || !chatData?.settings?.operations_enabled || isSendingChat} on:change={(event) => { chatUploadFile = (event.currentTarget as HTMLInputElement).files?.[0] ?? null; }} />
+											</label>
+											{#if chatUploadFile}
+												<span class="rounded-lg bg-zinc-100 px-2 py-1 text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">{chatUploadFile.name}</span>
+												<button type="button" class="text-xs text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200" on:click={() => { chatUploadFile = null; }}>Remove</button>
+											{/if}
+										</div>
 										<div class="mt-2 flex items-center justify-between gap-2">
 											<span class="text-xs text-zinc-500">{chatData?.settings?.operations_enabled ? 'Web control active' : 'Bot takeover active'}</span>
-											<button class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-700 disabled:opacity-50" disabled={!chatData?.profile || !chatReplyText.trim() || !chatData?.settings?.operations_enabled || isSendingChat}>
+											<button class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-700 disabled:opacity-50" disabled={!chatData?.profile || (!chatReplyText.trim() && !chatUploadFile) || !chatData?.settings?.operations_enabled || isSendingChat}>
 												{isSendingChat ? 'Sending' : 'Send'}
 											</button>
 										</div>

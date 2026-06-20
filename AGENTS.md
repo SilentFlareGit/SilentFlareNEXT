@@ -97,6 +97,8 @@ Important FastAPI endpoints:
 - `GET /bots/{bot_id}/chat/state?selected=...`: Telegram Chat Bot console state, bot-scoped session required.
 - `POST /bots/{bot_id}/chat/read`: mark a Telegram Chat Bot conversation read, bot-scoped session and CSRF required.
 - `POST /bots/{bot_id}/chat/send`: send a text reply through Telegram Chat Bot, bot-scoped session and CSRF required.
+- `POST /bots/{bot_id}/chat/upload`: send a photo or document through Telegram Chat Bot, bot-scoped session and CSRF required.
+- `GET /bots/{bot_id}/chat/media?message_id=...`: fetch Telegram Chat Bot message media, bot-scoped session required.
 - `POST /bots/{bot_id}/chat/command`: run Telegram Chat Bot web commands such as `/status`, `/help`, `/blocked`, `/ban`, and `/reply`, bot-scoped session and CSRF required.
 - `POST /bots/{bot_id}/chat/action`: run contact actions such as ban, pardon, exempt, and unexempt, bot-scoped session and CSRF required.
 - `POST /bots/{bot_id}/chat/settings/bot-notifications`: toggle owner preview notifications for Telegram Chat Bot, bot-scoped session and CSRF required.

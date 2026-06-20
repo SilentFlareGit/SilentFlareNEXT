@@ -1091,6 +1091,93 @@ def command(payload):
     raise RuntimeError("unsupported_command")
 
 
+def media(message_id):
+    message_id = parse_int(message_id)
+    if message_id is None:
+        raise RuntimeError("bad_message_id")
+    row = store.message_log_for_web(message_id)
+    if not row:
+        raise RuntimeError("media_not_found")
+    _display_text, media_info = web.parse_media_log_text(str(row["text"] or ""))
+    if not media_info:
+        raise RuntimeError("media_not_found")
+    file_info = api.call("getFile", file_id=str(media_info["file_id"]))
+    file_path = str(file_info.get("file_path") or "")
+    if not file_path or file_path.startswith("/") or ".." in file_path.split("/"):
+        raise RuntimeError("invalid_media_path")
+    response = api.session.get(
+        f"https://api.telegram.org/file/bot{bot_config.token}/{file_path}",
+        timeout=(3.05, bot_config.request_timeout),
+    )
+    response.raise_for_status()
+    return {
+        "ok": True,
+        "filename": web.safe_download_filename(str(media_info.get("filename") or "file")),
+        "mime_type": web.safe_media_type(str(media_info.get("mime_type") or "application/octet-stream")),
+        "body_b64": base64.b64encode(response.content).decode("ascii"),
+    }
+
+
+def upload_raw(payload):
+    require_writable()
+    content_type = str(payload.get("content_type") or "")
+    body = base64.b64decode(str(payload.get("body_b64") or ""))
+    upload_limit = min(web_config.max_body_bytes, web_config.max_upload_bytes)
+    if not body or len(body) > upload_limit:
+        raise RuntimeError("upload_too_large")
+    if not content_type.startswith("multipart/form-data"):
+        raise RuntimeError("multipart_required")
+    form = web.parse_multipart_form(body, content_type, max_payload_bytes=upload_limit)
+    user_id = parse_int(form.get("user_id"))
+    caption = str(form.get("caption") or "").strip()
+    upload = form.get("file")
+    if user_id is None or not isinstance(upload, web.UploadedFile) or not upload.filename:
+        raise RuntimeError("bad_upload")
+    contact = store.get_contact(user_id)
+    if not contact:
+        raise RuntimeError("contact_not_found")
+    ban = store.get_ban(user_id)
+    if ban:
+        raise RuntimeError("user_banned:" + web.ban_until_text(ban))
+    if not upload.data:
+        raise RuntimeError("empty_file")
+    filename = web.sanitize_upload_filename(upload.filename)
+    if web.is_blocked_upload_filename(filename, web_config.blocked_upload_suffixes):
+        raise RuntimeError("blocked_file_type")
+    content_type = upload.content_type or "application/octet-stream"
+    is_photo = content_type.startswith("image/")
+    method = "sendPhoto" if is_photo else "sendDocument"
+    field_name = "photo" if is_photo else "document"
+    files = {field_name: (filename, upload.data, content_type)}
+    data = {"chat_id": int(contact["chat_id"])}
+    if caption:
+        data["caption"] = caption
+    response = api.session.post(
+        api.base + "/" + method,
+        data=data,
+        files=files,
+        timeout=(3.05, bot_config.request_timeout),
+    )
+    try:
+        result = response.json()
+    except Exception:
+        result = {}
+    if response.status_code >= 400 or not result.get("ok"):
+        raise RuntimeError("telegram_upload_failed")
+    sent_message = result["result"]
+    store.clear_pending(user_id)
+    store.log_message(
+        "outbound",
+        message=sent_message,
+        user_id=user_id,
+        chat_id=int(contact["chat_id"]),
+        text=caption,
+        message_type="photo" if is_photo else "document",
+        telegram_message_id=int(sent_message["message_id"]),
+    )
+    return state_payload(user_id)
+
+
 try:
     if action == "state":
         result = state_payload(data.get("selected"))
@@ -1112,6 +1199,10 @@ try:
         web.set_env_file_value("OWNER_TG_NOTIFY_ENABLED", "1" if enabled else "0")
         result = state_payload(None)
         result["notice"] = "Bot message previews enabled." if enabled else "Bot message previews disabled."
+    elif action == "media":
+        result = media(data.get("message_id"))
+    elif action == "upload_raw":
+        result = upload_raw(data)
     else:
         raise RuntimeError("unsupported_proxy_action")
     print(json.dumps(result, ensure_ascii=False))
@@ -1806,6 +1897,49 @@ def chat_bot_notifications(
 ) -> dict[str, Any]:
 	bot = ensure_chat_bot_session(bot_id, request, x_csrf_token, True)
 	return {"bot_id": bot["id"], **run_chat_proxy("bot_notifications", model_payload(payload))}
+
+
+@app.get("/bots/{bot_id}/chat/media")
+def chat_media(
+	bot_id: str,
+	message_id: int,
+	request: Request,
+) -> Response:
+	ensure_chat_bot_session(bot_id, request)
+	media = run_chat_proxy("media", {"message_id": message_id}, timeout=90)
+	body = base64.b64decode(str(media.get("body_b64") or ""))
+	filename = quote(str(media.get("filename") or "file"))
+	return Response(
+		content=body,
+		media_type=str(media.get("mime_type") or "application/octet-stream"),
+		headers={
+			"Content-Disposition": f"attachment; filename*=UTF-8''{filename}",
+			"Cache-Control": "no-store",
+		},
+	)
+
+
+@app.post("/bots/{bot_id}/chat/upload")
+async def chat_upload(
+	bot_id: str,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	bot = ensure_chat_bot_session(bot_id, request, x_csrf_token, True)
+	body = await request.body()
+	if not body:
+		raise HTTPException(status_code=400, detail="Upload body is empty")
+	return {
+		"bot_id": bot["id"],
+		**run_chat_proxy(
+			"upload_raw",
+			{
+				"content_type": request.headers.get("content-type", ""),
+				"body_b64": base64.b64encode(body).decode("ascii"),
+			},
+			timeout=120,
+		),
+	}
 
 
 @app.post("/settings/totp/generate")
