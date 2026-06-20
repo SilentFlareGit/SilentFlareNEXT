@@ -40,11 +40,14 @@ let githubMessageTone = "neutral";
 let unifiedCheck: any = null;
 let unifiedCheckMessage = "API checks have not loaded.";
 let unifiedCheckTone = "neutral";
+let chatMessage = "Chat Bot status has not loaded.";
+let chatMessageTone = "neutral";
 
 let noticeMessage = "";
 let noticeVisible = false;
 
 let backupStatus: any = null;
+let chatStatus: any = null;
 let totpQrCanvas: HTMLCanvasElement;
 
 let loginTotpCode = "";
@@ -78,6 +81,10 @@ function icon(name: string) {
 
 function botLabel(bot: any) {
 	return bot?.name || bot?.id || "Selected bot";
+}
+
+function isChatBot(bot: any = selectedBot) {
+	return bot?.id === "Telegram Chat Bot";
 }
 
 function formatSize(value: number) {
@@ -299,7 +306,11 @@ function selectAppBot(bot: any) {
 	selectedBot = bot;
 	dashboardMessage = "";
 	dashboardMessageTone = "neutral";
-	loadStatus();
+	if (isChatBot(bot)) {
+		loadChatStatus();
+	} else {
+		loadStatus();
+	}
 	loadUnifiedCheck();
 	startStatusAutoRefresh();
 }
@@ -307,8 +318,11 @@ function selectAppBot(bot: any) {
 function startStatusAutoRefresh() {
 	if (statusTimer) return;
 	statusTimer = setInterval(() => {
-		if (document.visibilityState !== "hidden" && selectedBot)
-			loadStatus({ quiet: true });
+		if (document.visibilityState !== "hidden" && selectedBot) {
+			if (isChatBot()) loadChatStatus({ quiet: true });
+			else loadStatus({ quiet: true });
+			loadUnifiedCheck({ quiet: true });
+		}
 	}, 30000) as any;
 }
 
@@ -363,6 +377,49 @@ async function loadUnifiedCheck(options: any = {}) {
 		unifiedCheck = null;
 		unifiedCheckTone = "error";
 		unifiedCheckMessage = `API check failed: ${error.message}`;
+	}
+}
+
+async function loadChatStatus(options: any = {}) {
+	if (!selectedBot) return;
+	try {
+		const status = await api(
+			`/bots/${encodeURIComponent(selectedBot.id)}/chat/status`,
+		);
+		chatStatus = status;
+		chatMessage = status.control?.configured
+			? "Telegram Chat Bot control is available."
+			: "Remote control is not configured. Status checks remain available.";
+		chatMessageTone = status.control?.configured ? "neutral" : "warning";
+		if (!options.quiet) toast("Chat Bot status loaded");
+	} catch (error: any) {
+		chatMessage = `Unable to load Chat Bot status: ${error.message}`;
+		chatMessageTone = "error";
+		if (!options.quiet) toast("Chat Bot status failed");
+	}
+}
+
+async function runChatAction(action: "takeover" | "resume-web") {
+	if (!selectedBot) return;
+	chatMessage =
+		action === "takeover" ? "Starting Bot takeover." : "Restoring Web control.";
+	chatMessageTone = "neutral";
+	try {
+		await api(`/bots/${encodeURIComponent(selectedBot.id)}/chat/${action}`, {
+			method: "POST",
+			csrf: true,
+		});
+		chatMessage =
+			action === "takeover"
+				? "Bot takeover completed."
+				: "Web control restored.";
+		chatMessageTone = "success";
+		toast(chatMessage);
+		await loadChatStatus({ quiet: true });
+		await loadUnifiedCheck({ quiet: true });
+	} catch (error: any) {
+		chatMessage = `Chat Bot action failed: ${error.message}`;
+		chatMessageTone = "error";
 	}
 }
 
@@ -720,6 +777,86 @@ $: toneToClass = (tone: string) => {
 
 				{#if activeView === 'dashboard'}
 					<div class="p-5 md:p-6 flex flex-col gap-8 animate-in fade-in duration-300">
+						{#if isChatBot()}
+							<div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(24rem,0.85fr)] gap-6">
+								<div class="flex flex-col bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl overflow-hidden shadow-sm">
+									<div class="flex items-center justify-between px-4 py-3 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
+										<h2 class="font-semibold text-sm">Chat Bot control</h2>
+										<span class="px-2 py-0.5 text-xs font-medium rounded-full {chatStatus?.health?.ok ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800' : 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 border border-amber-200 dark:border-amber-800'}">
+											{chatStatus?.health?.ok ? 'Reachable' : 'Check'}
+										</span>
+									</div>
+									<div class="p-4 flex flex-col gap-4">
+										<div class="text-sm p-3 rounded-lg border {toneToClass(chatMessageTone)}">{chatMessage}</div>
+										<div class="flex flex-wrap gap-2">
+											<button class="flex items-center gap-2 px-4 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-700 disabled:opacity-50 text-sm font-medium rounded-lg transition-colors shadow-sm" on:click={() => loadChatStatus()} disabled={!selectedBot}>
+												{@html icon("refresh")} Refresh
+											</button>
+											<button class="flex items-center gap-2 px-4 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-700 disabled:opacity-50 text-sm font-medium rounded-lg transition-colors shadow-sm" on:click={() => runChatAction("takeover")} disabled={!chatStatus?.control?.configured}>
+												Bot takeover
+											</button>
+											<button class="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors shadow-sm" on:click={() => runChatAction("resume-web")} disabled={!chatStatus?.control?.configured}>
+												Resume Web
+											</button>
+										</div>
+										<div class="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-zinc-100 dark:divide-zinc-800 bg-zinc-50 dark:bg-zinc-800/50 rounded-lg border border-zinc-200 dark:border-zinc-700 text-sm">
+											<div class="p-3">
+												<span class="text-xs text-zinc-500 font-medium">Public health</span>
+												<strong class="mt-1 block truncate">{chatStatus?.health?.status ?? 'Loading'}</strong>
+											</div>
+											<div class="p-3">
+												<span class="text-xs text-zinc-500 font-medium">Web service</span>
+												<strong class="mt-1 block truncate">{chatStatus?.services?.web?.status ?? 'Unknown'}</strong>
+											</div>
+											<div class="p-3">
+												<span class="text-xs text-zinc-500 font-medium">Bot service</span>
+												<strong class="mt-1 block truncate">{chatStatus?.services?.bot?.status ?? 'Unknown'}</strong>
+											</div>
+										</div>
+									</div>
+								</div>
+
+								<div class="flex flex-col bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl overflow-hidden shadow-sm h-fit">
+									<div class="flex items-center justify-between px-4 py-3 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
+										<h2 class="font-semibold text-sm">Operations mode</h2>
+										<span class="px-2 py-0.5 text-xs font-medium rounded-full bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700">
+											{chatStatus?.control?.mode ?? 'disabled'}
+										</span>
+									</div>
+									<div class="p-4 flex flex-col gap-3">
+										{#each chatStatus?.flags ?? [] as flag}
+											<div class="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-3 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800/50">
+												<span class="truncate font-mono text-xs text-zinc-600 dark:text-zinc-300">{flag.key}</span>
+												<span class="text-xs text-zinc-500">normal {flag.normal}</span>
+												<span class="text-xs text-zinc-500">takeover {flag.takeover}</span>
+											</div>
+										{/each}
+									</div>
+								</div>
+							</div>
+
+							<div class="flex flex-col bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl overflow-hidden shadow-sm h-fit">
+								<div class="flex items-center justify-between px-4 py-3 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
+									<h2 class="font-semibold text-sm">API unified check</h2>
+									<button type="button" class="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700" on:click={() => loadUnifiedCheck()}>
+										{@html icon("refresh")} Check
+									</button>
+								</div>
+								<div class="p-4 flex flex-col gap-4">
+									<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+										{#each unifiedCheck?.checks ?? [] as check}
+											<div class="flex items-center justify-between gap-3 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800/50">
+												<span class="truncate text-zinc-600 dark:text-zinc-300">{check.label}</span>
+												<span class="rounded-full px-2 py-0.5 text-xs font-medium {check.ok ? 'bg-zinc-100 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200' : 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'}">{check.status}</span>
+											</div>
+										{/each}
+									</div>
+									<div class="text-sm p-3 rounded-lg border {toneToClass(unifiedCheckTone)}">
+										{unifiedCheckMessage}
+									</div>
+								</div>
+							</div>
+						{:else}
 						<!-- Primary action -->
 						<div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1.15fr)_minmax(24rem,0.85fr)] gap-6">
 							<!-- Backup Control -->
@@ -895,6 +1032,7 @@ $: toneToClass = (tone: string) => {
 								</div>
 							</div>
 						</div>
+						{/if}
 					</div>
 				{/if}
 

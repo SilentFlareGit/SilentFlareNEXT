@@ -37,6 +37,14 @@ BACKUP_TIMER_OVERRIDE = Path(
 		f"/etc/systemd/system/{BACKUP_TIMER_NAME}.d/override.conf",
 	)
 )
+CHAT_BOT_WEB_URL = os.getenv("CHAT_BOT_WEB_URL", "https://tg.silentflare.com").rstrip("/")
+CHAT_BOT_APP_DIR = os.getenv("CHAT_BOT_APP_DIR", "/root/messages_helper_bot")
+CHAT_BOT_ENV_FILE = os.getenv("CHAT_BOT_ENV_FILE", f"{CHAT_BOT_APP_DIR}/.env")
+CHAT_BOT_WEB_SERVICE = os.getenv("CHAT_BOT_WEB_SERVICE", "messages-helper-web")
+CHAT_BOT_BOT_SERVICE = os.getenv("CHAT_BOT_BOT_SERVICE", "messages-helper-bot")
+CHAT_BOT_CONTROL_MODE = os.getenv("CHAT_BOT_CONTROL_MODE", "disabled")
+CHAT_BOT_SSH_TARGET = os.getenv("CHAT_BOT_SSH_TARGET", "")
+CHAT_BOT_SSH_KEY = os.getenv("CHAT_BOT_SSH_KEY", "")
 ADMIN_TOKEN = os.getenv("API_ADMIN_TOKEN", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -74,6 +82,9 @@ BACKUP_BOT_ALIASES = {"ghost-db-backup", "silentflare-db-backup"}
 BACKUP_BOT_DESCRIPTION = (
 	"Complete all-database backup that remains valid across schema changes."
 )
+CHAT_BOT_ID = "Telegram Chat Bot"
+CHAT_BOT_ALIASES = {"telegram-chat-bot", "messages-helper-bot"}
+CHAT_BOT_DESCRIPTION = "Owner-controlled Telegram chat relay and web operations console."
 
 BOTS = [
 	{
@@ -85,6 +96,13 @@ BOTS = [
 			"SILENTFLARE_DB_BACKUP_AUTH_METHOD",
 			os.getenv("GHOST_DB_BACKUP_AUTH_METHOD", "telegram"),
 		),
+	},
+	{
+		"id": CHAT_BOT_ID,
+		"name": "Telegram Chat Bot",
+		"purpose": CHAT_BOT_DESCRIPTION,
+		"status": "active",
+		"auth_method": os.getenv("TELEGRAM_CHAT_BOT_AUTH_METHOD", "telegram"),
 	}
 ]
 
@@ -162,6 +180,8 @@ def normalize_bot_id(bot_id: str) -> str:
 	normalized = bot_id.strip()
 	if normalized == BACKUP_BOT_ID or normalized in BACKUP_BOT_ALIASES:
 		return BACKUP_BOT_ID
+	if normalized == CHAT_BOT_ID or normalized in CHAT_BOT_ALIASES:
+		return CHAT_BOT_ID
 	return normalized
 
 
@@ -480,6 +500,144 @@ def ensure_bot(bot_id: str) -> dict[str, str]:
 		if bot["id"] == bot_id:
 			return bot
 	raise HTTPException(status_code=404, detail="Bot not found")
+
+
+def service_active(service_name: str) -> bool | None:
+	result = subprocess.run(
+		["systemctl", "is-active", service_name],
+		check=False,
+		capture_output=True,
+		text=True,
+		timeout=10,
+	)
+	if result.returncode == 4:
+		return None
+	return result.stdout.strip() == "active"
+
+
+def public_json_health(url: str) -> dict[str, Any]:
+	try:
+		with urlopen(url, timeout=15) as response:
+			body = response.read().decode("utf-8", "replace")
+		try:
+			payload = json.loads(body) if body else {}
+		except json.JSONDecodeError:
+			payload = {}
+		return {"ok": response.status < 400, "status": response.status, "payload": payload}
+	except Exception as exc:
+		return {"ok": False, "status": 0, "error": exc.__class__.__name__}
+
+
+def chat_bot_control_configured() -> bool:
+	if CHAT_BOT_CONTROL_MODE == "local":
+		return True
+	if CHAT_BOT_CONTROL_MODE == "ssh":
+		return bool(CHAT_BOT_SSH_TARGET and CHAT_BOT_SSH_KEY)
+	return False
+
+
+def chat_bot_remote_script(action: str) -> str:
+	if action == "takeover":
+		updates = {
+			"WEB_OPERATIONS_ENABLED": "0",
+			"OWNER_TG_ADMIN_ENABLED": "1",
+			"OWNER_TG_FORWARD_ENABLED": "1",
+			"OWNER_TG_NOTIFY_ENABLED": "0",
+		}
+	elif action == "resume-web":
+		updates = {
+			"WEB_OPERATIONS_ENABLED": "1",
+			"OWNER_TG_ADMIN_ENABLED": "0",
+			"OWNER_TG_FORWARD_ENABLED": "0",
+			"OWNER_TG_NOTIFY_ENABLED": "1",
+		}
+	else:
+		raise HTTPException(status_code=400, detail="Unsupported chat bot action")
+	update_lines = "\n".join(
+		f"set_env {json.dumps(key)} {json.dumps(value)}"
+		for key, value in updates.items()
+	)
+	return f"""
+set -Eeuo pipefail
+env_file={json.dumps(CHAT_BOT_ENV_FILE)}
+set_env() {{
+  key="$1"
+  value="$2"
+  if grep -q "^${{key}}=" "$env_file"; then
+    sed -i "s/^${{key}}=.*/${{key}}=${{value}}/" "$env_file"
+  else
+    printf '%s=%s\\n' "$key" "$value" >> "$env_file"
+  fi
+}}
+{update_lines}
+systemctl restart {json.dumps(CHAT_BOT_WEB_SERVICE)}
+systemctl is-active {json.dumps(CHAT_BOT_WEB_SERVICE)}
+"""
+
+
+def run_chat_bot_control(action: str) -> dict[str, Any]:
+	if CHAT_BOT_CONTROL_MODE == "disabled":
+		raise HTTPException(status_code=503, detail="Chat Bot remote control is not configured")
+	script = chat_bot_remote_script(action)
+	if CHAT_BOT_CONTROL_MODE == "local":
+		command = ["bash", "-lc", script]
+	elif CHAT_BOT_CONTROL_MODE == "ssh":
+		if not CHAT_BOT_SSH_TARGET or not CHAT_BOT_SSH_KEY:
+			raise HTTPException(status_code=503, detail="Chat Bot SSH control is not configured")
+		command = [
+			"ssh",
+			"-i",
+			CHAT_BOT_SSH_KEY,
+			"-o",
+			"BatchMode=yes",
+			CHAT_BOT_SSH_TARGET,
+			script,
+		]
+	else:
+		raise HTTPException(status_code=503, detail="Unsupported Chat Bot control mode")
+	result = subprocess.run(
+		command,
+		check=False,
+		capture_output=True,
+		text=True,
+		timeout=45,
+	)
+	if result.returncode != 0:
+		raise HTTPException(status_code=502, detail="Chat Bot control command failed")
+	return {"ok": True, "action": action, "service_state": result.stdout.strip().splitlines()[-1:]}
+
+
+def chat_bot_status_payload() -> dict[str, Any]:
+	health = public_json_health(f"{CHAT_BOT_WEB_URL}/healthz")
+	web_service = service_active(CHAT_BOT_WEB_SERVICE)
+	bot_service = service_active(CHAT_BOT_BOT_SERVICE)
+	return {
+		"web_url": CHAT_BOT_WEB_URL,
+		"health": health,
+		"services": {
+			"web": {
+				"name": CHAT_BOT_WEB_SERVICE,
+				"active": web_service,
+				"status": "unknown" if web_service is None else ("active" if web_service else "inactive"),
+			},
+			"bot": {
+				"name": CHAT_BOT_BOT_SERVICE,
+				"active": bot_service,
+				"status": "unknown" if bot_service is None else ("active" if bot_service else "inactive"),
+			},
+		},
+		"control": {
+			"mode": CHAT_BOT_CONTROL_MODE,
+			"configured": chat_bot_control_configured(),
+			"actions": ["takeover", "resume-web"],
+		},
+		"flags": [
+			{"key": "WEB_OPERATIONS_ENABLED", "normal": "1", "takeover": "0"},
+			{"key": "OWNER_TG_ADMIN_ENABLED", "normal": "0", "takeover": "1"},
+			{"key": "OWNER_TG_FORWARD_ENABLED", "normal": "0", "takeover": "1"},
+			{"key": "OWNER_TG_NOTIFY_ENABLED", "normal": "1", "takeover": "0"},
+		],
+	}
 
 
 def sha256_file(path: Path) -> str:
@@ -891,6 +1049,44 @@ def bot(bot_id: str, request: Request) -> dict[str, Any]:
 def unified_checks(bot_id: str, request: Request) -> dict[str, Any]:
 	require_session(request, bot_id=bot_id)
 	bot = ensure_bot(bot_id)
+	if bot["id"] == CHAT_BOT_ID:
+		status = chat_bot_status_payload()
+		checks = [
+			{
+				"key": "public_health",
+				"label": "Public health",
+				"ok": bool(status["health"]["ok"]),
+				"status": str(status["health"]["status"]),
+				"detail": status["web_url"],
+			},
+			{
+				"key": "web_service",
+				"label": "Web service",
+				"ok": status["services"]["web"]["active"] is not False,
+				"status": status["services"]["web"]["status"],
+				"detail": status["services"]["web"]["name"],
+			},
+			{
+				"key": "bot_service",
+				"label": "Bot service",
+				"ok": status["services"]["bot"]["active"] is not False,
+				"status": status["services"]["bot"]["status"],
+				"detail": status["services"]["bot"]["name"],
+			},
+			{
+				"key": "remote_control",
+				"label": "Remote control",
+				"ok": bool(status["control"]["configured"]),
+				"status": "Configured" if status["control"]["configured"] else "Disabled",
+				"detail": status["control"]["mode"],
+			},
+		]
+		return {
+			"ok": bool(status["health"]["ok"]),
+			"bot_id": bot["id"],
+			"checked_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+			"checks": checks,
+		}
 	checks: list[dict[str, Any]] = []
 
 	def add_check(key: str, label: str, ok: bool, status: str, detail: str = "") -> None:
@@ -962,6 +1158,41 @@ def unified_checks(bot_id: str, request: Request) -> dict[str, Any]:
 		"checked_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
 		"checks": checks,
 	}
+
+
+@app.get("/bots/{bot_id}/chat/status")
+def chat_status(bot_id: str, request: Request) -> dict[str, Any]:
+	require_session(request, bot_id=bot_id)
+	bot = ensure_bot(bot_id)
+	if bot["id"] != CHAT_BOT_ID:
+		raise HTTPException(status_code=404, detail="Chat status is not available for this bot")
+	return {"ok": True, "bot_id": bot["id"], **chat_bot_status_payload()}
+
+
+@app.post("/bots/{bot_id}/chat/takeover")
+def chat_takeover(
+	bot_id: str,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	require_session(request, bot_id=bot_id, x_csrf_token=x_csrf_token, require_csrf=True)
+	bot = ensure_bot(bot_id)
+	if bot["id"] != CHAT_BOT_ID:
+		raise HTTPException(status_code=404, detail="Chat control is not available for this bot")
+	return {"bot_id": bot["id"], **run_chat_bot_control("takeover")}
+
+
+@app.post("/bots/{bot_id}/chat/resume-web")
+def chat_resume_web(
+	bot_id: str,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	require_session(request, bot_id=bot_id, x_csrf_token=x_csrf_token, require_csrf=True)
+	bot = ensure_bot(bot_id)
+	if bot["id"] != CHAT_BOT_ID:
+		raise HTTPException(status_code=404, detail="Chat control is not available for this bot")
+	return {"bot_id": bot["id"], **run_chat_bot_control("resume-web")}
 
 
 @app.post("/settings/totp/generate")
