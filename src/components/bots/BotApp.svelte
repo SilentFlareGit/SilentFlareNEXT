@@ -21,8 +21,9 @@ let totpSecret = "";
 let totpUri = "";
 let totpEnabled = false;
 
-let currentStep = "loading"; // "loading", "bot", "auth", "app"
+let currentStep = "bot"; // "bot", "auth", "app"
 let activeView = "dashboard"; // "dashboard", "settings"
+let isBooting = true;
 
 let loginMessage = "Loading...";
 let loginMessageTone = "neutral";
@@ -474,7 +475,7 @@ async function logout() {
 	sessionStorage.removeItem("silentflare_bot_csrf");
 	selectedBot = null;
 	stopStatusAutoRefresh();
-	currentStep = "loading";
+	currentStep = "bot";
 	await loadPublicBots();
 }
 
@@ -482,6 +483,7 @@ async function loadPublicBots() {
 	try {
 		const list = await api("/bots", { lockOnAuthFailure: false });
 		bots = list.bots ?? [];
+		if (currentStep === "app") return;
 		const remembered = sessionStorage.getItem("silentflare_selected_bot");
 		selectedBot = bots.find((b: any) => b.id === remembered) ?? null;
 		loginMessage = "Select a bot to continue to verification.";
@@ -493,8 +495,7 @@ async function loadPublicBots() {
 	}
 }
 
-onMount(async () => {
-	await loadPublicBots();
+async function loadAuthOptions() {
 	try {
 		const options = await api("/auth/options", { lockOnAuthFailure: false });
 		loginMethods = options.methods;
@@ -505,12 +506,22 @@ onMount(async () => {
 		loginMessage = `Unable to load login methods: ${error.message}`;
 		loginMessageTone = "error";
 	}
+}
+
+onMount(async () => {
+	const botsPromise = loadPublicBots();
+	const optionsPromise = loadAuthOptions();
+	const sessionPromise = api("/auth/me", { lockOnAuthFailure: false });
 
 	try {
-		const session = await api("/auth/me", { lockOnAuthFailure: false });
+		const session = await sessionPromise;
 		await enterApp(session);
 	} catch {
+		await botsPromise;
 		currentStep = selectedBot ? "auth" : "bot";
+	} finally {
+		await optionsPromise;
+		isBooting = false;
 	}
 });
 
@@ -536,7 +547,7 @@ $: toneToClass = (tone: string) => {
 		style="background-image: radial-gradient(circle at center, rgb(99 102 241 / 0.15) 0, transparent 40%), radial-gradient(circle at 80% 20%, rgb(168 85 247 / 0.1) 0, transparent 30%);">
 	</div>
 
-	{#if currentStep === 'loading' || currentStep === 'bot' || currentStep === 'auth'}
+	{#if currentStep === 'bot' || currentStep === 'auth'}
 		<!-- Login Flow -->
 		<div class="relative z-10 flex-1 grid place-items-center p-4">
 			<div class="w-full max-w-xl flex flex-col gap-6 bg-white/70 dark:bg-zinc-900/70 backdrop-blur-xl border border-zinc-200 dark:border-zinc-800 p-6 md:p-8 rounded-2xl shadow-xl shadow-zinc-200/50 dark:shadow-black/50 transition-all duration-300">
@@ -554,13 +565,6 @@ $: toneToClass = (tone: string) => {
 					<p class="text-zinc-500 dark:text-zinc-400">SilentFlare DB Backup uses bot-scoped approval before opening the console.</p>
 				</div>
 
-				{#if currentStep === 'loading'}
-					<div class="py-8 text-center text-zinc-500 dark:text-zinc-400 flex flex-col items-center gap-3">
-						<div class="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
-						Loading...
-					</div>
-				{/if}
-
 				{#if currentStep === 'bot'}
 					<div class="flex flex-col gap-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
 						<div class="bg-zinc-50/50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700 rounded-xl p-5 transition-colors hover:bg-white dark:hover:bg-zinc-800 hover:border-indigo-300 dark:hover:border-indigo-700">
@@ -569,7 +573,11 @@ $: toneToClass = (tone: string) => {
 								<p class="text-sm text-zinc-500 dark:text-zinc-400">Pick the bot backend you want to operate.</p>
 							</div>
 							<div class="flex flex-col gap-2 max-h-60 overflow-y-auto pr-2">
-								{#if bots.length === 0}
+								{#if isBooting && bots.length === 0}
+									<div class="grid gap-2">
+										<div class="h-16 rounded-lg border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900"></div>
+									</div>
+								{:else if bots.length === 0}
 									<div class="p-3 text-center text-sm text-zinc-500 dark:text-zinc-400">No bots available.</div>
 								{/if}
 								{#each bots as bot}
