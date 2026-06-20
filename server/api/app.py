@@ -420,15 +420,17 @@ def sha256_file(path: Path) -> str:
 	return digest.hexdigest()
 
 
-def file_info(path: Path) -> dict[str, Any]:
+def file_info(path: Path, *, include_sha256: bool = True) -> dict[str, Any]:
 	stat = path.stat()
 	created = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
-	return {
+	info = {
 		"filename": path.name,
 		"size": stat.st_size,
 		"created_at": created.isoformat().replace("+00:00", "Z"),
-		"sha256": sha256_file(path),
 	}
+	if include_sha256:
+		info["sha256"] = sha256_file(path)
+	return info
 
 
 def list_backups() -> list[dict[str, Any]]:
@@ -442,7 +444,10 @@ def list_backups() -> list[dict[str, Any]]:
 		key=lambda item: item.stat().st_mtime,
 		reverse=True,
 	)
-	return [file_info(path) for path in files[:20]]
+	return [
+		file_info(path, include_sha256=index == 0)
+		for index, path in enumerate(files[:20])
+	]
 
 
 def timer_active() -> bool:
@@ -735,6 +740,8 @@ def backup_run(
 			f"{latest['filename']} sha256={latest['sha256']} size={latest['size']}"
 		)
 	message = "Backup completed and local file was created."
+	if "upload=uploaded" in result.stdout:
+		message = "Backup completed and encrypted GitHub Release asset was uploaded."
 	if latest and not notification_sent:
 		message += " Telegram notification was not sent."
 	return {

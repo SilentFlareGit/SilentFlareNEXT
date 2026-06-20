@@ -135,6 +135,55 @@ readlink -f /opt/silentflare/blog/current
 tail -n 120 /var/log/silentflare-deploy.log
 ```
 
+### FNS1 Ghost Database Backups
+
+FNS1 creates encrypted Ghost/MySQL backups with `/opt/silentflare/deploy/ghost-db-backup.sh`. Runtime settings live in `/opt/silentflare/deploy/ghost-db-backup.env`, which must stay `0600 root root`. Do not copy that env file into this repository and do not print its values in logs.
+
+The backup chain is intentionally conservative:
+
+- `BACKUP_REMOTE=local` is the default behavior. It creates `/opt/silentflare/backups/ghost-db/ghost-db-<timestamp>.sql.gz.age` and does not upload to GitHub.
+- `BACKUP_REMOTE=github_release` uploads only the encrypted `.sql.gz.age` file to the configured private GitHub repository as a Release asset.
+- The server stores only the age public recipient in `BACKUP_AGE_RECIPIENT`.
+- The age private key must stay on the user's local machine and must not be uploaded to FNS1, GitHub, Telegram, or this repository.
+- Telegram notifications contain metadata only: status, filename, path, release tag, sha256, size, cleanup summaries, timestamp, and hostname.
+
+Before enabling production GitHub uploads, run the dummy Release test from FNS1. It uploads an encrypted non-sensitive text file, verifies the Release asset, then deletes its own test release and tag:
+
+```sh
+/opt/silentflare/deploy/ghost-db-backup.sh github-dummy-test
+```
+
+Run a local-only production backup:
+
+```sh
+BACKUP_REMOTE=local /opt/silentflare/deploy/ghost-db-backup.sh backup
+```
+
+To enable GitHub Release uploads, set `BACKUP_REMOTE=github_release` in `/opt/silentflare/deploy/ghost-db-backup.env` after the dummy test succeeds. Required env names are:
+
+```env
+BACKUP_REMOTE=github_release
+GH_TOKEN=<github-token>
+GITHUB_REPO=SilentFlareGit/SilentFlareBackups
+BACKUP_AGE_RECIPIENT=age1...
+BACKUP_LOCAL_RETENTION=30
+BACKUP_RELEASE_RETENTION=30
+```
+
+Do not put actual token values in docs, commits, shell history, Telegram, or GitHub issues.
+
+#### Restore A Backup Safely
+
+Download the encrypted `.sql.gz.age` asset from the private GitHub Release or copy it from `/opt/silentflare/backups/ghost-db`. Decrypt only on a trusted local machine that has the age private key:
+
+```sh
+age -d -i silentflare-backup-age-key.txt ghost-db-xxxx.sql.gz.age > ghost-db-xxxx.sql.gz
+gunzip -t ghost-db-xxxx.sql.gz
+gunzip ghost-db-xxxx.sql.gz
+```
+
+Review the resulting SQL before restoring it anywhere. Restore to a disposable test database first; do not directly overwrite production. Never upload `silentflare-backup-age-key.txt` to FNS1 or store it in this repository.
+
 To roll back, point `current` to an earlier release and keep the change atomic:
 
 ```sh

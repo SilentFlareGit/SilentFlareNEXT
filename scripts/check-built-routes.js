@@ -1,4 +1,4 @@
-import { access, readdir } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
 const requireContent = process.argv.includes("--require-content");
@@ -33,6 +33,28 @@ if (missingFiles.length > 0) {
 }
 
 console.log(`Verified ${requiredFiles.length} required build outputs.`);
+
+const botsHtml = await readFile(path.join("dist", "bots", "index.html"), "utf8");
+const requiredBotNeedles = [
+	"Owner-approved operations",
+	"Send approval request",
+	"console",
+];
+const missingBotNeedles = requiredBotNeedles.filter(
+	(needle) => !botsHtml.includes(needle),
+);
+if (missingBotNeedles.length > 0) {
+	throw new Error(
+		`Bot management page verification failed. Missing content: ${missingBotNeedles.join(", ")}`,
+	);
+}
+if (botsHtml.includes("login-username")) {
+	throw new Error(
+		"Bot management page verification failed. Username/password login marker is present.",
+	);
+}
+
+console.log("Verified bot management page content.");
 
 if (requireContent) {
 	const contentRoutes = [

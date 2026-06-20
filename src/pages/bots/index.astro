@@ -1,4 +1,8 @@
 ---
+import "@fontsource/roboto/400.css";
+import "@fontsource/roboto/500.css";
+import "@fontsource/roboto/700.css";
+
 const apiBase =
 	import.meta.env.PUBLIC_API_BASE_URL ?? "https://api.silentflare.com";
 ---
@@ -13,25 +17,31 @@ const apiBase =
 		<style is:global>
 			:root {
 				color-scheme: light;
-				--bg: #eef3f7;
-				--rail: #111827;
-				--surface: #ffffff;
-				--surface-soft: #f7f9fc;
-				--line: #d7e0ea;
-				--line-soft: #e7edf4;
-				--text: #121a27;
-				--muted: #667386;
-				--blue: #2563eb;
-				--blue-dark: #1d4ed8;
-				--blue-soft: #e8f1ff;
-				--green: #12834c;
-				--green-soft: #e9f8f0;
-				--amber: #9a6500;
-				--amber-soft: #fff7df;
+				--hue: 250;
+				--page-bg: oklch(0.95 0.01 var(--hue));
+				--card-bg: #ffffff;
+				--float-panel-bg: rgba(255, 255, 255, 0.84);
+				--primary: oklch(0.7 0.14 var(--hue));
+				--primary-hover: oklch(0.64 0.15 var(--hue));
+				--primary-soft: oklch(0.95 0.025 var(--hue));
+				--btn-plain-bg-hover: oklch(0.95 0.025 var(--hue));
+				--btn-plain-bg-active: oklch(0.98 0.01 var(--hue));
+				--surface-soft: oklch(0.98 0.006 var(--hue));
+				--line: oklch(0.89 0.012 var(--hue));
+				--line-soft: oklch(0.94 0.01 var(--hue));
+				--text: rgba(0, 0, 0, 0.88);
+				--muted: rgba(0, 0, 0, 0.52);
+				--muted-strong: rgba(0, 0, 0, 0.68);
+				--green: #15803d;
+				--green-soft: #ecfdf3;
+				--amber: #a16207;
+				--amber-soft: #fffbeb;
 				--red: #b42318;
 				--red-soft: #fff1f0;
 				--radius: 8px;
-				--shadow: 0 18px 46px rgba(29, 45, 65, 0.1);
+				--radius-large: 16px;
+				--shadow: 0 2px 4px rgba(0, 0, 0, 0.005), 0 18px 44px rgba(40, 45, 70, 0.08);
+				--shadow-soft: 0 12px 30px rgba(40, 45, 70, 0.07);
 			}
 
 			* {
@@ -41,11 +51,11 @@ const apiBase =
 			body {
 				margin: 0;
 				min-height: 100vh;
-				background: var(--bg);
+				background:
+					linear-gradient(180deg, rgba(255, 255, 255, 0.56), rgba(255, 255, 255, 0) 18rem),
+					var(--page-bg);
 				color: var(--text);
-				font-family:
-					Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-					sans-serif;
+				font-family: Roboto, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 				-webkit-font-smoothing: antialiased;
 			}
 
@@ -94,16 +104,16 @@ const apiBase =
 				display: grid;
 				min-height: 100vh;
 				place-items: center;
-				padding: 1.2rem;
+				padding: clamp(1rem, 4vw, 2rem);
 			}
 
 			.login-card {
 				display: grid;
-				gap: 1.2rem;
-				width: min(31rem, 100%);
+				gap: 1rem;
+				width: min(34rem, 100%);
 				border: 1px solid var(--line);
-				border-radius: 16px;
-				background: var(--surface);
+				border-radius: var(--radius-large);
+				background: var(--card-bg);
 				padding: clamp(1.2rem, 4vw, 2rem);
 				box-shadow: var(--shadow);
 			}
@@ -117,13 +127,15 @@ const apiBase =
 
 			.brand-mark {
 				display: grid;
-				width: 2.5rem;
-				height: 2.5rem;
+				width: 2.75rem;
+				height: 2.75rem;
 				place-items: center;
-				border-radius: 10px;
-				background: var(--blue);
+				border-radius: 0.8rem;
+				background: var(--primary);
 				color: #ffffff;
 				font-weight: 850;
+				letter-spacing: 0;
+				box-shadow: inset 0 -8px 18px rgba(0, 0, 0, 0.08);
 			}
 
 			.brand strong,
@@ -138,11 +150,23 @@ const apiBase =
 			}
 
 			.login-card h1 {
-				font-size: clamp(1.7rem, 5vw, 2.35rem);
-				line-height: 1.08;
+				font-size: clamp(1.85rem, 5vw, 2.55rem);
+				line-height: 1.06;
+				letter-spacing: 0;
 			}
 
 			.login-card > p {
+				color: var(--muted);
+				font-size: 0.95rem;
+				line-height: 1.55;
+			}
+
+			.login-copy {
+				display: grid;
+				gap: 0.55rem;
+			}
+
+			.login-copy p {
 				color: var(--muted);
 				font-size: 0.95rem;
 				line-height: 1.55;
@@ -158,8 +182,17 @@ const apiBase =
 				gap: 0.75rem;
 				border: 1px solid var(--line);
 				border-radius: var(--radius);
-				background: #fbfdff;
+				background: var(--surface-soft);
 				padding: 1rem;
+				transition:
+					background 160ms ease,
+					border-color 160ms ease,
+					transform 160ms ease;
+			}
+
+			.method-card:hover {
+				border-color: color-mix(in oklch, var(--primary) 32%, var(--line));
+				background: #ffffff;
 			}
 
 			.method-head {
@@ -197,8 +230,8 @@ const apiBase =
 			}
 
 			input:focus {
-				border-color: #9fc2ff;
-				box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+				border-color: var(--primary);
+				box-shadow: 0 0 0 4px color-mix(in oklch, var(--primary) 18%, transparent);
 			}
 
 			.button {
@@ -212,18 +245,30 @@ const apiBase =
 				background: #ffffff;
 				color: var(--text);
 				padding: 0.65rem 0.9rem;
-				font-weight: 760;
+				font-weight: 700;
 				white-space: nowrap;
+				transition:
+					background 160ms ease,
+					border-color 160ms ease,
+					color 160ms ease,
+					transform 160ms ease;
+			}
+
+			.button:hover:not(:disabled) {
+				border-color: color-mix(in oklch, var(--primary) 32%, var(--line));
+				background: var(--btn-plain-bg-hover);
+				color: var(--primary);
 			}
 
 			.button.primary {
-				border-color: var(--blue);
-				background: var(--blue);
+				border-color: var(--primary);
+				background: var(--primary);
 				color: #ffffff;
 			}
 
 			.button.primary:hover {
-				background: var(--blue-dark);
+				background: var(--primary-hover);
+				color: #ffffff;
 			}
 
 			.button.danger {
@@ -266,10 +311,10 @@ const apiBase =
 
 			.app {
 				display: grid;
-				grid-template-columns: 15rem minmax(0, 1fr);
-				gap: 0.75rem;
+				grid-template-columns: 16rem minmax(0, 1fr);
+				gap: 1rem;
 				height: 100vh;
-				padding: 0.75rem;
+				padding: 1rem;
 			}
 
 			.rail {
@@ -277,10 +322,12 @@ const apiBase =
 				grid-template-rows: auto auto 1fr auto;
 				min-width: 0;
 				overflow: hidden;
-				border-radius: 14px;
-				background: var(--rail);
-				color: #f8fafc;
-				padding: 0.85rem;
+				border: 1px solid var(--line);
+				border-radius: var(--radius-large);
+				background: var(--card-bg);
+				color: var(--text);
+				padding: 0.9rem;
+				box-shadow: var(--shadow-soft);
 			}
 
 			.rail .brand {
@@ -288,7 +335,7 @@ const apiBase =
 			}
 
 			.rail .brand span {
-				color: #a7b2c3;
+				color: var(--muted);
 			}
 
 			.nav {
@@ -299,7 +346,7 @@ const apiBase =
 
 			.nav-label {
 				margin: 0.4rem 0.45rem;
-				color: #8f9bad;
+				color: var(--muted);
 				font-size: 0.68rem;
 				font-weight: 800;
 				text-transform: uppercase;
@@ -316,17 +363,22 @@ const apiBase =
 				border: 0;
 				border-radius: var(--radius);
 				background: transparent;
-				color: #cbd5e1;
+				color: var(--muted-strong);
 				padding: 0 0.65rem;
 				font-size: 0.86rem;
+				font-weight: 700;
 				text-align: left;
+				transition:
+					background 160ms ease,
+					color 160ms ease,
+					transform 160ms ease;
 			}
 
 			.nav button.active,
 			.nav button:hover,
 			.logout:hover {
-				background: #243244;
-				color: #ffffff;
+				background: var(--btn-plain-bg-hover);
+				color: var(--primary);
 			}
 
 			.bot-list {
@@ -334,6 +386,7 @@ const apiBase =
 				gap: 0.55rem;
 				align-content: start;
 				overflow: auto;
+				min-height: 0;
 			}
 
 			.login-bot-list {
@@ -348,8 +401,8 @@ const apiBase =
 
 			.login-bot-list .bot-card[aria-pressed="true"],
 			.login-bot-list .bot-card:hover {
-				border-color: #9fc2ff;
-				background: var(--blue-soft);
+				border-color: color-mix(in oklch, var(--primary) 45%, var(--line));
+				background: var(--primary-soft);
 			}
 
 			.login-bot-list .bot-card small {
@@ -363,12 +416,16 @@ const apiBase =
 				align-items: center;
 				width: 100%;
 				min-height: 3.6rem;
-				border: 1px solid rgba(203, 213, 225, 0.2);
+				border: 1px solid var(--line);
 				border-radius: var(--radius);
-				background: rgba(255, 255, 255, 0.04);
-				color: #f8fafc;
+				background: #ffffff;
+				color: var(--text);
 				padding: 0.65rem;
 				text-align: left;
+				transition:
+					background 160ms ease,
+					border-color 160ms ease,
+					transform 160ms ease;
 			}
 
 			.bot-card > span:last-child {
@@ -379,8 +436,8 @@ const apiBase =
 
 			.bot-card[aria-pressed="true"],
 			.bot-card:hover {
-				border-color: rgba(147, 197, 253, 0.55);
-				background: #243244;
+				border-color: color-mix(in oklch, var(--primary) 45%, var(--line));
+				background: var(--primary-soft);
 			}
 
 			.bot-icon {
@@ -389,7 +446,7 @@ const apiBase =
 				height: 2rem;
 				place-items: center;
 				border-radius: var(--radius);
-				background: var(--blue);
+				background: var(--primary);
 				color: #ffffff;
 			}
 
@@ -408,7 +465,7 @@ const apiBase =
 			}
 
 			.bot-card small {
-				color: #a7b2c3;
+				color: var(--muted);
 				font-size: 0.75rem;
 				line-height: 1.28;
 			}
@@ -416,10 +473,11 @@ const apiBase =
 			.rail-status {
 				display: grid;
 				gap: 0.55rem;
-				border: 1px solid rgba(203, 213, 225, 0.18);
-				border-radius: 12px;
+				border: 1px solid var(--line);
+				border-radius: var(--radius);
+				background: var(--surface-soft);
 				padding: 0.85rem;
-				color: #dbe6f4;
+				color: var(--muted-strong);
 				font-size: 0.78rem;
 			}
 
@@ -433,8 +491,8 @@ const apiBase =
 				min-width: 0;
 				overflow: hidden;
 				border: 1px solid var(--line);
-				border-radius: 14px;
-				background: var(--surface);
+				border-radius: var(--radius-large);
+				background: var(--card-bg);
 				box-shadow: var(--shadow);
 			}
 
@@ -445,7 +503,7 @@ const apiBase =
 				gap: 1rem;
 				min-height: 4.5rem;
 				border-bottom: 1px solid var(--line);
-				padding: 0.9rem 1.5rem;
+				padding: 1rem 1.5rem;
 			}
 
 			.topbar h1 {
@@ -471,7 +529,7 @@ const apiBase =
 				color: var(--green);
 				padding: 0.35rem 0.72rem;
 				font-size: 0.76rem;
-				font-weight: 760;
+				font-weight: 700;
 				white-space: nowrap;
 			}
 
@@ -495,9 +553,10 @@ const apiBase =
 
 			.panel {
 				border: 1px solid var(--line);
-				border-radius: var(--radius);
+				border-radius: var(--radius-large);
 				background: #ffffff;
 				overflow: hidden;
+				box-shadow: 0 2px 4px rgba(0, 0, 0, 0.005);
 			}
 
 			.panel-head {
@@ -507,7 +566,7 @@ const apiBase =
 				gap: 0.75rem;
 				min-height: 3.2rem;
 				border-bottom: 1px solid var(--line-soft);
-				padding: 0.72rem 0.9rem;
+				padding: 0.78rem 1rem;
 			}
 
 			.panel-head h2 {
@@ -532,12 +591,14 @@ const apiBase =
 				border: 1px solid var(--line);
 				border-radius: var(--radius);
 				overflow: hidden;
+				background: var(--surface-soft);
 			}
 
 			.metric {
 				min-height: 4.8rem;
 				border-left: 1px solid var(--line-soft);
 				padding: 0.75rem;
+				background: rgba(255, 255, 255, 0.7);
 			}
 
 			.metric:first-child {
@@ -555,7 +616,7 @@ const apiBase =
 				display: block;
 				margin-top: 0.45rem;
 				overflow-wrap: anywhere;
-				font-size: 0.92rem;
+				font-size: 0.98rem;
 			}
 
 			table {
@@ -577,10 +638,13 @@ const apiBase =
 				color: var(--muted);
 				font-size: 0.72rem;
 				font-weight: 800;
+				background: var(--surface-soft);
 			}
 
 			.table-wrap {
 				overflow: auto;
+				border-radius: var(--radius);
+				-webkit-overflow-scrolling: touch;
 			}
 
 			.mono {
@@ -654,7 +718,7 @@ const apiBase =
 				z-index: 40;
 				transform: translateX(-50%) translateY(0.5rem);
 				border-radius: var(--radius);
-				background: #111827;
+				background: rgba(0, 0, 0, 0.82);
 				color: #ffffff;
 				padding: 0.7rem 0.9rem;
 				font-size: 0.84rem;
@@ -675,21 +739,36 @@ const apiBase =
 					grid-template-columns: 1fr;
 					height: auto;
 					min-height: 100vh;
-					padding: 0;
+					padding: 1rem;
 				}
 
 				.rail,
 				.shell {
-					border-radius: 0;
+					border-radius: var(--radius-large);
 				}
 
 				.rail {
 					grid-template-rows: auto auto auto auto;
+					gap: 0.75rem;
+				}
+
+				.nav {
+					grid-template-columns: repeat(2, minmax(0, 1fr));
+					margin-bottom: 0;
+				}
+
+				.nav-label {
+					grid-column: 1 / -1;
 				}
 
 				.bot-list {
 					grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
 					max-height: none;
+				}
+
+				.rail-status {
+					grid-template-columns: repeat(3, minmax(0, 1fr));
+					align-items: center;
 				}
 
 				.grid,
@@ -707,6 +786,19 @@ const apiBase =
 
 				.content {
 					padding: 0.85rem;
+				}
+
+				.app,
+				.login-page {
+					padding: 0.75rem;
+				}
+
+				.rail {
+					padding: 0.75rem;
+				}
+
+				.rail-status {
+					grid-template-columns: 1fr;
 				}
 
 				.code-row,
@@ -749,9 +841,9 @@ const apiBase =
 						<span>Bot operations</span>
 					</div>
 				</div>
-				<div>
-					<h1>Telegram Bot Management</h1>
-					<p>Choose a bot first, then verify access for that bot.</p>
+				<div class="login-copy">
+					<h1>Owner-approved operations</h1>
+					<p>Telegram Bot Management uses bot-scoped approval before opening the console.</p>
 				</div>
 				<div id="bot-step" class="method-grid">
 					<section class="method-card">
@@ -1214,7 +1306,7 @@ const apiBase =
 					state.challengeExpiresAt = new Date(result.expires_at);
 					updateLoginCountdown();
 					state.countdownTimer = window.setInterval(updateLoginCountdown, 1000);
-					state.pollTimer = window.setInterval(checkTelegramLogin, 1600);
+					state.pollTimer = window.setInterval(checkTelegramLogin, 900);
 					await checkTelegramLogin();
 				} catch (error) {
 					stopLoginPolling();
@@ -1328,16 +1420,17 @@ const apiBase =
 				}
 				for (const item of status.backups) {
 					const row = document.createElement("tr");
+					const sha = item.sha256 ? shortSha(item.sha256) : "Deferred";
 					for (const value of [
 						item.filename,
 						item.created_at,
 						formatSize(item.size),
-						shortSha(item.sha256),
+						sha,
 						"Success",
 					]) {
 						const cell = document.createElement("td");
 						cell.textContent = value;
-						if (value === item.filename || value === shortSha(item.sha256)) cell.className = "mono";
+						if (value === item.filename || value === sha) cell.className = "mono";
 						row.append(cell);
 					}
 					nodes.backupHistory.append(row);

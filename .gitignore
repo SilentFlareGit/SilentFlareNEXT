@@ -17,6 +17,9 @@ dev-server*.log
 static-*.log
 static-*.err.log
 
+# Python bytecode
+__pycache__/
+
 # local Ghost runtime data
 ghost-cms/.ghostpid
 ghost-cms/content/data/*.db

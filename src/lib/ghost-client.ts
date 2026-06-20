@@ -50,6 +50,10 @@ function allowEmptyData(): boolean {
 	return value === true || value === "true";
 }
 
+function isPlaceholderContentKey(key: string): boolean {
+	return key.trim().toLowerCase() === "placeholder";
+}
+
 function getGhostConfig() {
 	const ghostUrl = readEnvString("GHOST_URL");
 	const key = readEnvString("GHOST_CONTENT_API_KEY");
@@ -130,6 +134,9 @@ async function requestGhost<T>(
 ): Promise<GhostListResponse<T>> {
 	const config = getGhostConfig();
 	if (!config) {
+		return emptyResponse<T>(options);
+	}
+	if (allowEmptyData() && isPlaceholderContentKey(config.key)) {
 		return emptyResponse<T>(options);
 	}
 
