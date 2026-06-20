@@ -172,20 +172,20 @@ local_retention_cleanup() {
 	stage="local_retention"
 	local keep="$BACKUP_LOCAL_RETENTION"
 	local before after removed plaintext_count
-	before="$(find "$BACKUP_DIR" -maxdepth 1 -type f -name "ghost-db-*.sql.gz.age" | wc -l | awk "{print \$1}")"
-	find "$BACKUP_DIR" -maxdepth 1 -type f -name "ghost-db-*.sql.gz.age" -printf "%T@ %p\n" \
+	before="$(find "$BACKUP_DIR" -maxdepth 1 -type f \( -name "SilentFLare-DB-Backup-*.sql.gz.age" -o -name "ghost-db-*.sql.gz.age" \) | wc -l | awk "{print \$1}")"
+	find "$BACKUP_DIR" -maxdepth 1 -type f \( -name "SilentFLare-DB-Backup-*.sql.gz.age" -o -name "ghost-db-*.sql.gz.age" \) -printf "%T@ %p\n" \
 		| sort -rn \
 		| tail -n +$((keep + 1)) \
 		| awk "{ \$1=\"\"; sub(/^ /, \"\"); print }" \
 		| while IFS= read -r old_file; do
 			[[ -n "$old_file" ]] && rm -f -- "$old_file"
 		done
-	after="$(find "$BACKUP_DIR" -maxdepth 1 -type f -name "ghost-db-*.sql.gz.age" | wc -l | awk "{print \$1}")"
+	after="$(find "$BACKUP_DIR" -maxdepth 1 -type f \( -name "SilentFLare-DB-Backup-*.sql.gz.age" -o -name "ghost-db-*.sql.gz.age" \) | wc -l | awk "{print \$1}")"
 	removed=$((before - after))
 	if [[ "$removed" -lt 0 ]]; then
 		removed=0
 	fi
-	plaintext_count="$(find "$BACKUP_DIR" -maxdepth 1 -type f -name "ghost-db-*.sql.gz" | wc -l | awk "{print \$1}")"
+	plaintext_count="$(find "$BACKUP_DIR" -maxdepth 1 -type f \( -name "SilentFLare-DB-Backup-*.sql.gz" -o -name "ghost-db-*.sql.gz" \) | wc -l | awk "{print \$1}")"
 	printf "kept=%s before=%s after=%s removed=%s historical_plaintext=%s" "$keep" "$before" "$after" "$removed" "$plaintext_count"
 }
 
@@ -199,7 +199,7 @@ remote_retention_cleanup() {
 	local list_file delete_file before deleted tag
 	list_file="$(mktemp)"
 	delete_file="$(mktemp)"
-	GH_TOKEN="$GH_TOKEN" gh release list --repo "$GITHUB_REPO" --limit 200 --json tagName,createdAt --jq ".[] | select(.tagName | test(\"^ghost-db-[0-9]{8}T[0-9]{6}Z$\")) | [.createdAt, .tagName] | @tsv" \
+	GH_TOKEN="$GH_TOKEN" gh release list --repo "$GITHUB_REPO" --limit 200 --json tagName,createdAt --jq ".[] | select(.tagName | test(\"^(SilentFLare-DB-Backup|ghost-db)-[0-9]{8}T[0-9]{6}Z$\")) | [.createdAt, .tagName] | @tsv" \
 		| sort -r > "$list_file"
 	before="$(wc -l < "$list_file" | awk "{print \$1}")"
 	tail -n +$((keep + 1)) "$list_file" | awk -F "\t" "{print \$2}" > "$delete_file"
@@ -285,7 +285,7 @@ run_backup() {
 	local timestamp host plain_file plain_tmp encrypted_file encrypted_tmp sha size asset_name tag title notes_file local_cleanup remote_cleanup upload_status
 	timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 	host="$(hostname)"
-	plain_file="${BACKUP_DIR}/ghost-db-${timestamp}.sql.gz"
+	plain_file="${BACKUP_DIR}/SilentFLare-DB-Backup-${timestamp}.sql.gz"
 	plain_tmp="${plain_file}.tmp"
 	encrypted_file="${plain_file}.age"
 	encrypted_tmp="${encrypted_file}.tmp"
@@ -294,8 +294,8 @@ run_backup() {
 	cleanup_encrypted_tmp="$encrypted_tmp"
 	cleanup_plain_file="$plain_file"
 	cleanup_notes_file="$notes_file"
-	tag="ghost-db-${timestamp}"
-	title="SilentFlare DB Backup ${timestamp}"
+	tag="SilentFLare-DB-Backup-${timestamp}"
+	title="SilentFLare DB Backup ${timestamp}"
 	upload_status="local-only"
 
 	cleanup() {

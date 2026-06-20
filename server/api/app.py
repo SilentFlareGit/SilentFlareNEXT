@@ -459,6 +459,8 @@ def list_backups() -> list[dict[str, Any]]:
 		return []
 	files = sorted(
 		[
+			*BACKUP_DIR.glob("SilentFLare-DB-Backup-*.sql.gz.age"),
+			*BACKUP_DIR.glob("SilentFLare-DB-Backup-*.sql.gz"),
 			*BACKUP_DIR.glob("ghost-db-*.sql.gz.age"),
 			*BACKUP_DIR.glob("ghost-db-*.sql.gz"),
 		],

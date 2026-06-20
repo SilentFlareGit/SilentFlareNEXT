@@ -143,7 +143,7 @@ The backup is intentionally update-proof: it dumps all databases with schema, ro
 
 The backup chain is intentionally conservative:
 
-- `BACKUP_REMOTE=local` is the default behavior. It creates `/opt/silentflare/backups/ghost-db/ghost-db-<timestamp>.sql.gz.age` and does not upload to GitHub.
+- `BACKUP_REMOTE=local` is the default behavior. It creates `/opt/silentflare/backups/ghost-db/SilentFLare-DB-Backup-<timestamp>.sql.gz.age` and does not upload to GitHub.
 - `BACKUP_REMOTE=github_release` uploads only the encrypted `.sql.gz.age` file to the configured private GitHub repository as a Release asset.
 - The server stores only the age public recipient in `BACKUP_AGE_RECIPIENT`.
 - The age private key must stay on the user's local machine and must not be uploaded to FNS1, GitHub, Telegram, or this repository.
@@ -179,9 +179,9 @@ Do not put actual token values in docs, commits, shell history, Telegram, or Git
 Download the encrypted `.sql.gz.age` asset from the private GitHub Release or copy it from `/opt/silentflare/backups/ghost-db`. Decrypt only on a trusted local machine that has the age private key:
 
 ```sh
-age -d -i silentflare-backup-age-key.txt ghost-db-xxxx.sql.gz.age > ghost-db-xxxx.sql.gz
-gunzip -t ghost-db-xxxx.sql.gz
-gunzip ghost-db-xxxx.sql.gz
+age -d -i silentflare-backup-age-key.txt SilentFLare-DB-Backup-xxxx.sql.gz.age > SilentFLare-DB-Backup-xxxx.sql.gz
+gunzip -t SilentFLare-DB-Backup-xxxx.sql.gz
+gunzip SilentFLare-DB-Backup-xxxx.sql.gz
 ```
 
 Review the resulting SQL before restoring it anywhere. Restore to a disposable test database first; do not directly overwrite production. Never upload `silentflare-backup-age-key.txt` to FNS1 or store it in this repository.
