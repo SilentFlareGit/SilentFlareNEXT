@@ -768,7 +768,9 @@ $: toneToClass = (tone: string) => {
 				<header class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 md:p-6 border-b border-zinc-200 dark:border-zinc-800 bg-white/50 dark:bg-zinc-900/50">
 					<div>
 						<h1 class="text-2xl font-bold tracking-tight">{selectedBot ? botLabel(selectedBot) : 'Select a bot'}</h1>
-						<p class="text-sm text-zinc-500 dark:text-zinc-400 mt-1">Complete all-database backups remain valid across Ghost and schema updates.</p>
+						<p class="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
+							{isChatBot() ? 'Owner-controlled Telegram chat relay and web operations console.' : 'Complete all-database backups remain valid across Ghost and schema updates.'}
+						</p>
 					</div>
 					<div class="flex-shrink-0 px-3 py-1 bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-400 text-xs font-bold uppercase tracking-wider rounded-full">
 						Owner verified
@@ -825,8 +827,9 @@ $: toneToClass = (tone: string) => {
 									</div>
 									<div class="p-4 flex flex-col gap-3">
 										{#each chatStatus?.flags ?? [] as flag}
-											<div class="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-3 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800/50">
+											<div class="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-2 sm:gap-3 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800/50">
 												<span class="truncate font-mono text-xs text-zinc-600 dark:text-zinc-300">{flag.key}</span>
+												<span class="text-xs font-medium text-zinc-700 dark:text-zinc-200">current {flag.current ?? 'unset'}</span>
 												<span class="text-xs text-zinc-500">normal {flag.normal}</span>
 												<span class="text-xs text-zinc-500">takeover {flag.takeover}</span>
 											</div>

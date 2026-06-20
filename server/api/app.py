@@ -49,6 +49,27 @@ ADMIN_TOKEN = os.getenv("API_ADMIN_TOKEN", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+DB_BACKUP_TELEGRAM_BOT_TOKEN = os.getenv(
+	"SILENTFLARE_DB_BACKUP_TELEGRAM_BOT_TOKEN",
+	TELEGRAM_BOT_TOKEN,
+)
+DB_BACKUP_TELEGRAM_CHAT_ID = os.getenv(
+	"SILENTFLARE_DB_BACKUP_TELEGRAM_CHAT_ID",
+	TELEGRAM_CHAT_ID,
+)
+DB_BACKUP_TELEGRAM_WEBHOOK_SECRET = os.getenv(
+	"SILENTFLARE_DB_BACKUP_TELEGRAM_WEBHOOK_SECRET",
+	TELEGRAM_WEBHOOK_SECRET,
+)
+DB_BACKUP_TELEGRAM_OWNER_ID = int(
+	os.getenv("SILENTFLARE_DB_BACKUP_TELEGRAM_OWNER_ID", str(TELEGRAM_OWNER_ID))
+)
+CHAT_BOT_TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_CHAT_BOT_TOKEN", "")
+CHAT_BOT_TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_BOT_CHAT_ID", "")
+CHAT_BOT_TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_CHAT_BOT_WEBHOOK_SECRET", "")
+CHAT_BOT_TELEGRAM_OWNER_ID = int(
+	os.getenv("TELEGRAM_CHAT_BOT_OWNER_ID", str(TELEGRAM_OWNER_ID))
+)
 API_ENV_FILE = Path(os.getenv("API_ENV_FILE", "/opt/silentflare/api/api.env"))
 CONSOLE_AUTH_ID = "console"
 CONSOLE_TOTP_SECRET = os.getenv("BOT_CONSOLE_TOTP_SECRET", os.getenv("WEB_TOTP_SECRET", ""))
@@ -258,10 +279,50 @@ def public_bot(bot: dict[str, str]) -> dict[str, str]:
 	}
 
 
+def telegram_auth_config(bot_id: str) -> dict[str, Any]:
+	normalized = normalize_bot_id(bot_id)
+	if normalized == BACKUP_BOT_ID:
+		return {
+			"bot_id": BACKUP_BOT_ID,
+			"token": DB_BACKUP_TELEGRAM_BOT_TOKEN,
+			"chat_id": DB_BACKUP_TELEGRAM_CHAT_ID,
+			"webhook_secret": DB_BACKUP_TELEGRAM_WEBHOOK_SECRET,
+			"owner_id": DB_BACKUP_TELEGRAM_OWNER_ID,
+		}
+	if normalized == CHAT_BOT_ID:
+		return {
+			"bot_id": CHAT_BOT_ID,
+			"token": CHAT_BOT_TELEGRAM_BOT_TOKEN,
+			"chat_id": CHAT_BOT_TELEGRAM_CHAT_ID,
+			"webhook_secret": CHAT_BOT_TELEGRAM_WEBHOOK_SECRET,
+			"owner_id": CHAT_BOT_TELEGRAM_OWNER_ID,
+		}
+	return {
+		"bot_id": normalized,
+		"token": "",
+		"chat_id": "",
+		"webhook_secret": "",
+		"owner_id": TELEGRAM_OWNER_ID,
+	}
+
+
+def telegram_config_from_webhook_token(token: str) -> dict[str, Any] | None:
+	for bot in BOTS:
+		config = telegram_auth_config(bot["id"])
+		secret = str(config.get("webhook_secret") or "")
+		if secret and hmac.compare_digest(token, secret):
+			return config
+	if not token and not any(
+		telegram_auth_config(bot["id"]).get("webhook_secret") for bot in BOTS
+	):
+		return telegram_auth_config(BACKUP_BOT_ID)
+	return None
+
+
 def ensure_telegram_auth_bot(bot: dict[str, str]) -> None:
 	if bot["auth_method"] != "telegram":
 		raise HTTPException(status_code=400, detail="This bot does not use Telegram authorization")
-	if not TELEGRAM_BOT_TOKEN:
+	if not telegram_auth_config(bot["id"])["token"]:
 		raise HTTPException(status_code=503, detail="Telegram bot token is not configured")
 
 
@@ -290,12 +351,13 @@ def get_login_challenge(challenge_id: str, bot_id: str, client: str) -> dict[str
 	return challenge
 
 
-def telegram_api(method: str, payload: dict[str, Any]) -> dict[str, Any]:
-	if not TELEGRAM_BOT_TOKEN:
+def telegram_api(config: dict[str, Any], method: str, payload: dict[str, Any]) -> dict[str, Any]:
+	token = str(config.get("token") or "")
+	if not token:
 		raise HTTPException(status_code=503, detail="Telegram bot token is not configured")
 	data = json.dumps(payload).encode()
 	request = UrlRequest(
-		f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/{method}",
+		f"https://api.telegram.org/bot{token}/{method}",
 		data=data,
 		method="POST",
 	)
@@ -308,10 +370,13 @@ def telegram_api(method: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def send_login_approval(bot: dict[str, str], challenge: dict[str, Any]) -> dict[str, Any]:
+	config = telegram_auth_config(bot["id"])
+	chat_id = config["chat_id"] or config["owner_id"]
 	return telegram_api(
+		config,
 		"sendMessage",
 		{
-			"chat_id": TELEGRAM_OWNER_ID,
+			"chat_id": chat_id,
 			"text": (
 				"SilentFlare Bot Management login requested.\n"
 				f"Bot: {bot['name']} ({bot['id']})\n"
@@ -331,9 +396,14 @@ def send_login_approval(bot: dict[str, str], challenge: dict[str, Any]) -> dict[
 	)
 
 
-def edit_login_approval_message(challenge: dict[str, Any], approved: bool) -> None:
+def edit_login_approval_message(
+	challenge: dict[str, Any],
+	approved: bool,
+	config: dict[str, Any] | None = None,
+) -> None:
+	config = config or telegram_auth_config(str(challenge.get("bot_id", "")))
 	message_id = challenge.get("telegram_message_id")
-	chat_id = challenge.get("telegram_chat_id") or TELEGRAM_OWNER_ID
+	chat_id = challenge.get("telegram_chat_id") or config.get("chat_id") or config.get("owner_id")
 	if not message_id:
 		return
 	if approved:
@@ -350,6 +420,7 @@ def edit_login_approval_message(challenge: dict[str, Any], approved: bool) -> No
 		)
 	try:
 		telegram_api(
+			config,
 			"editMessageText",
 			{
 				"chat_id": chat_id,
@@ -362,9 +433,15 @@ def edit_login_approval_message(challenge: dict[str, Any], approved: bool) -> No
 		pass
 
 
-def answer_callback(callback_id: str, text: str, alert: bool = False) -> None:
+def answer_callback(
+	config: dict[str, Any],
+	callback_id: str,
+	text: str,
+	alert: bool = False,
+) -> None:
 	try:
 		telegram_api(
+			config,
 			"answerCallbackQuery",
 			{
 				"callback_query_id": callback_id,
@@ -381,7 +458,8 @@ def approve_login_challenge(challenge_id: str, telegram_user_id: int) -> bool:
 	if not challenge or challenge["expires_at"] <= time.time():
 		LOGIN_CHALLENGES.pop(challenge_id, None)
 		return False
-	if telegram_user_id != TELEGRAM_OWNER_ID:
+	config = telegram_auth_config(str(challenge.get("bot_id", "")))
+	if telegram_user_id != int(config["owner_id"]):
 		return False
 	if challenge["status"] == "approved":
 		return True
@@ -575,10 +653,9 @@ systemctl is-active {json.dumps(CHAT_BOT_WEB_SERVICE)}
 """
 
 
-def run_chat_bot_control(action: str) -> dict[str, Any]:
+def run_chat_bot_command(script: str, timeout: int = 45) -> subprocess.CompletedProcess[str]:
 	if CHAT_BOT_CONTROL_MODE == "disabled":
 		raise HTTPException(status_code=503, detail="Chat Bot remote control is not configured")
-	script = chat_bot_remote_script(action)
 	if CHAT_BOT_CONTROL_MODE == "local":
 		command = ["bash", "-lc", script]
 	elif CHAT_BOT_CONTROL_MODE == "ssh":
@@ -590,27 +667,100 @@ def run_chat_bot_control(action: str) -> dict[str, Any]:
 			CHAT_BOT_SSH_KEY,
 			"-o",
 			"BatchMode=yes",
+			"-o",
+			"StrictHostKeyChecking=accept-new",
 			CHAT_BOT_SSH_TARGET,
 			script,
 		]
 	else:
 		raise HTTPException(status_code=503, detail="Unsupported Chat Bot control mode")
-	result = subprocess.run(
+	return subprocess.run(
 		command,
 		check=False,
 		capture_output=True,
 		text=True,
-		timeout=45,
+		timeout=timeout,
 	)
+
+
+def run_chat_bot_control(action: str) -> dict[str, Any]:
+	result = run_chat_bot_command(chat_bot_remote_script(action))
 	if result.returncode != 0:
 		raise HTTPException(status_code=502, detail="Chat Bot control command failed")
 	return {"ok": True, "action": action, "service_state": result.stdout.strip().splitlines()[-1:]}
 
 
+def chat_bot_remote_status() -> dict[str, Any] | None:
+	if CHAT_BOT_CONTROL_MODE == "disabled" or not chat_bot_control_configured():
+		return None
+	script = f"""
+set -Eeuo pipefail
+python3 - <<'PY'
+import json
+import subprocess
+from pathlib import Path
+
+env_file = Path({json.dumps(CHAT_BOT_ENV_FILE)})
+web_service = {json.dumps(CHAT_BOT_WEB_SERVICE)}
+bot_service = {json.dumps(CHAT_BOT_BOT_SERVICE)}
+flag_keys = [
+    "WEB_OPERATIONS_ENABLED",
+    "OWNER_TG_ADMIN_ENABLED",
+    "OWNER_TG_FORWARD_ENABLED",
+    "OWNER_TG_NOTIFY_ENABLED",
+]
+
+def service_active(name):
+    result = subprocess.run(["systemctl", "is-active", name], capture_output=True, text=True)
+    if result.returncode == 4:
+        return None
+    return result.stdout.strip() == "active"
+
+def env_flags():
+    values = {{}}
+    if not env_file.exists():
+        return values
+    for raw in env_file.read_text().splitlines():
+        if not raw or raw.lstrip().startswith("#") or "=" not in raw:
+            continue
+        key, value = raw.split("=", 1)
+        if key in flag_keys:
+            values[key] = value
+    return values
+
+print(json.dumps({{
+    "web_service_active": service_active(web_service),
+    "bot_service_active": service_active(bot_service),
+    "flags": env_flags(),
+}}))
+PY
+"""
+	try:
+		result = run_chat_bot_command(script, timeout=20)
+	except Exception:
+		return None
+	if result.returncode != 0:
+		return None
+	try:
+		return json.loads(result.stdout.strip().splitlines()[-1])
+	except (IndexError, json.JSONDecodeError):
+		return None
+
+
 def chat_bot_status_payload() -> dict[str, Any]:
 	health = public_json_health(f"{CHAT_BOT_WEB_URL}/healthz")
-	web_service = service_active(CHAT_BOT_WEB_SERVICE)
-	bot_service = service_active(CHAT_BOT_BOT_SERVICE)
+	remote_status = chat_bot_remote_status()
+	web_service = (
+		remote_status.get("web_service_active")
+		if remote_status is not None
+		else service_active(CHAT_BOT_WEB_SERVICE)
+	)
+	bot_service = (
+		remote_status.get("bot_service_active")
+		if remote_status is not None
+		else service_active(CHAT_BOT_BOT_SERVICE)
+	)
+	flag_values = remote_status.get("flags", {}) if remote_status else {}
 	return {
 		"web_url": CHAT_BOT_WEB_URL,
 		"health": health,
@@ -632,10 +782,30 @@ def chat_bot_status_payload() -> dict[str, Any]:
 			"actions": ["takeover", "resume-web"],
 		},
 		"flags": [
-			{"key": "WEB_OPERATIONS_ENABLED", "normal": "1", "takeover": "0"},
-			{"key": "OWNER_TG_ADMIN_ENABLED", "normal": "0", "takeover": "1"},
-			{"key": "OWNER_TG_FORWARD_ENABLED", "normal": "0", "takeover": "1"},
-			{"key": "OWNER_TG_NOTIFY_ENABLED", "normal": "1", "takeover": "0"},
+			{
+				"key": "WEB_OPERATIONS_ENABLED",
+				"normal": "1",
+				"takeover": "0",
+				"current": flag_values.get("WEB_OPERATIONS_ENABLED", "unset"),
+			},
+			{
+				"key": "OWNER_TG_ADMIN_ENABLED",
+				"normal": "0",
+				"takeover": "1",
+				"current": flag_values.get("OWNER_TG_ADMIN_ENABLED", "unset"),
+			},
+			{
+				"key": "OWNER_TG_FORWARD_ENABLED",
+				"normal": "0",
+				"takeover": "1",
+				"current": flag_values.get("OWNER_TG_FORWARD_ENABLED", "unset"),
+			},
+			{
+				"key": "OWNER_TG_NOTIFY_ENABLED",
+				"normal": "1",
+				"takeover": "0",
+				"current": flag_values.get("OWNER_TG_NOTIFY_ENABLED", "unset"),
+			},
 		],
 	}
 
@@ -841,15 +1011,16 @@ GH_TOKEN="$GH_TOKEN" gh release view "$tag" --repo "$GITHUB_REPO" --json tagName
 		return {"configured": True, "latest": None, "error": "Invalid GitHub release response"}
 
 
-def resolve_telegram_chat_id() -> str:
-	if TELEGRAM_CHAT_ID:
-		return TELEGRAM_CHAT_ID
-	if TELEGRAM_OWNER_ID:
-		return str(TELEGRAM_OWNER_ID)
-	if not TELEGRAM_BOT_TOKEN:
+def resolve_telegram_chat_id(bot_id: str = BACKUP_BOT_ID) -> str:
+	config = telegram_auth_config(bot_id)
+	if config["chat_id"]:
+		return str(config["chat_id"])
+	if config["owner_id"]:
+		return str(config["owner_id"])
+	if not config["token"]:
 		return ""
 	with urlopen(
-		f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates",
+		f"https://api.telegram.org/bot{config['token']}/getUpdates",
 		timeout=20,
 	) as response:
 		data = json.loads(response.read().decode("utf-8"))
@@ -865,13 +1036,14 @@ def resolve_telegram_chat_id() -> str:
 	return ""
 
 
-def notify_telegram(text: str) -> bool:
-	chat_id = resolve_telegram_chat_id()
-	if not TELEGRAM_BOT_TOKEN or not chat_id:
+def notify_telegram(text: str, bot_id: str = BACKUP_BOT_ID) -> bool:
+	config = telegram_auth_config(bot_id)
+	chat_id = resolve_telegram_chat_id(bot_id)
+	if not config["token"] or not chat_id:
 		return False
 	data = urlencode({"chat_id": chat_id, "text": text}).encode()
 	request = UrlRequest(
-		f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+		f"https://api.telegram.org/bot{config['token']}/sendMessage",
 		data=data,
 		method="POST",
 	)
@@ -890,9 +1062,10 @@ def health() -> dict[str, Any]:
 
 @app.get("/auth/options")
 def auth_options() -> dict[str, Any]:
+	telegram_ready = any(bool(telegram_auth_config(bot["id"])["token"]) for bot in BOTS)
 	return {
 		"methods": {
-			"telegram": bool(TELEGRAM_BOT_TOKEN),
+			"telegram": telegram_ready,
 			"totp": bool(console_totp_secret()),
 		},
 		"owner_id": TELEGRAM_OWNER_ID,
@@ -1011,7 +1184,8 @@ def auth_logout(
 
 @app.post("/telegram/update")
 async def telegram_update(request: Request, token: str = "") -> dict[str, Any]:
-	if TELEGRAM_WEBHOOK_SECRET and not hmac.compare_digest(token, TELEGRAM_WEBHOOK_SECRET):
+	webhook_config = telegram_config_from_webhook_token(token)
+	if not webhook_config:
 		raise HTTPException(status_code=401, detail="Invalid webhook token")
 	update = await request.json()
 	callback = update.get("callback_query") or {}
@@ -1023,10 +1197,15 @@ async def telegram_update(request: Request, token: str = "") -> dict[str, Any]:
 	user_id = int(from_user.get("id") or 0)
 	callback_id = callback.get("id") or ""
 	challenge = LOGIN_CHALLENGES.get(challenge_id, {"id": challenge_id})
-	approved = approve_login_challenge(challenge_id, user_id)
-	edit_login_approval_message(challenge, approved)
+	challenge_config = telegram_auth_config(str(challenge.get("bot_id", webhook_config["bot_id"])))
+	if challenge_config["bot_id"] != webhook_config["bot_id"]:
+		approved = False
+	else:
+		approved = approve_login_challenge(challenge_id, user_id)
+	edit_login_approval_message(challenge, approved, webhook_config)
 	if callback_id:
 		answer_callback(
+			webhook_config,
 			callback_id,
 			"Login approved. Return to the web page." if approved else "Login request expired or unauthorized.",
 			alert=not approved,
@@ -1102,11 +1281,12 @@ def unified_checks(bot_id: str, request: Request) -> dict[str, Any]:
 
 	add_check("api", "FastAPI service", True, "OK", APP_NAME)
 	add_check("bot", "Bot registry", bot["id"] == BACKUP_BOT_ID, "OK", bot["id"])
+	telegram_config = telegram_auth_config(bot["id"])
 	add_check(
 		"telegram",
 		"Telegram authorization",
-		bool(TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID),
-		"OK" if TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID else "Missing",
+		bool(telegram_config["token"] and telegram_config["owner_id"]),
+		"OK" if telegram_config["token"] and telegram_config["owner_id"] else "Missing",
 		"Owner approval path",
 	)
 	try:
@@ -1341,12 +1521,13 @@ def telegram_test(
 			require_csrf=True,
 		)
 	bot = ensure_bot(bot_id)
-	if not TELEGRAM_BOT_TOKEN or not resolve_telegram_chat_id():
+	config = telegram_auth_config(bot["id"])
+	if not config["token"] or not resolve_telegram_chat_id(bot["id"]):
 		raise HTTPException(
 			status_code=503,
 			detail="Telegram token is not configured or no chat has messaged the bot",
 		)
-	if not notify_telegram("SilentFlare Bot Management test notification."):
+	if not notify_telegram("SilentFlare Bot Management test notification.", bot["id"]):
 		raise HTTPException(status_code=503, detail="Telegram notification could not be sent")
 	return {
 		"ok": True,

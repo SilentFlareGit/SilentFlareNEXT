@@ -28,6 +28,7 @@ SilentFlareNEXT is an Astro/Fuwari front end for a Ghost Headless CMS. Treat thi
 - Astro owns public rendering, RSS, sitemap, layout, search index, and public route shape.
 - Custom management UI route: `/bots/`, also served from `tgbot.silentflare.com` and `tgbotmanagement.silentflare.com`.
 - Custom API domain: `api.silentflare.com`, backed by FastAPI on FNS1.
+- Second managed bot: `Telegram Chat Bot`, backed by the separate MessagesHelperBot service on the Telegram Chat VPS.
 - Ghost Admin API keys are forbidden in this repo. The front end may only use a Ghost Content API key.
 - `GHOST_ALLOW_EMPTY=true` is a local or CI fallback for layout/build checks. It must not be used to prove production content integration.
 
@@ -62,7 +63,9 @@ Current bot auth model:
 - The user selects one bot.
 - Each bot has its own auth method via `auth_method`.
 - `SilentFlare DB Backup` uses `auth_method=telegram` in production.
+- `Telegram Chat Bot` also uses `auth_method=telegram` in production, but it must use its own Telegram bot token and webhook secret. Do not reuse the DB Backup Telegram bot token for this bot.
 - `SilentFlare DB Backup` is the user-facing and canonical bot id. `ghost-db-backup` may still be accepted by the API only as a backwards-compatible alias for older links and checks.
+- `Telegram Chat Bot` is the user-facing bot id for the MessagesHelperBot service. `telegram-chat-bot` and `messages-helper-bot` may be accepted only as backwards-compatible aliases.
 - This bot backs up all databases, not only Ghost content tables. The backup must remain update-proof: schema changes, new tables, new Ghost internals, and future database additions should be fully covered by the same all-database dump path.
 - Telegram authorization creates a one-time pending challenge.
 - The Telegram bot sends an inline approval button to the fixed Owner account.
@@ -114,13 +117,37 @@ API_ADMIN_TOKEN=<server-only fallback admin token>
 TELEGRAM_BOT_TOKEN=<bot token>
 TELEGRAM_OWNER_ID=8737100423
 TELEGRAM_WEBHOOK_SECRET=<webhook receiver token>
+SILENTFLARE_DB_BACKUP_TELEGRAM_BOT_TOKEN=<db-backup-bot-token>
+SILENTFLARE_DB_BACKUP_TELEGRAM_CHAT_ID=<optional-owner-chat-id>
+SILENTFLARE_DB_BACKUP_TELEGRAM_WEBHOOK_SECRET=<db-backup-webhook-secret>
+SILENTFLARE_DB_BACKUP_TELEGRAM_OWNER_ID=8737100423
+TELEGRAM_CHAT_BOT_TOKEN=<messages-helper-bot-token>
+TELEGRAM_CHAT_BOT_CHAT_ID=<optional-owner-chat-id>
+TELEGRAM_CHAT_BOT_WEBHOOK_SECRET=<messages-helper-webhook-secret>
+TELEGRAM_CHAT_BOT_OWNER_ID=8737100423
 SILENTFLARE_DB_BACKUP_AUTH_METHOD=telegram
+TELEGRAM_CHAT_BOT_AUTH_METHOD=telegram
 # Backwards-compatible legacy name if already present:
 GHOST_DB_BACKUP_AUTH_METHOD=telegram
 WEB_COOKIE_SECURE=1
 WEB_SESSION_TTL=43200
 WEB_LOGIN_ATTEMPTS=5
 WEB_LOGIN_WINDOW_SECONDS=900
+```
+
+Legacy `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, and `TELEGRAM_WEBHOOK_SECRET` are DB Backup compatibility fallbacks only. New multi-bot work should use the explicit per-bot variables above.
+
+Telegram Chat Bot remote-control variables for FNS1 API:
+
+```env
+CHAT_BOT_WEB_URL=https://tg.silentflare.com
+CHAT_BOT_APP_DIR=/root/messages_helper_bot
+CHAT_BOT_ENV_FILE=/root/messages_helper_bot/.env
+CHAT_BOT_WEB_SERVICE=messages-helper-web
+CHAT_BOT_BOT_SERVICE=messages-helper-bot
+CHAT_BOT_CONTROL_MODE=ssh
+CHAT_BOT_SSH_TARGET=root@82.139.205.79
+CHAT_BOT_SSH_KEY=/opt/silentflare/api/chatbot_vps_key
 ```
 
 Optional per-bot TOTP fallback variables may exist, for example:
@@ -471,13 +498,15 @@ Do not run this in a way that prints the token.
 
 ## Telegram Webhook Automation
 
-Telegram bot login approval depends on a Bot API webhook:
+Telegram bot login approval depends on Bot API webhooks. In multi-bot mode each managed Telegram bot must use its own bot token and webhook secret:
 
 - FastAPI receiver: `POST /telegram/update?token=<TELEGRAM_WEBHOOK_SECRET>`.
 - Public receiver URL: `https://api.silentflare.com/telegram/update?token=<TELEGRAM_WEBHOOK_SECRET>`.
 - Nginx routes `api.silentflare.com` to FastAPI on `127.0.0.1:9010`.
 - Callback data prefix: `sf_login:`.
 - Only callback queries from `TELEGRAM_OWNER_ID=8737100423` may approve a challenge.
+
+For `Telegram Chat Bot`, use `TELEGRAM_CHAT_BOT_TOKEN` and `TELEGRAM_CHAT_BOT_WEBHOOK_SECRET`; the webhook URL shape stays the same but the token query parameter must be that bot's own webhook secret. For `SilentFlare DB Backup`, prefer `SILENTFLARE_DB_BACKUP_TELEGRAM_BOT_TOKEN` and `SILENTFLARE_DB_BACKUP_TELEGRAM_WEBHOOK_SECRET`, while the older global variables remain compatibility fallbacks.
 
 To check webhook configuration without printing secrets, prefer status-only scripts. Do not paste bot tokens or webhook URLs with tokens into logs or final replies.
 
