@@ -36,6 +36,7 @@ SilentFlareNEXT is an Astro/Fuwari front end for a Ghost Headless CMS. Treat thi
 The bot management surface is split across this repo and FNS1 infrastructure:
 
 - Front end source: `src/pages/bots/index.astro`.
+- Main bot UI component: `src/components/bots/BotApp.svelte`.
 - API source: `server/api/app.py`.
 - API requirements: `server/api/requirements.txt`.
 - Production API service: `silentflare-api.service`.
@@ -47,6 +48,14 @@ The bot management surface is split across this repo and FNS1 infrastructure:
 
 The `/bots/` UI is a standalone management console, not the public blog layout. Do not wrap it in `MainGridLayout`, do not show blog nav/sidebar/footer there, and do not add global username/password login.
 
+Current product state:
+
+- `SilentFlare DB Backup` is considered feature-complete for the current phase.
+- Future work should default to operations, monitoring, verification, small UI polish, and reliability improvements.
+- Avoid large auth, backup, or layout rewrites unless explicitly requested.
+- Keep changes to this surface narrowly scoped to `src/components/bots/BotApp.svelte`, `src/pages/bots/index.astro`, `server/api/app.py`, and directly related tests or docs.
+- The production UI is intentionally a bot-scoped owner console, not a general multi-user dashboard.
+
 Current bot auth model:
 
 - The UI first loads public bot metadata from `GET /bots`.
@@ -57,6 +66,7 @@ Current bot auth model:
 - This bot backs up all databases, not only Ghost content tables. The backup must remain update-proof: schema changes, new tables, new Ghost internals, and future database additions should be fully covered by the same all-database dump path.
 - Telegram authorization creates a one-time pending challenge.
 - The Telegram bot sends an inline approval button to the fixed Owner account.
+- After the Owner approves a login, the API should edit the same Telegram message to show that the approval succeeded and the link is expired. If Telegram's `editMessageText` or `answerCallbackQuery` fails, the webhook must still return `200` after applying the approval state.
 - The web UI polls challenge status and receives a bot-scoped session after approval.
 - Sessions are bound to `bot_id`; a session for one bot must not authorize another bot.
 - Write operations require the session cookie plus `X-CSRF-Token`.
@@ -78,7 +88,9 @@ Important FastAPI endpoints:
 - `GET /auth/telegram/status/{challenge_id}?bot_id=...`: polls approval and creates the session when approved.
 - `POST /telegram/update?token=...`: Telegram webhook receiver for inline button callbacks.
 - `GET /bots/{bot_id}/backup/status`: bot-scoped session required.
+- `GET /bots/{bot_id}/checks/unified`: bot-scoped session required. Returns a single status payload for API service, bot registry, Telegram auth, backup timer, backup directory, recent backup files, GitHub releases, and optional 2FA.
 - `POST /bots/{bot_id}/backup/run`: bot-scoped session and CSRF required, or server-only `X-Admin-Token` fallback.
+- `POST /bots/{bot_id}/backup/schedule`: bot-scoped session and CSRF required, or server-only `X-Admin-Token` fallback. Updates the systemd timer interval.
 
 Do not print values from `/opt/silentflare/api/api.env`. Reading variable names and checking whether a key is present is acceptable.
 
@@ -477,6 +489,13 @@ If the API app changes and Telegram authorization breaks:
 4. Confirm `POST /auth/telegram/start` returns a challenge.
 5. Confirm the Owner Telegram account receives the approval message.
 6. Confirm clicking `Approve login` makes the web UI move into the management view.
+7. Check API logs for `/telegram/update` failures:
+   ```powershell
+   $key = Join-Path $env:USERPROFILE '.ssh\hetzner_cx23'
+   ssh -i $key root@167.233.129.17 'journalctl -u silentflare-api.service --since=-20min --no-pager | tail -n 160'
+   ```
+8. If `/telegram/update` returns `500` after approval, inspect whether optional Telegram calls such as `answerCallbackQuery` or `editMessageText` are raising. Those calls must be non-blocking; approval state should be applied before any optional Telegram feedback.
+9. If the API service was restarted during a login attempt, refresh the web page and start a new Telegram challenge. Login challenges are in memory and are lost on API restart.
 
 Do not use browser username/password login for this surface.
 
@@ -491,7 +510,19 @@ The current bot management surface controls SilentFlare DB Backup:
 - Backup dir: `/opt/silentflare/backups/ghost-db`.
 - Timer: `silentflare-ghost-db-backup.timer`.
 - API status endpoint: `GET /bots/SilentFlare%20DB%20Backup/backup/status`.
+- API unified check endpoint: `GET /bots/SilentFlare%20DB%20Backup/checks/unified`.
 - API trigger endpoint: `POST /bots/SilentFlare%20DB%20Backup/backup/run`.
+- API schedule endpoint: `POST /bots/SilentFlare%20DB%20Backup/backup/schedule`.
+
+Current UI expectations:
+
+- The login flow should show Telegram approval as the primary path.
+- Authenticator 2FA should only show an input form when 2FA is configured; otherwise show a disabled/not-configured state.
+- Do not use green success panels for idle/informational states. Green should be reserved for completed successful operations or transient success toasts.
+- The dashboard should be layered by priority: backup controls and schedule first, GitHub/API checks second, latest files below.
+- Latest backup files should show both Germany/VPS time and Beijing time.
+- The Settings page should keep Authenticator setup under Account security, not as a detached sibling panel.
+- The API unified check card should remain available in the dashboard for operations troubleshooting.
 
 Backup trigger requires a bot-scoped web session plus CSRF, unless using the server-only `X-Admin-Token` fallback. The fallback is for internal checks only and must not be exposed in the front end.
 
