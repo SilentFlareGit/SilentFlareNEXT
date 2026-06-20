@@ -1,7 +1,7 @@
 <script lang="ts">
 // biome-ignore-all lint/suspicious/noExplicitAny: Bot API responses are dynamic and normalized at render boundaries.
 import QRCode from "qrcode";
-import { onDestroy, onMount } from "svelte";
+import { onDestroy, onMount, tick } from "svelte";
 
 export let apiBase = "https://api.silentflare.com";
 
@@ -61,6 +61,8 @@ let chatCommandResult = "";
 let chatUploadFile: File | null = null;
 let chatSearch = "";
 let filteredContacts: any[] = [];
+let chatMessagesPane: HTMLDivElement;
+let lastChatScrollKey = "";
 
 let isSendingTelegram = false;
 let isRunningBackup = false;
@@ -133,6 +135,12 @@ function selectedChatContact() {
 	);
 }
 
+async function scrollChatToLatest() {
+	await tick();
+	if (!chatMessagesPane) return;
+	chatMessagesPane.scrollTop = chatMessagesPane.scrollHeight;
+}
+
 $: {
 	const query = chatSearch.trim().toLowerCase();
 	const contacts = chatData?.contacts ?? [];
@@ -144,6 +152,24 @@ $: {
 					.includes(query),
 			)
 		: contacts;
+}
+
+$: {
+	const messages = chatData?.messages ?? [];
+	const latestMessage = messages.length
+		? messages[messages.length - 1]?.id
+		: "";
+	const scrollKey = `${currentStep}:${activeView}:${selectedBot?.id ?? ""}:${selectedChatUserId ?? ""}:${messages.length}:${latestMessage}`;
+	if (
+		currentStep === "app" &&
+		activeView === "dashboard" &&
+		isChatBot() &&
+		messages.length &&
+		scrollKey !== lastChatScrollKey
+	) {
+		lastChatScrollKey = scrollKey;
+		void scrollChatToLatest();
+	}
 }
 
 function chatMediaUrl(message: any) {
@@ -1004,11 +1030,11 @@ $: toneToClass = (tone: string) => {
 				</header>
 
 				{#if activeView === 'dashboard'}
-					<div class="{isChatBot() ? 'p-3 md:p-4' : 'p-5 md:p-6'} flex flex-col gap-8 animate-in fade-in duration-300">
+					<div class="{isChatBot() ? 'min-h-0 p-3 md:p-4' : 'p-5 md:p-6'} flex flex-col gap-8 animate-in fade-in duration-300">
 						{#if isChatBot()}
-							<div class="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xl shadow-zinc-200/60 dark:border-zinc-800 dark:bg-[#17212b] dark:shadow-black/20">
-								<div class="grid min-h-[calc(100vh-13rem)] grid-cols-1 bg-white dark:bg-[#17212b] lg:grid-cols-[21rem_minmax(0,1fr)] xl:grid-cols-[21rem_minmax(0,1fr)_19rem]">
-									<section class="flex min-h-[24rem] flex-col border-r border-zinc-200 bg-white dark:border-[#253545] dark:bg-[#17212b] lg:min-h-[38rem]">
+							<div class="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xl shadow-zinc-200/60 dark:border-zinc-800 dark:bg-[#17212b] dark:shadow-black/20 lg:h-[calc(100vh-12.5rem)] lg:min-h-[34rem]">
+								<div class="grid min-h-0 grid-cols-1 bg-white dark:bg-[#17212b] lg:h-full lg:grid-cols-[21rem_minmax(0,1fr)] xl:grid-cols-[21rem_minmax(0,1fr)_19rem]">
+									<section class="flex min-h-[24rem] flex-col border-r border-zinc-200 bg-white dark:border-[#253545] dark:bg-[#17212b] lg:h-full lg:min-h-0">
 										<div class="flex items-center gap-3 border-b border-zinc-100 px-4 py-3 dark:border-[#253545]">
 											<div class="grid h-9 w-9 place-items-center rounded-full bg-[#2aabee] text-sm font-bold text-white">SF</div>
 											<div class="min-w-0 flex-1">
@@ -1055,7 +1081,7 @@ $: toneToClass = (tone: string) => {
 									</div>
 									</section>
 
-									<section class="flex min-h-[28rem] flex-col bg-[#e6ebee] dark:bg-[#0e1621] lg:min-h-[38rem]">
+									<section class="flex min-h-[32rem] flex-col bg-[#e6ebee] dark:bg-[#0e1621] lg:h-full lg:min-h-0">
 										<div class="flex items-center gap-3 border-b border-zinc-200 bg-white/95 px-5 py-3 backdrop-blur dark:border-[#253545] dark:bg-[#17212b]/95">
 											<div class="grid h-10 w-10 place-items-center rounded-full bg-gradient-to-br from-[#2aabee] to-[#7c5cff] text-sm font-semibold text-white">
 												{initials(chatData?.profile?.name ?? selectedChatContact()?.name ?? '')}
@@ -1066,7 +1092,7 @@ $: toneToClass = (tone: string) => {
 											</div>
 											<span class="hidden rounded-full bg-zinc-100 px-3 py-1 text-xs font-medium text-zinc-600 dark:bg-[#242f3d] dark:text-zinc-300 sm:inline-flex">{chatData?.settings?.operations_enabled ? 'Web control' : 'Bot takeover'}</span>
 										</div>
-										<div class="telegram-chat-bg min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-5 sm:px-8">
+										<div bind:this={chatMessagesPane} class="telegram-chat-bg min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-5 sm:px-8">
 										{#each chatData?.messages ?? [] as message}
 											<div class="flex {message.direction === 'outbound' ? 'justify-end' : 'justify-start'}">
 												<div class="max-w-[min(78%,42rem)] rounded-2xl px-3.5 py-2 text-[15px] leading-relaxed shadow-sm {message.direction === 'outbound' ? 'rounded-br-md bg-[#2aabee] text-white' : 'rounded-bl-md bg-white text-zinc-900 dark:bg-[#182533] dark:text-zinc-50'}">
@@ -1107,7 +1133,7 @@ $: toneToClass = (tone: string) => {
 									</form>
 									</section>
 
-									<aside class="hidden min-h-[38rem] flex-col border-l border-zinc-200 bg-white dark:border-[#253545] dark:bg-[#17212b] xl:flex">
+									<aside class="hidden h-full min-h-0 flex-col border-l border-zinc-200 bg-white dark:border-[#253545] dark:bg-[#17212b] xl:flex">
 										<div class="border-b border-zinc-100 px-5 py-5 text-center dark:border-[#253545]">
 											<div class="mx-auto grid h-20 w-20 place-items-center rounded-full bg-gradient-to-br from-[#2aabee] to-[#7c5cff] text-xl font-semibold text-white shadow-sm">
 												{initials(chatData?.profile?.name ?? selectedChatContact()?.name ?? '')}
