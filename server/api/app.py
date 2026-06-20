@@ -148,6 +148,34 @@ class TelegramCancelPayload(BaseModel):
 	bot_id: str | None = None
 
 
+class ChatStatePayload(BaseModel):
+	selected: int | None = None
+
+
+class ChatReadPayload(BaseModel):
+	user_id: int
+
+
+class ChatSendPayload(BaseModel):
+	user_id: int
+	text: str
+
+
+class ChatActionPayload(BaseModel):
+	user_id: int
+	action: str
+	minutes: int | None = None
+
+
+class ChatCommandPayload(BaseModel):
+	user_id: int | None = None
+	text: str
+
+
+class ChatNotificationPayload(BaseModel):
+	enabled: bool
+
+
 class TotpEnablePayload(BaseModel):
 	secret: str
 	code: str
@@ -814,6 +842,318 @@ def chat_bot_status_payload() -> dict[str, Any]:
 	}
 
 
+CHAT_PROXY_SCRIPT = r'''
+import base64
+import json
+import os
+import sys
+
+import web
+
+web.load_env_file()
+
+payload = json.loads(base64.b64decode(os.environ["CHAT_PROXY_PAYLOAD_B64"]).decode("utf-8"))
+action = payload.get("action")
+data = payload.get("data") or {}
+bot_config = web.Config.load()
+web_config = web.WebConfig.load()
+store = web.WebStore(bot_config.db_path, bot_config.owner_id)
+store.init()
+api = web.TelegramAPI(bot_config.token, bot_config.request_timeout)
+
+
+def state_payload(selected=None):
+    contacts = [web.contact_payload(row) for row in store.contacts_for_web()]
+    if selected is None and contacts:
+        selected = int(contacts[0]["user_id"])
+    selected_contact = store.get_contact(selected) if selected is not None else None
+    messages = (
+        [web.message_payload(row) for row in store.conversation_for_web(selected)]
+        if selected_contact and selected is not None
+        else []
+    )
+    profile = (
+        next((contact for contact in contacts if int(contact["user_id"]) == selected), None)
+        if selected_contact and selected is not None
+        else None
+    )
+    if selected_contact and profile:
+        ban = store.get_ban(int(selected_contact["user_id"]))
+        pending = store.get_pending(int(selected_contact["user_id"]))
+        exemption = store.get_exemption(int(selected_contact["user_id"]))
+        profile.update(
+            {
+                "ban_text": web.ban_until_text(ban) if ban else "",
+                "pending_since": web.fmt_ts(pending["created_at"]) if pending else "",
+                "exempt_since": web.fmt_ts(exemption["created_at"]) if exemption else "",
+            }
+        )
+    return {
+        "ok": True,
+        "owner_id": bot_config.owner_id,
+        "settings": {
+            "admin_username": web_config.admin_username,
+            "totp_enabled": web_config.totp_enabled,
+            "totp_configured": bool(web_config.totp_secret),
+            "operations_enabled": web_config.operations_enabled,
+            "bot_notifications_enabled": bot_config.owner_tg_notify_enabled,
+            "upload_policy": web.upload_policy_payload(
+                web_config.max_upload_bytes,
+                web_config.blocked_upload_suffixes,
+            ),
+            "commands": [web.web_command_payload(spec) for spec in web.WEB_COMMAND_SPECS],
+        },
+        "contacts": contacts,
+        "unread_total": sum(int(contact.get("unread_count", 0)) for contact in contacts),
+        "selected": selected,
+        "profile": profile,
+        "messages": messages,
+    }
+
+
+def require_writable():
+    if not web_config.operations_enabled:
+        raise RuntimeError("web_operations_disabled")
+
+
+def parse_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def send_message(user_id, text):
+    require_writable()
+    user_id = parse_int(user_id)
+    text = str(text or "").strip()
+    if user_id is None or not text:
+        raise RuntimeError("bad_request")
+    contact = store.get_contact(user_id)
+    if not contact:
+        raise RuntimeError("contact_not_found")
+    ban = store.get_ban(user_id)
+    if ban:
+        raise RuntimeError("user_banned:" + web.ban_until_text(ban))
+    sent = api.send_message(int(contact["chat_id"]), text)
+    store.clear_pending(user_id)
+    store.log_message(
+        "outbound",
+        user_id=user_id,
+        chat_id=int(contact["chat_id"]),
+        text=text,
+        message_type="text",
+        telegram_message_id=int(sent["message_id"]),
+    )
+    return state_payload(user_id)
+
+
+def apply_action(user_id, action_name, minutes=None):
+    require_writable()
+    user_id = parse_int(user_id)
+    if user_id is None:
+        raise RuntimeError("bad_user_id")
+    contact = store.get_contact(user_id)
+    if action_name == "ban":
+        minutes_value = parse_int(minutes) if minutes not in (None, "") else None
+        ban = store.ban(user_id, minutes_value)
+        store.log_message(
+            "ban",
+            user_id=user_id,
+            chat_id=ban["chat_id"] if ban else None,
+            text=f"web ban minutes={minutes_value if minutes_value is not None else 'permanent'}",
+            message_type="admin",
+        )
+        if ban and ban["chat_id"]:
+            try:
+                api.send_message(int(ban["chat_id"]), web.ban_notice(ban))
+            except Exception:
+                pass
+        result = web.ban_until_text(ban) if ban else "Ban failed"
+    elif action_name == "pardon":
+        removed = store.pardon(user_id)
+        store.log_message(
+            "pardon",
+            user_id=user_id,
+            chat_id=contact["chat_id"] if contact else None,
+            text="web pardon",
+            message_type="admin",
+        )
+        if removed and contact:
+            try:
+                api.send_message(int(contact["chat_id"]), "你已被解除封禁，可以重新发送消息。")
+            except Exception:
+                pass
+        result = "已解封" if removed else "未找到封禁记录"
+    elif action_name == "exempt":
+        exemption = store.exempt_pending_limit(user_id)
+        store.log_message(
+            "exempt",
+            user_id=user_id,
+            chat_id=exemption["chat_id"] if exemption else None,
+            text="web pending limit exempted",
+            message_type="admin",
+        )
+        result = "已豁免"
+    elif action_name == "unexempt":
+        removed = store.remove_pending_exemption(user_id)
+        store.log_message(
+            "unexempt",
+            user_id=user_id,
+            chat_id=contact["chat_id"] if contact else None,
+            text="web pending limit exemption removed",
+            message_type="admin",
+        )
+        result = "已取消豁免" if removed else "未找到豁免记录"
+    else:
+        raise RuntimeError("unsupported_action")
+    output = state_payload(user_id)
+    output["notice"] = result
+    return output
+
+
+def global_command_text(command):
+    if command == "/status":
+        return "\n".join(
+            [
+                "MessagesHelperBot status:",
+                "Web operations: " + ("enabled" if web_config.operations_enabled else "disabled"),
+                "Telegram owner admin: " + ("enabled" if bot_config.owner_tg_admin_enabled else "disabled"),
+                "Telegram forwarding: " + ("enabled" if bot_config.owner_tg_forward_enabled else "disabled"),
+                "2FA: " + ("enabled" if web_config.totp_enabled else "disabled"),
+                f"Owner ID: {bot_config.owner_id}",
+            ]
+        )
+    if command == "/help":
+        return web.web_help_text()
+    if command == "/banlist":
+        rows = store.active_bans()
+        if not rows:
+            return "当前没有封禁用户。"
+        lines = ["封禁列表："]
+        for row in rows[:80]:
+            lines.append(
+                f"{row['user_id']} | {web.username_text(row['username'])} | "
+                f"{web.region_text(row['language_code'])} | Premium {web.premium_text(row['is_premium'])} | "
+                f"{web.ban_until_text(row)}"
+            )
+        return "\n".join(lines)
+    if command == "/exemptlist":
+        rows = store.list_pending_exemptions()
+        if not rows:
+            return "当前没有待回复限制豁免用户。"
+        lines = ["待回复限制豁免列表："]
+        for row in rows[:80]:
+            lines.append(
+                f"{row['user_id']} | {web.username_text(row['username'])} | "
+                f"{web.region_text(row['language_code'])} | Premium {web.premium_text(row['is_premium'])} | "
+                f"添加时间 {web.fmt_ts(row['created_at'])}"
+            )
+        return "\n".join(lines)
+    return "未知指令。"
+
+
+def command(payload):
+    text = str(payload.get("text") or "").strip()
+    user_id = parse_int(payload.get("user_id"))
+    if not text:
+        raise RuntimeError("bad_request")
+    parsed = web.parse_web_command_text(text)
+    if parsed is None:
+        return send_message(user_id, text)
+    command_name, args = parsed
+    if command_name in {"/status", "/help", "/banlist", "/exemptlist"}:
+        output = state_payload(user_id)
+        output["command_result"] = global_command_text(command_name)
+        output["notice"] = command_name
+        return output
+    if user_id is None:
+        raise RuntimeError("bad_user_id")
+    if command_name == "/ban":
+        return apply_action(user_id, "ban", args[0] if args else None)
+    if command_name == "/pardon":
+        return apply_action(user_id, "pardon")
+    if command_name == "/exempt":
+        return apply_action(user_id, "exempt")
+    if command_name == "/unexempt":
+        return apply_action(user_id, "unexempt")
+    if command_name == "/blocked":
+        output = state_payload(user_id)
+        output["blocked"] = [web.blocked_payload(row) for row in store.blocked_messages(user_id, limit=20)]
+        return output
+    if command_name == "/user":
+        return state_payload(user_id)
+    if command_name == "/reply":
+        reply_text = " ".join(args).strip()
+        if not reply_text:
+            raise RuntimeError("empty_reply")
+        return send_message(user_id, reply_text)
+    raise RuntimeError("unsupported_command")
+
+
+try:
+    if action == "state":
+        result = state_payload(data.get("selected"))
+    elif action == "read":
+        user_id = parse_int(data.get("user_id"))
+        if user_id is None or not store.get_contact(user_id):
+            raise RuntimeError("bad_user_id")
+        store.mark_conversation_read(user_id)
+        result = state_payload(user_id)
+    elif action == "send":
+        result = send_message(data.get("user_id"), data.get("text"))
+    elif action == "action":
+        result = apply_action(data.get("user_id"), data.get("action"), data.get("minutes"))
+    elif action == "command":
+        result = command(data)
+    elif action == "bot_notifications":
+        require_writable()
+        enabled = bool(data.get("enabled"))
+        web.set_env_file_value("OWNER_TG_NOTIFY_ENABLED", "1" if enabled else "0")
+        result = state_payload(None)
+        result["notice"] = "Bot message previews enabled." if enabled else "Bot message previews disabled."
+    else:
+        raise RuntimeError("unsupported_proxy_action")
+    print(json.dumps(result, ensure_ascii=False))
+except Exception as exc:
+    print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+    sys.exit(2)
+finally:
+    store.conn.close()
+'''
+
+
+def run_chat_proxy(action: str, data: dict[str, Any] | None = None, timeout: int = 60) -> dict[str, Any]:
+	payload = {
+		"action": action,
+		"data": data or {},
+	}
+	payload_b64 = base64.b64encode(json.dumps(payload).encode("utf-8")).decode("ascii")
+	script = f"""
+set -Eeuo pipefail
+cd {json.dumps(CHAT_BOT_APP_DIR)}
+export CHAT_PROXY_PAYLOAD_B64={json.dumps(payload_b64)}
+python3 - <<'PY'
+{CHAT_PROXY_SCRIPT}
+PY
+"""
+	result = run_chat_bot_command(script, timeout=timeout)
+	if result.returncode != 0:
+		try:
+			body = json.loads(result.stdout.strip().splitlines()[-1])
+			detail = body.get("error") or "Chat Bot proxy command failed"
+		except Exception:
+			detail = "Chat Bot proxy command failed"
+		raise HTTPException(status_code=502, detail=detail)
+	try:
+		body = json.loads(result.stdout.strip().splitlines()[-1])
+	except (IndexError, json.JSONDecodeError):
+		raise HTTPException(status_code=502, detail="Invalid Chat Bot proxy response")
+	if not body.get("ok", False):
+		raise HTTPException(status_code=502, detail=body.get("error", "Chat Bot proxy failed"))
+	return body
+
+
 def sha256_file(path: Path) -> str:
 	digest = hashlib.sha256()
 	with path.open("rb") as handle:
@@ -1377,6 +1717,95 @@ def chat_resume_web(
 	if bot["id"] != CHAT_BOT_ID:
 		raise HTTPException(status_code=404, detail="Chat control is not available for this bot")
 	return {"bot_id": bot["id"], **run_chat_bot_control("resume-web")}
+
+
+def ensure_chat_bot_session(
+	bot_id: str,
+	request: Request,
+	x_csrf_token: str | None = None,
+	require_csrf: bool = False,
+) -> dict[str, str]:
+	require_session(
+		request,
+		bot_id=bot_id,
+		x_csrf_token=x_csrf_token,
+		require_csrf=require_csrf,
+	)
+	bot = ensure_bot(bot_id)
+	if bot["id"] != CHAT_BOT_ID:
+		raise HTTPException(status_code=404, detail="Chat console is not available for this bot")
+	return bot
+
+
+def model_payload(model: BaseModel) -> dict[str, Any]:
+	if hasattr(model, "model_dump"):
+		return model.model_dump()
+	return model.dict()
+
+
+@app.get("/bots/{bot_id}/chat/state")
+def chat_state(
+	bot_id: str,
+	request: Request,
+	selected: int | None = None,
+) -> dict[str, Any]:
+	bot = ensure_chat_bot_session(bot_id, request)
+	return {"bot_id": bot["id"], **run_chat_proxy("state", {"selected": selected})}
+
+
+@app.post("/bots/{bot_id}/chat/read")
+def chat_read(
+	bot_id: str,
+	payload: ChatReadPayload,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	bot = ensure_chat_bot_session(bot_id, request, x_csrf_token, True)
+	return {"bot_id": bot["id"], **run_chat_proxy("read", model_payload(payload))}
+
+
+@app.post("/bots/{bot_id}/chat/send")
+def chat_send(
+	bot_id: str,
+	payload: ChatSendPayload,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	bot = ensure_chat_bot_session(bot_id, request, x_csrf_token, True)
+	return {"bot_id": bot["id"], **run_chat_proxy("send", model_payload(payload))}
+
+
+@app.post("/bots/{bot_id}/chat/action")
+def chat_user_action(
+	bot_id: str,
+	payload: ChatActionPayload,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	bot = ensure_chat_bot_session(bot_id, request, x_csrf_token, True)
+	return {"bot_id": bot["id"], **run_chat_proxy("action", model_payload(payload))}
+
+
+@app.post("/bots/{bot_id}/chat/command")
+def chat_command(
+	bot_id: str,
+	payload: ChatCommandPayload,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	bot = ensure_chat_bot_session(bot_id, request, x_csrf_token, True)
+	return {"bot_id": bot["id"], **run_chat_proxy("command", model_payload(payload))}
+
+
+@app.post("/bots/{bot_id}/chat/settings/bot-notifications")
+def chat_bot_notifications(
+	bot_id: str,
+	payload: ChatNotificationPayload,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	bot = ensure_chat_bot_session(bot_id, request, x_csrf_token, True)
+	return {"bot_id": bot["id"], **run_chat_proxy("bot_notifications", model_payload(payload))}
 
 
 @app.post("/settings/totp/generate")

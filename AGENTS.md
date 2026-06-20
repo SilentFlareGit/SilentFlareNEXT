@@ -94,6 +94,14 @@ Important FastAPI endpoints:
 - `GET /bots/{bot_id}/checks/unified`: bot-scoped session required. Returns a single status payload for API service, bot registry, Telegram auth, backup timer, backup directory, recent backup files, GitHub releases, and optional 2FA.
 - `POST /bots/{bot_id}/backup/run`: bot-scoped session and CSRF required, or server-only `X-Admin-Token` fallback.
 - `POST /bots/{bot_id}/backup/schedule`: bot-scoped session and CSRF required, or server-only `X-Admin-Token` fallback. Updates the systemd timer interval.
+- `GET /bots/{bot_id}/chat/state?selected=...`: Telegram Chat Bot console state, bot-scoped session required.
+- `POST /bots/{bot_id}/chat/read`: mark a Telegram Chat Bot conversation read, bot-scoped session and CSRF required.
+- `POST /bots/{bot_id}/chat/send`: send a text reply through Telegram Chat Bot, bot-scoped session and CSRF required.
+- `POST /bots/{bot_id}/chat/command`: run Telegram Chat Bot web commands such as `/status`, `/help`, `/blocked`, `/ban`, and `/reply`, bot-scoped session and CSRF required.
+- `POST /bots/{bot_id}/chat/action`: run contact actions such as ban, pardon, exempt, and unexempt, bot-scoped session and CSRF required.
+- `POST /bots/{bot_id}/chat/settings/bot-notifications`: toggle owner preview notifications for Telegram Chat Bot, bot-scoped session and CSRF required.
+
+The Telegram Chat Bot console in `/bots/` should use the Astro/Svelte management UI, not the legacy `web_static` frontend. The API may reuse the existing MessagesHelperBot Python modules on the Chat VPS, but browser access should stay under the tgbot management surface.
 
 Do not print values from `/opt/silentflare/api/api.env`. Reading variable names and checking whether a key is present is acceptable.
 

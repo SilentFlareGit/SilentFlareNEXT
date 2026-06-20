@@ -48,16 +48,22 @@ let noticeVisible = false;
 
 let backupStatus: any = null;
 let chatStatus: any = null;
+let chatData: any = null;
 let totpQrCanvas: HTMLCanvasElement;
 
 let loginTotpCode = "";
 let enableTotpCode = "";
 let scheduleInterval = 24;
+let selectedChatUserId: number | null = null;
+let chatReplyText = "";
+let chatCommandText = "";
+let chatCommandResult = "";
 
 let isSendingTelegram = false;
 let isRunningBackup = false;
 let isGeneratingTotp = false;
 let isSavingSchedule = false;
+let isSendingChat = false;
 
 function icon(name: string) {
 	if (name === "bot")
@@ -308,6 +314,7 @@ function selectAppBot(bot: any) {
 	dashboardMessageTone = "neutral";
 	if (isChatBot(bot)) {
 		loadChatStatus();
+		loadChatConsole();
 	} else {
 		loadStatus();
 	}
@@ -319,8 +326,10 @@ function startStatusAutoRefresh() {
 	if (statusTimer) return;
 	statusTimer = setInterval(() => {
 		if (document.visibilityState !== "hidden" && selectedBot) {
-			if (isChatBot()) loadChatStatus({ quiet: true });
-			else loadStatus({ quiet: true });
+			if (isChatBot()) {
+				loadChatStatus({ quiet: true });
+				loadChatConsole({ quiet: true });
+			} else loadStatus({ quiet: true });
 			loadUnifiedCheck({ quiet: true });
 		}
 	}, 30000) as any;
@@ -396,6 +405,148 @@ async function loadChatStatus(options: any = {}) {
 		chatMessage = `Unable to load Chat Bot status: ${error.message}`;
 		chatMessageTone = "error";
 		if (!options.quiet) toast("Chat Bot status failed");
+	}
+}
+
+async function loadChatConsole(options: any = {}) {
+	if (!selectedBot || !isChatBot()) return;
+	try {
+		const query =
+			selectedChatUserId == null
+				? ""
+				: `?selected=${encodeURIComponent(String(selectedChatUserId))}`;
+		const result = await api(
+			`/bots/${encodeURIComponent(selectedBot.id)}/chat/state${query}`,
+		);
+		chatData = result;
+		selectedChatUserId = result.selected ?? selectedChatUserId;
+		if (!options.quiet) toast("Chat console loaded");
+	} catch (error: any) {
+		chatMessage = `Unable to load chat console: ${error.message}`;
+		chatMessageTone = "error";
+	}
+}
+
+async function selectChatContact(userId: number) {
+	selectedChatUserId = userId;
+	await loadChatConsole({ quiet: true });
+	await markChatRead();
+}
+
+async function markChatRead() {
+	if (!selectedBot || selectedChatUserId == null) return;
+	try {
+		const result = await api(
+			`/bots/${encodeURIComponent(selectedBot.id)}/chat/read`,
+			{
+				method: "POST",
+				csrf: true,
+				body: JSON.stringify({ user_id: selectedChatUserId }),
+			},
+		);
+		chatData = result;
+	} catch {}
+}
+
+async function sendChatReply(e: Event) {
+	e.preventDefault();
+	if (!selectedBot || selectedChatUserId == null || !chatReplyText.trim())
+		return;
+	isSendingChat = true;
+	try {
+		const path = chatReplyText.trim().startsWith("/") ? "command" : "send";
+		const result = await api(
+			`/bots/${encodeURIComponent(selectedBot.id)}/chat/${path}`,
+			{
+				method: "POST",
+				csrf: true,
+				body: JSON.stringify({
+					user_id: selectedChatUserId,
+					text: chatReplyText.trim(),
+				}),
+			},
+		);
+		chatData = result;
+		chatCommandResult = result.command_result ?? "";
+		chatReplyText = "";
+		toast(path === "command" ? "Command completed" : "Message sent");
+	} catch (error: any) {
+		chatMessage = `Chat send failed: ${error.message}`;
+		chatMessageTone = "error";
+	} finally {
+		isSendingChat = false;
+	}
+}
+
+async function runChatUserAction(
+	action: string,
+	minutes: number | null = null,
+) {
+	if (!selectedBot || selectedChatUserId == null) return;
+	try {
+		const result = await api(
+			`/bots/${encodeURIComponent(selectedBot.id)}/chat/action`,
+			{
+				method: "POST",
+				csrf: true,
+				body: JSON.stringify({
+					user_id: selectedChatUserId,
+					action,
+					minutes,
+				}),
+			},
+		);
+		chatData = result;
+		chatCommandResult = result.notice ?? "";
+		toast(result.notice ?? "Action completed");
+	} catch (error: any) {
+		chatMessage = `Chat action failed: ${error.message}`;
+		chatMessageTone = "error";
+	}
+}
+
+async function runChatCommand(text: string) {
+	if (!selectedBot || !text.trim()) return;
+	try {
+		const result = await api(
+			`/bots/${encodeURIComponent(selectedBot.id)}/chat/command`,
+			{
+				method: "POST",
+				csrf: true,
+				body: JSON.stringify({
+					user_id: selectedChatUserId,
+					text: text.trim(),
+				}),
+			},
+		);
+		chatData = result;
+		chatCommandResult = result.command_result ?? result.notice ?? "";
+		chatCommandText = "";
+		toast("Command completed");
+	} catch (error: any) {
+		chatMessage = `Command failed: ${error.message}`;
+		chatMessageTone = "error";
+	}
+}
+
+async function toggleChatNotifications() {
+	if (!selectedBot || !chatData?.settings) return;
+	try {
+		const result = await api(
+			`/bots/${encodeURIComponent(selectedBot.id)}/chat/settings/bot-notifications`,
+			{
+				method: "POST",
+				csrf: true,
+				body: JSON.stringify({
+					enabled: !chatData.settings.bot_notifications_enabled,
+				}),
+			},
+		);
+		chatData = result;
+		toast(result.notice ?? "Notification setting updated");
+	} catch (error: any) {
+		chatMessage = `Notification update failed: ${error.message}`;
+		chatMessageTone = "error";
 	}
 }
 
@@ -780,82 +931,108 @@ $: toneToClass = (tone: string) => {
 				{#if activeView === 'dashboard'}
 					<div class="p-5 md:p-6 flex flex-col gap-8 animate-in fade-in duration-300">
 						{#if isChatBot()}
-							<div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(24rem,0.85fr)] gap-6">
-								<div class="flex flex-col bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl overflow-hidden shadow-sm">
+							<div class="grid grid-cols-1 xl:grid-cols-[18rem_minmax(0,1fr)_20rem] gap-6">
+								<div class="flex min-h-[32rem] flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
 									<div class="flex items-center justify-between px-4 py-3 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
-										<h2 class="font-semibold text-sm">Chat Bot control</h2>
-										<span class="px-2 py-0.5 text-xs font-medium rounded-full {chatStatus?.health?.ok ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800' : 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 border border-amber-200 dark:border-amber-800'}">
-											{chatStatus?.health?.ok ? 'Reachable' : 'Check'}
-										</span>
+										<h2 class="font-semibold text-sm">Inbox</h2>
+										<span class="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">{chatData?.unread_total ?? 0} unread</span>
 									</div>
-									<div class="p-4 flex flex-col gap-4">
-										<div class="text-sm p-3 rounded-lg border {toneToClass(chatMessageTone)}">{chatMessage}</div>
-										<div class="flex flex-wrap gap-2">
-											<button class="flex items-center gap-2 px-4 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-700 disabled:opacity-50 text-sm font-medium rounded-lg transition-colors shadow-sm" on:click={() => loadChatStatus()} disabled={!selectedBot}>
-												{@html icon("refresh")} Refresh
+									<div class="min-h-0 flex-1 overflow-y-auto p-2">
+										{#each chatData?.contacts ?? [] as contact}
+											<button type="button" class="mb-1 flex w-full flex-col gap-1 rounded-lg border px-3 py-2 text-left transition-colors {selectedChatUserId === contact.user_id ? 'border-indigo-300 bg-indigo-50 text-indigo-950 dark:border-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-100' : 'border-transparent hover:border-zinc-200 hover:bg-zinc-50 dark:hover:border-zinc-700 dark:hover:bg-zinc-800/60'}" on:click={() => selectChatContact(contact.user_id)}>
+												<span class="flex items-center justify-between gap-2">
+													<strong class="truncate text-sm">{contact.name}</strong>
+													{#if contact.unread_count}
+														<span class="rounded-full bg-indigo-600 px-2 py-0.5 text-xs font-semibold text-white">{contact.unread_count}</span>
+													{/if}
+												</span>
+												<span class="truncate text-xs text-zinc-500">{contact.last_text || contact.username || contact.user_id}</span>
+												<span class="flex flex-wrap gap-1 text-[11px] text-zinc-500">
+													{#if contact.pending}<span>pending</span>{/if}
+													{#if contact.banned}<span>banned</span>{/if}
+													{#if contact.exempt}<span>exempt</span>{/if}
+												</span>
 											</button>
-											<button class="flex items-center gap-2 px-4 py-2 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-700 disabled:opacity-50 text-sm font-medium rounded-lg transition-colors shadow-sm" on:click={() => runChatAction("takeover")} disabled={!chatStatus?.control?.configured}>
-												Bot takeover
-											</button>
-											<button class="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors shadow-sm" on:click={() => runChatAction("resume-web")} disabled={!chatStatus?.control?.configured}>
-												Resume Web
-											</button>
-										</div>
-										<div class="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-zinc-100 dark:divide-zinc-800 bg-zinc-50 dark:bg-zinc-800/50 rounded-lg border border-zinc-200 dark:border-zinc-700 text-sm">
-											<div class="p-3">
-												<span class="text-xs text-zinc-500 font-medium">Public health</span>
-												<strong class="mt-1 block truncate">{chatStatus?.health?.status ?? 'Loading'}</strong>
-											</div>
-											<div class="p-3">
-												<span class="text-xs text-zinc-500 font-medium">Web service</span>
-												<strong class="mt-1 block truncate">{chatStatus?.services?.web?.status ?? 'Unknown'}</strong>
-											</div>
-											<div class="p-3">
-												<span class="text-xs text-zinc-500 font-medium">Bot service</span>
-												<strong class="mt-1 block truncate">{chatStatus?.services?.bot?.status ?? 'Unknown'}</strong>
-											</div>
-										</div>
+										{/each}
+										{#if !(chatData?.contacts ?? []).length}
+											<p class="p-4 text-sm text-zinc-500">No contacts yet.</p>
+										{/if}
 									</div>
 								</div>
 
-								<div class="flex flex-col bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl overflow-hidden shadow-sm h-fit">
-									<div class="flex items-center justify-between px-4 py-3 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
-										<h2 class="font-semibold text-sm">Operations mode</h2>
-										<span class="px-2 py-0.5 text-xs font-medium rounded-full bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700">
-											{chatStatus?.control?.mode ?? 'disabled'}
-										</span>
+								<div class="flex min-h-[32rem] flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+									<div class="flex flex-col gap-1 border-b border-zinc-100 bg-zinc-50/50 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-800/30">
+										<h2 class="font-semibold text-sm">{chatData?.profile?.name ?? 'Select a contact'}</h2>
+										<p class="truncate text-xs text-zinc-500">{chatData?.profile ? `${chatData.profile.username} / ${chatData.profile.user_id} / ${chatData.profile.language}` : 'Choose a conversation from the inbox.'}</p>
 									</div>
-									<div class="p-4 flex flex-col gap-3">
-										{#each chatStatus?.flags ?? [] as flag}
-											<div class="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-2 sm:gap-3 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800/50">
-												<span class="truncate font-mono text-xs text-zinc-600 dark:text-zinc-300">{flag.key}</span>
-												<span class="text-xs font-medium text-zinc-700 dark:text-zinc-200">current {flag.current ?? 'unset'}</span>
-												<span class="text-xs text-zinc-500">normal {flag.normal}</span>
-												<span class="text-xs text-zinc-500">takeover {flag.takeover}</span>
+									<div class="min-h-0 flex-1 space-y-3 overflow-y-auto bg-zinc-50/40 p-4 dark:bg-zinc-950/30">
+										{#each chatData?.messages ?? [] as message}
+											<div class="flex {message.direction === 'outbound' ? 'justify-end' : 'justify-start'}">
+												<div class="max-w-[82%] rounded-xl border px-3 py-2 text-sm shadow-sm {message.direction === 'outbound' ? 'border-indigo-200 bg-indigo-600 text-white dark:border-indigo-700' : 'border-zinc-200 bg-white text-zinc-800 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100'}">
+													<p class="whitespace-pre-wrap break-words">{message.text || message.message_type}</p>
+													{#if message.media}
+														<p class="mt-2 rounded-lg bg-black/5 px-2 py-1 text-xs">{message.media.kind}: {message.media.filename}</p>
+													{/if}
+													<p class="mt-1 text-[11px] opacity-70">{message.created_at}</p>
+												</div>
 											</div>
 										{/each}
+										{#if !(chatData?.messages ?? []).length}
+											<p class="rounded-lg border border-zinc-200 bg-white p-4 text-sm text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800">No messages selected.</p>
+										{/if}
+										{#if chatCommandResult}
+											<pre class="whitespace-pre-wrap rounded-lg border border-zinc-200 bg-white p-3 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">{chatCommandResult}</pre>
+										{/if}
 									</div>
+									<form class="border-t border-zinc-100 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900" on:submit={sendChatReply}>
+										<textarea class="min-h-20 w-full resize-y rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-indigo-400 dark:border-zinc-700 dark:bg-zinc-900" bind:value={chatReplyText} placeholder={chatData?.settings?.operations_enabled ? 'Write a reply or /command' : 'Web control is locked'} disabled={!chatData?.profile || !chatData?.settings?.operations_enabled || isSendingChat}></textarea>
+										<div class="mt-2 flex items-center justify-between gap-2">
+											<span class="text-xs text-zinc-500">{chatData?.settings?.operations_enabled ? 'Web control active' : 'Bot takeover active'}</span>
+											<button class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-700 disabled:opacity-50" disabled={!chatData?.profile || !chatReplyText.trim() || !chatData?.settings?.operations_enabled || isSendingChat}>
+												{isSendingChat ? 'Sending' : 'Send'}
+											</button>
+										</div>
+									</form>
 								</div>
-							</div>
 
-							<div class="flex flex-col bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl overflow-hidden shadow-sm h-fit">
-								<div class="flex items-center justify-between px-4 py-3 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
-									<h2 class="font-semibold text-sm">API unified check</h2>
-									<button type="button" class="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700" on:click={() => loadUnifiedCheck()}>
-										{@html icon("refresh")} Check
-									</button>
-								</div>
-								<div class="p-4 flex flex-col gap-4">
-									<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-										{#each unifiedCheck?.checks ?? [] as check}
-											<div class="flex items-center justify-between gap-3 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800/50">
-												<span class="truncate text-zinc-600 dark:text-zinc-300">{check.label}</span>
-												<span class="rounded-full px-2 py-0.5 text-xs font-medium {check.ok ? 'bg-zinc-100 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200' : 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'}">{check.status}</span>
-											</div>
-										{/each}
+								<div class="flex flex-col gap-6">
+									<div class="rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+										<div class="flex items-center justify-between border-b border-zinc-100 px-4 py-3 dark:border-zinc-800">
+											<h2 class="font-semibold text-sm">Contact actions</h2>
+											<span class="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">{chatData?.profile?.ban_text || 'normal'}</span>
+										</div>
+										<div class="grid grid-cols-2 gap-2 p-4">
+											<button class="rounded-lg border border-zinc-200 px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800" disabled={!chatData?.profile || !chatData?.settings?.operations_enabled} on:click={() => runChatUserAction('ban', 30)}>Ban 30m</button>
+											<button class="rounded-lg border border-zinc-200 px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800" disabled={!chatData?.profile || !chatData?.settings?.operations_enabled} on:click={() => runChatUserAction('ban', null)}>Ban forever</button>
+											<button class="rounded-lg border border-zinc-200 px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800" disabled={!chatData?.profile || !chatData?.settings?.operations_enabled} on:click={() => runChatUserAction('pardon')}>Pardon</button>
+											<button class="rounded-lg border border-zinc-200 px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800" disabled={!chatData?.profile || !chatData?.settings?.operations_enabled} on:click={() => runChatUserAction(chatData?.profile?.exempt ? 'unexempt' : 'exempt')}>{chatData?.profile?.exempt ? 'Unexempt' : 'Exempt'}</button>
+										</div>
 									</div>
-									<div class="text-sm p-3 rounded-lg border {toneToClass(unifiedCheckTone)}">
-										{unifiedCheckMessage}
+
+									<div class="rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+										<div class="flex items-center justify-between border-b border-zinc-100 px-4 py-3 dark:border-zinc-800">
+											<h2 class="font-semibold text-sm">Operations</h2>
+											<span class="rounded-full px-2 py-0.5 text-xs {chatStatus?.health?.ok ? 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200' : 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'}">{chatStatus?.health?.status ?? 'check'}</span>
+										</div>
+										<div class="space-y-3 p-4">
+											<div class="text-sm p-3 rounded-lg border {toneToClass(chatMessageTone)}">{chatMessage}</div>
+											<div class="grid grid-cols-2 gap-2 text-sm">
+												<div class="rounded-lg border border-zinc-200 p-2 dark:border-zinc-700"><span class="block text-xs text-zinc-500">Web</span><strong>{chatStatus?.services?.web?.status ?? 'unknown'}</strong></div>
+												<div class="rounded-lg border border-zinc-200 p-2 dark:border-zinc-700"><span class="block text-xs text-zinc-500">Bot</span><strong>{chatStatus?.services?.bot?.status ?? 'unknown'}</strong></div>
+											</div>
+											<div class="flex flex-wrap gap-2">
+												<button class="rounded-lg border border-zinc-200 px-3 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800" on:click={() => { loadChatStatus(); loadChatConsole(); }}>{@html icon("refresh")} Refresh</button>
+												<button class="rounded-lg border border-zinc-200 px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800" on:click={() => runChatAction("takeover")} disabled={!chatStatus?.control?.configured}>Bot takeover</button>
+												<button class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50" on:click={() => runChatAction("resume-web")} disabled={!chatStatus?.control?.configured}>Resume Web</button>
+											</div>
+											<button class="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800" disabled={!chatData?.settings?.operations_enabled} on:click={toggleChatNotifications}>
+												{chatData?.settings?.bot_notifications_enabled ? 'Disable previews' : 'Enable previews'}
+											</button>
+											<form class="flex gap-2" on:submit|preventDefault={() => runChatCommand(chatCommandText)}>
+												<input class="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900" bind:value={chatCommandText} placeholder="/status" />
+												<button class="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700">Run</button>
+											</form>
+										</div>
 									</div>
 								</div>
 							</div>
