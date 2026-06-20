@@ -58,13 +58,22 @@ app.add_middleware(
 	allow_headers=["Content-Type", "X-Admin-Token", "X-CSRF-Token"],
 )
 
+BACKUP_BOT_ID = "SilentFlare DB Backup"
+BACKUP_BOT_ALIASES = {"ghost-db-backup", "silentflare-db-backup"}
+BACKUP_BOT_DESCRIPTION = (
+	"Complete all-database backup that remains valid across schema changes."
+)
+
 BOTS = [
 	{
-		"id": "ghost-db-backup",
+		"id": BACKUP_BOT_ID,
 		"name": "SilentFlare DB Backup",
-		"purpose": "All database backup",
+		"purpose": BACKUP_BOT_DESCRIPTION,
 		"status": "active",
-		"auth_method": os.getenv("GHOST_DB_BACKUP_AUTH_METHOD", "telegram"),
+		"auth_method": os.getenv(
+			"SILENTFLARE_DB_BACKUP_AUTH_METHOD",
+			os.getenv("GHOST_DB_BACKUP_AUTH_METHOD", "telegram"),
+		),
 	}
 ]
 
@@ -134,6 +143,13 @@ def create_session(response: Response, bot_id: str) -> dict[str, str]:
 	return {"bot_id": bot_id, "csrf": csrf}
 
 
+def normalize_bot_id(bot_id: str) -> str:
+	normalized = bot_id.strip()
+	if normalized == BACKUP_BOT_ID or normalized in BACKUP_BOT_ALIASES:
+		return BACKUP_BOT_ID
+	return normalized
+
+
 def destroy_session(request: Request, response: Response) -> None:
 	session_id = request.cookies.get(SESSION_COOKIE, "")
 	if session_id:
@@ -163,7 +179,7 @@ def require_session(
 	require_csrf: bool = False,
 ) -> dict[str, Any]:
 	session = get_session(request)
-	if bot_id is not None and session.get("bot_id") != bot_id:
+	if bot_id is not None and session.get("bot_id") != normalize_bot_id(bot_id):
 		raise HTTPException(status_code=403, detail="Session is not authorized for this bot")
 	if require_csrf and (
 		not x_csrf_token or not hmac.compare_digest(x_csrf_token, session["csrf"])
@@ -306,11 +322,15 @@ def approve_login_challenge(challenge_id: str, telegram_user_id: int) -> bool:
 
 
 def bot_totp_env_name(bot_id: str) -> str:
-	return f"BOT_{bot_id.upper().replace('-', '_')}_TOTP_SECRET"
+	env_key = "".join(ch if ch.isalnum() else "_" for ch in bot_id.upper())
+	return f"BOT_{env_key}_TOTP_SECRET"
 
 
 def bot_totp_secret(bot_id: str) -> str:
-	return os.getenv(bot_totp_env_name(bot_id), "")
+	return os.getenv(
+		bot_totp_env_name(bot_id),
+		os.getenv("BOT_GHOST_DB_BACKUP_TOTP_SECRET", ""),
+	)
 
 
 def console_totp_secret() -> str:
@@ -406,6 +426,7 @@ def require_admin(x_admin_token: str | None) -> None:
 
 
 def ensure_bot(bot_id: str) -> dict[str, str]:
+	bot_id = normalize_bot_id(bot_id)
 	for bot in BOTS:
 		if bot["id"] == bot_id:
 			return bot
@@ -603,9 +624,10 @@ def auth_telegram_status(
 
 @app.post("/auth/telegram/cancel")
 def auth_telegram_cancel(payload: TelegramCancelPayload, request: Request) -> dict[str, Any]:
+	bot = ensure_bot(str(payload.bot_id or ""))
 	challenge = get_login_challenge(
 		payload.challenge_id,
-		str(payload.bot_id or ""),
+		bot["id"],
 		client_key(request),
 	)
 	if challenge["status"] == "pending":
@@ -690,14 +712,14 @@ def settings_totp_enable(
 @app.get("/bots/{bot_id}/backup/status")
 def backup_status(bot_id: str, request: Request) -> dict[str, Any]:
 	require_session(request, bot_id=bot_id)
-	ensure_bot(bot_id)
+	bot = ensure_bot(bot_id)
 	backups = list_backups()
 	return {
-		"bot_id": bot_id,
+		"bot_id": bot["id"],
 		"timer_active": timer_active(),
 		"latest": backups[0] if backups else None,
 		"backups": backups,
-		"message": "Local SilentFlare database backups are available."
+		"message": "Complete SilentFlare database backups are available."
 		if backups
 		else "No local backups found.",
 	}
@@ -719,7 +741,7 @@ def backup_run(
 			x_csrf_token=x_csrf_token,
 			require_csrf=True,
 		)
-	ensure_bot(bot_id)
+	bot = ensure_bot(bot_id)
 	if not BACKUP_SCRIPT.exists():
 		raise HTTPException(status_code=500, detail="Backup script is missing")
 	result = subprocess.run(
@@ -736,16 +758,17 @@ def backup_run(
 	notification_sent = False
 	if latest:
 		notification_sent = notify_telegram(
-			"SilentFlare full MySQL backup completed: "
+			"SilentFlare DB Backup completed an update-proof all-database backup: "
 			f"{latest['filename']} sha256={latest['sha256']} size={latest['size']}"
 		)
-	message = "Backup completed and local file was created."
+	message = "SilentFlare DB Backup completed and local encrypted all-database backup was created."
 	if "upload=uploaded" in result.stdout:
-		message = "Backup completed and encrypted GitHub Release asset was uploaded."
+		message = "SilentFlare DB Backup completed and encrypted all-database GitHub Release asset was uploaded."
 	if latest and not notification_sent:
 		message += " Telegram notification was not sent."
 	return {
 		"ok": True,
+		"bot_id": bot["id"],
 		"latest": latest,
 		"notification_sent": notification_sent,
 		"message": message,
@@ -768,7 +791,7 @@ def telegram_test(
 			x_csrf_token=x_csrf_token,
 			require_csrf=True,
 		)
-	ensure_bot(bot_id)
+	bot = ensure_bot(bot_id)
 	if not TELEGRAM_BOT_TOKEN or not resolve_telegram_chat_id():
 		raise HTTPException(
 			status_code=503,
@@ -776,4 +799,8 @@ def telegram_test(
 		)
 	if not notify_telegram("SilentFlare Bot Management test notification."):
 		raise HTTPException(status_code=503, detail="Telegram notification could not be sent")
-	return {"ok": True, "message": "Telegram test notification sent."}
+	return {
+		"ok": True,
+		"bot_id": bot["id"],
+		"message": "Telegram test notification sent.",
+	}

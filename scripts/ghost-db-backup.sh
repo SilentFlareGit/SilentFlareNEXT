@@ -221,14 +221,14 @@ write_release_notes() {
 	local timestamp="$5"
 	local host="$6"
 	cat > "$notes_file" <<NOTES
-Encrypted Ghost database backup.
+Encrypted SilentFlare DB Backup.
 
 encrypted filename: ${encrypted_name}
 sha256: ${sha}
 size: ${size}
 created_at UTC: ${timestamp}
 hostname: ${host}
-database scope: all-databases
+database scope: all databases, including future schema/table additions
 encryption: age recipient $(recipient_label "$BACKUP_AGE_RECIPIENT")
 NOTES
 }
@@ -247,10 +247,10 @@ run_dummy_github_test() {
 	dummy_file="${test_dir}/github-backup-test-${timestamp}.txt"
 	encrypted_file="${dummy_file}.age"
 	notes_file="${test_dir}/notes.md"
-	tag="backup-pipeline-test-${timestamp}"
-	title="Backup Pipeline Test ${timestamp}"
+	tag="silentflare-db-backup-test-${timestamp}"
+	title="SilentFlare DB Backup Test ${timestamp}"
 	cat > "$dummy_file" <<DUMMY
-SilentFlare backup pipeline dummy test.
+SilentFlare DB Backup pipeline dummy test.
 No production data or secrets are included.
 created_at UTC: ${timestamp}
 DUMMY
@@ -260,7 +260,7 @@ DUMMY
 	size="$(file_size "$encrypted_file")"
 	asset_name="$(basename "$encrypted_file")"
 	cat > "$notes_file" <<NOTES
-Backup Pipeline Test ${timestamp}
+SilentFlare DB Backup Test ${timestamp}
 
 This is a dummy GitHub Release upload test. It contains no production data and no secrets.
 asset: ${asset_name}
@@ -295,7 +295,7 @@ run_backup() {
 	cleanup_plain_file="$plain_file"
 	cleanup_notes_file="$notes_file"
 	tag="ghost-db-${timestamp}"
-	title="Ghost DB Backup ${timestamp}"
+	title="SilentFlare DB Backup ${timestamp}"
 	upload_status="local-only"
 
 	cleanup() {
@@ -356,7 +356,7 @@ hostname: ${host}
 MSG
 )"
 
-	printf 'backup created: %s sha256=%s size=%s scope=all-databases encrypted=age mode=%s upload=%s release=%s local_cleanup="%s" remote_cleanup="%s"\n' "$encrypted_file" "$sha" "$size" "$BACKUP_REMOTE" "$upload_status" "$tag" "$local_cleanup" "$remote_cleanup"
+	printf 'SilentFlare DB Backup created: %s sha256=%s size=%s scope=all-databases update_proof=yes encrypted=age mode=%s upload=%s release=%s local_cleanup="%s" remote_cleanup="%s"\n' "$encrypted_file" "$sha" "$size" "$BACKUP_REMOTE" "$upload_status" "$tag" "$local_cleanup" "$remote_cleanup"
 }
 
 case "${1:-backup}" in

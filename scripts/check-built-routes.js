@@ -38,6 +38,7 @@ const botsHtml = await readFile(path.join("dist", "bots", "index.html"), "utf8")
 const requiredBotNeedles = [
 	"Owner-approved operations",
 	"Send approval request",
+	"SilentFlare DB Backup",
 	"console",
 ];
 const missingBotNeedles = requiredBotNeedles.filter(

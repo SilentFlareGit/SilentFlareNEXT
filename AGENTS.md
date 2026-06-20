@@ -52,7 +52,9 @@ Current bot auth model:
 - The UI first loads public bot metadata from `GET /bots`.
 - The user selects one bot.
 - Each bot has its own auth method via `auth_method`.
-- `ghost-db-backup` uses `auth_method=telegram` in production.
+- `SilentFlare DB Backup` uses `auth_method=telegram` in production.
+- `SilentFlare DB Backup` is the user-facing and canonical bot id. `ghost-db-backup` may still be accepted by the API only as a backwards-compatible alias for older links and checks.
+- This bot backs up all databases, not only Ghost content tables. The backup must remain update-proof: schema changes, new tables, new Ghost internals, and future database additions should be fully covered by the same all-database dump path.
 - Telegram authorization creates a one-time pending challenge.
 - The Telegram bot sends an inline approval button to the fixed Owner account.
 - The web UI polls challenge status and receives a bot-scoped session after approval.
@@ -100,6 +102,8 @@ API_ADMIN_TOKEN=<server-only fallback admin token>
 TELEGRAM_BOT_TOKEN=<bot token>
 TELEGRAM_OWNER_ID=8737100423
 TELEGRAM_WEBHOOK_SECRET=<webhook receiver token>
+SILENTFLARE_DB_BACKUP_AUTH_METHOD=telegram
+# Backwards-compatible legacy name if already present:
 GHOST_DB_BACKUP_AUTH_METHOD=telegram
 WEB_COOKIE_SECURE=1
 WEB_SESSION_TTL=43200
@@ -110,6 +114,8 @@ WEB_LOGIN_WINDOW_SECONDS=900
 Optional per-bot TOTP fallback variables may exist, for example:
 
 ```env
+BOT_SILENTFLARE_DB_BACKUP_TOTP_SECRET=<totp-secret>
+# Backwards-compatible legacy name if already present:
 BOT_GHOST_DB_BACKUP_TOTP_SECRET=<totp-secret>
 ```
 
@@ -357,7 +363,7 @@ Verify bot management origin and API:
 
 ```powershell
 $key = Join-Path $env:USERPROFILE '.ssh\hetzner_cx23'
-ssh -i $key root@167.233.129.17 'set -Eeuo pipefail; echo HEAD=$(git -C /opt/silentflare/app rev-parse --short HEAD); echo STATUS=$(git -C /opt/silentflare/app status --short | wc -l); echo CURRENT=$(readlink -f /opt/silentflare/blog/current); test -f /opt/silentflare/blog/current/bots/index.html && echo BOTS_FILE=present; curl -sS -o /dev/null -w TGBOT=%{http_code} -H Host:tgbot.silentflare.com http://127.0.0.1/; echo; curl -sS -o /dev/null -w TGBOTMGMT=%{http_code} -H Host:tgbotmanagement.silentflare.com http://127.0.0.1/; echo; curl -sS -o /dev/null -w API_BOTS=%{http_code} -H Host:api.silentflare.com http://127.0.0.1/bots; echo; curl -sS -o /dev/null -w API_STATUS_UNAUTH=%{http_code} -H Host:api.silentflare.com http://127.0.0.1/bots/ghost-db-backup/backup/status; echo'
+ssh -i $key root@167.233.129.17 'set -Eeuo pipefail; echo HEAD=$(git -C /opt/silentflare/app rev-parse --short HEAD); echo STATUS=$(git -C /opt/silentflare/app status --short | wc -l); echo CURRENT=$(readlink -f /opt/silentflare/blog/current); test -f /opt/silentflare/blog/current/bots/index.html && echo BOTS_FILE=present; curl -sS -o /dev/null -w TGBOT=%{http_code} -H Host:tgbot.silentflare.com http://127.0.0.1/; echo; curl -sS -o /dev/null -w TGBOTMGMT=%{http_code} -H Host:tgbotmanagement.silentflare.com http://127.0.0.1/; echo; curl -sS -o /dev/null -w API_BOTS=%{http_code} -H Host:api.silentflare.com http://127.0.0.1/bots; echo; curl -sS -o /dev/null -w API_STATUS_UNAUTH=%{http_code} -H Host:api.silentflare.com "http://127.0.0.1/bots/SilentFlare%20DB%20Backup/backup/status"; echo'
 ```
 
 Expected:
@@ -416,7 +422,7 @@ python3 - <<'PY'
 import json
 import urllib.request
 
-payload = json.dumps({"bot_id": "ghost-db-backup"}).encode()
+payload = json.dumps({"bot_id": "SilentFlare DB Backup"}).encode()
 req = urllib.request.Request("http://127.0.0.1:9010/auth/telegram/start", data=payload, method="POST")
 req.add_header("Content-Type", "application/json")
 with urllib.request.urlopen(req, timeout=60) as resp:
@@ -474,16 +480,18 @@ If the API app changes and Telegram authorization breaks:
 
 Do not use browser username/password login for this surface.
 
-## Ghost Database Backup Bot
+## SilentFlare DB Backup Bot
 
-The current bot management surface controls Ghost DB backups:
+The current bot management surface controls SilentFlare DB Backup:
 
-- Bot id: `ghost-db-backup`.
+- Bot id/display name: `SilentFlare DB Backup`.
+- Legacy API alias: `ghost-db-backup`.
+- Scope: complete all-database backup. It must dump all databases with routines, events, triggers, and schema so future Ghost/database updates are covered without changing the backup selector.
 - Backup script: `/opt/silentflare/deploy/ghost-db-backup.sh`.
 - Backup dir: `/opt/silentflare/backups/ghost-db`.
 - Timer: `silentflare-ghost-db-backup.timer`.
-- API status endpoint: `GET /bots/ghost-db-backup/backup/status`.
-- API trigger endpoint: `POST /bots/ghost-db-backup/backup/run`.
+- API status endpoint: `GET /bots/SilentFlare%20DB%20Backup/backup/status`.
+- API trigger endpoint: `POST /bots/SilentFlare%20DB%20Backup/backup/run`.
 
 Backup trigger requires a bot-scoped web session plus CSRF, unless using the server-only `X-Admin-Token` fallback. The fallback is for internal checks only and must not be exposed in the front end.
 

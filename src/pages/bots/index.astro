@@ -843,7 +843,7 @@ const apiBase =
 				</div>
 				<div class="login-copy">
 					<h1>Owner-approved operations</h1>
-					<p>Telegram Bot Management uses bot-scoped approval before opening the console.</p>
+					<p>SilentFlare DB Backup uses bot-scoped approval before opening the console.</p>
 				</div>
 				<div id="bot-step" class="method-grid">
 					<section class="method-card">
@@ -1116,6 +1116,14 @@ const apiBase =
 				return `<svg class="icon"><use href="#icon-${name}"></use></svg>`;
 			}
 
+			function botLabel(bot) {
+				return bot?.name || bot?.id || "Selected bot";
+			}
+
+			function botPath(bot) {
+				return encodeURIComponent(bot.id);
+			}
+
 			function setMessage(node, message, tone = "neutral") {
 				node.textContent = message;
 				node.dataset.tone = tone;
@@ -1174,7 +1182,7 @@ const apiBase =
 					button.className = "bot-card";
 					button.setAttribute("aria-pressed", String(state.selectedBot?.id === bot.id));
 					button.innerHTML = `<span class="bot-icon">${icon("bot")}</span><span><strong></strong><small></small></span>`;
-					button.querySelector("strong").textContent = bot.id;
+					button.querySelector("strong").textContent = botLabel(bot);
 					button.querySelector("small").textContent = `${bot.purpose} / ${bot.status}`;
 					button.addEventListener("click", () => selectLoginBot(bot));
 					nodes.loginBotList.append(button);
@@ -1199,7 +1207,7 @@ const apiBase =
 				if (!state.selectedBot) return;
 				nodes.botStep.classList.add("hidden");
 				nodes.authStep.classList.remove("hidden");
-				nodes.authTitle.textContent = `Verify ${state.selectedBot.id}`;
+				nodes.authTitle.textContent = `Verify ${botLabel(state.selectedBot)}`;
 				nodes.authSubtitle.textContent = `${state.selectedBot.purpose} / ${state.selectedBot.status}`;
 				setAuthControlsEnabled(true);
 				setMessage(nodes.loginMessageAuth, "Choose Telegram approval or 2FA to continue.", "neutral");
@@ -1344,7 +1352,7 @@ const apiBase =
 				renderBots();
 				renderActivity();
 				if (state.selectedBot) selectBot(state.selectedBot);
-				addActivity("Bot access verified", state.selectedBot?.id ?? "", "success");
+				addActivity("Bot access verified", botLabel(state.selectedBot), "success");
 			}
 
 			function renderBots() {
@@ -1362,7 +1370,7 @@ const apiBase =
 					button.className = "bot-card";
 					button.setAttribute("aria-pressed", String(state.selectedBot?.id === bot.id));
 					button.innerHTML = `<span class="bot-icon">${icon("bot")}</span><span><strong></strong><small></small></span>`;
-					button.querySelector("strong").textContent = bot.id;
+					button.querySelector("strong").textContent = botLabel(bot);
 					button.querySelector("small").textContent = `${bot.purpose} / ${bot.status}`;
 					button.addEventListener("click", () => selectBot(bot));
 					nodes.botList.append(button);
@@ -1371,16 +1379,16 @@ const apiBase =
 
 			function selectBot(bot) {
 				state.selectedBot = bot;
-				nodes.pageTitle.textContent = bot.name;
-				nodes.pageSubtitle.textContent = `Managing ${bot.id}. Operations require this Owner session and CSRF.`;
+				nodes.pageTitle.textContent = botLabel(bot);
+				nodes.pageSubtitle.textContent = "Complete all-database backups remain valid across Ghost and schema updates.";
 				nodes.selectedStatus.textContent = bot.status;
 				nodes.selectedStatus.className = "chip";
-				setMessage(nodes.selectedMessage, `${bot.purpose} backend loaded for ${bot.id}.`, "success");
+				setMessage(nodes.selectedMessage, `${bot.purpose} backend loaded for ${botLabel(bot)}.`, "success");
 				for (const button of [nodes.refreshStatus, nodes.telegramTest, nodes.runBackup]) button.disabled = false;
 				renderBots();
 				loadStatus();
 				startStatusAutoRefresh();
-				addActivity("Bot selected", bot.id, "neutral");
+				addActivity("Bot selected", botLabel(bot), "neutral");
 			}
 
 			function startStatusAutoRefresh() {
@@ -1440,9 +1448,9 @@ const apiBase =
 			async function loadStatus(options = {}) {
 				if (!state.selectedBot) return;
 				try {
-					const status = await api(`/bots/${state.selectedBot.id}/backup/status`);
+					const status = await api(`/bots/${botPath(state.selectedBot)}/backup/status`);
 					renderStatus(status);
-					if (!options.quiet) addActivity("Backup status loaded", state.selectedBot.id, "success");
+					if (!options.quiet) addActivity("Backup status loaded", botLabel(state.selectedBot), "success");
 				} catch (error) {
 					setMessage(nodes.selectedMessage, `Unable to load backup status: ${error.message}`, "error");
 					if (!options.quiet) addActivity("Backup status failed", error.message, "error");
@@ -1453,14 +1461,14 @@ const apiBase =
 				if (!state.selectedBot) return;
 				nodes.runBackup.disabled = true;
 				setMessage(nodes.selectedMessage, "Backup job started.");
-				addActivity("Backup started", state.selectedBot.id, "pending");
+				addActivity("Backup started", botLabel(state.selectedBot), "pending");
 				try {
-					const result = await api(`/bots/${state.selectedBot.id}/backup/run`, {
+					const result = await api(`/bots/${botPath(state.selectedBot)}/backup/run`, {
 						method: "POST",
 						csrf: true,
 					});
 					setMessage(nodes.selectedMessage, result.message ?? "Backup completed.", "success");
-					addActivity("Backup completed", result.latest?.filename ?? state.selectedBot.id, "success");
+					addActivity("Backup completed", result.latest?.filename ?? botLabel(state.selectedBot), "success");
 					await loadStatus({ quiet: true });
 				} catch (error) {
 					setMessage(nodes.selectedMessage, `Backup failed: ${error.message}`, "error");
@@ -1474,12 +1482,12 @@ const apiBase =
 				if (!state.selectedBot) return;
 				nodes.telegramTest.disabled = true;
 				try {
-					const result = await api(`/bots/${state.selectedBot.id}/telegram/test`, {
+					const result = await api(`/bots/${botPath(state.selectedBot)}/telegram/test`, {
 						method: "POST",
 						csrf: true,
 					});
 					setMessage(nodes.selectedMessage, result.message ?? "Telegram test notification sent.", "success");
-					addActivity("Telegram test sent", state.selectedBot.id, "success");
+					addActivity("Telegram test sent", botLabel(state.selectedBot), "success");
 				} catch (error) {
 					setMessage(nodes.selectedMessage, `Telegram test failed: ${error.message}`, "error");
 					addActivity("Telegram test failed", error.message, "error");

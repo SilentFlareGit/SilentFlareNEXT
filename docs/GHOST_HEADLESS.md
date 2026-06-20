@@ -135,9 +135,11 @@ readlink -f /opt/silentflare/blog/current
 tail -n 120 /var/log/silentflare-deploy.log
 ```
 
-### FNS1 Ghost Database Backups
+### FNS1 SilentFlare DB Backup
 
-FNS1 creates encrypted Ghost/MySQL backups with `/opt/silentflare/deploy/ghost-db-backup.sh`. Runtime settings live in `/opt/silentflare/deploy/ghost-db-backup.env`, which must stay `0600 root root`. Do not copy that env file into this repository and do not print its values in logs.
+FNS1 creates encrypted all-database backups through the `SilentFlare DB Backup` bot and `/opt/silentflare/deploy/ghost-db-backup.sh`. Runtime settings live in `/opt/silentflare/deploy/ghost-db-backup.env`, which must stay `0600 root root`. Do not copy that env file into this repository and do not print its values in logs.
+
+The backup is intentionally update-proof: it dumps all databases with schema, routines, events, and triggers so future Ghost updates, new tables, and database layout changes remain covered without selecting individual tables.
 
 The backup chain is intentionally conservative:
 
