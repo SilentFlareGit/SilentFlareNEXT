@@ -484,8 +484,7 @@ async function loadPublicBots() {
 		const list = await api("/bots", { lockOnAuthFailure: false });
 		bots = list.bots ?? [];
 		if (currentStep === "app") return;
-		const remembered = sessionStorage.getItem("silentflare_selected_bot");
-		selectedBot = bots.find((b: any) => b.id === remembered) ?? null;
+		selectedBot = null;
 		loginMessage = "Select a bot to continue to verification.";
 		loginMessageTone = "neutral";
 	} catch (error: any) {
@@ -518,7 +517,7 @@ onMount(async () => {
 		await enterApp(session);
 	} catch {
 		await botsPromise;
-		currentStep = selectedBot ? "auth" : "bot";
+		currentStep = "bot";
 	} finally {
 		await optionsPromise;
 		isBooting = false;
