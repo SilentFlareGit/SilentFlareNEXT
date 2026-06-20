@@ -343,14 +343,17 @@ def edit_login_approval_message(challenge: dict[str, Any], approved: bool) -> No
 
 
 def answer_callback(callback_id: str, text: str, alert: bool = False) -> None:
-	telegram_api(
-		"answerCallbackQuery",
-		{
-			"callback_query_id": callback_id,
-			"text": text,
-			"show_alert": alert,
-		},
-	)
+	try:
+		telegram_api(
+			"answerCallbackQuery",
+			{
+				"callback_query_id": callback_id,
+				"text": text,
+				"show_alert": alert,
+			},
+		)
+	except Exception:
+		pass
 
 
 def approve_login_challenge(challenge_id: str, telegram_user_id: int) -> bool:
