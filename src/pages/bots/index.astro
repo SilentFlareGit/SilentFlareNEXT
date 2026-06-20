@@ -289,6 +289,7 @@ const apiBase =
 				padding: 0.75rem 0.85rem;
 				font-size: 0.84rem;
 				line-height: 1.45;
+				overflow-wrap: anywhere;
 			}
 
 			.message[data-tone="success"] {
@@ -313,7 +314,9 @@ const apiBase =
 				display: grid;
 				grid-template-columns: 16rem minmax(0, 1fr);
 				gap: 1rem;
+				width: min(100%, 92rem);
 				height: 100vh;
+				margin: 0 auto;
 				padding: 1rem;
 			}
 
@@ -501,9 +504,14 @@ const apiBase =
 				align-items: center;
 				justify-content: space-between;
 				gap: 1rem;
+				flex-wrap: wrap;
 				min-height: 4.5rem;
 				border-bottom: 1px solid var(--line);
 				padding: 1rem 1.5rem;
+			}
+
+			.topbar > div {
+				min-width: min(100%, 22rem);
 			}
 
 			.topbar h1 {
@@ -540,6 +548,9 @@ const apiBase =
 			}
 
 			.content {
+				display: grid;
+				align-content: start;
+				gap: 1rem;
 				min-height: 0;
 				overflow: auto;
 				padding: 1rem 1.5rem;
@@ -564,6 +575,7 @@ const apiBase =
 				align-items: center;
 				justify-content: space-between;
 				gap: 0.75rem;
+				flex-wrap: wrap;
 				min-height: 3.2rem;
 				border-bottom: 1px solid var(--line-soft);
 				padding: 0.78rem 1rem;
@@ -585,6 +597,10 @@ const apiBase =
 				gap: 0.55rem;
 			}
 
+			.action-row .button {
+				flex: 1 1 9.5rem;
+			}
+
 			.metric-grid {
 				display: grid;
 				grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -595,6 +611,7 @@ const apiBase =
 			}
 
 			.metric {
+				min-width: 0;
 				min-height: 4.8rem;
 				border-left: 1px solid var(--line-soft);
 				padding: 0.75rem;
@@ -621,7 +638,7 @@ const apiBase =
 
 			table {
 				width: 100%;
-				min-width: 48rem;
+				min-width: 44rem;
 				border-collapse: collapse;
 				font-size: 0.82rem;
 			}
@@ -635,6 +652,9 @@ const apiBase =
 			}
 
 			th {
+				position: sticky;
+				top: 0;
+				z-index: 1;
 				color: var(--muted);
 				font-size: 0.72rem;
 				font-weight: 800;
@@ -642,6 +662,7 @@ const apiBase =
 			}
 
 			.table-wrap {
+				max-width: 100%;
 				overflow: auto;
 				border-radius: var(--radius);
 				-webkit-overflow-scrolling: touch;
@@ -659,13 +680,13 @@ const apiBase =
 
 			.activity {
 				display: grid;
-				max-height: 14rem;
+				max-height: clamp(12rem, 28vh, 16rem);
 				overflow: auto;
 			}
 
 			.activity-row {
 				display: grid;
-				grid-template-columns: 5.5rem minmax(0, 1fr) 5.5rem;
+				grid-template-columns: 4.8rem minmax(0, 1fr) auto;
 				gap: 0.75rem;
 				align-items: center;
 				border-top: 1px solid var(--line-soft);
@@ -683,6 +704,11 @@ const apiBase =
 				overflow: hidden;
 				color: var(--text);
 				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
+
+			.activity-row span:last-child {
+				justify-self: end;
 				white-space: nowrap;
 			}
 
@@ -777,6 +803,17 @@ const apiBase =
 				}
 			}
 
+			@media (max-width: 900px) {
+				.metric-grid {
+					grid-template-columns: repeat(3, minmax(8rem, 1fr));
+					overflow-x: auto;
+				}
+
+				.panel-body {
+					padding: 0.85rem;
+				}
+			}
+
 			@media (max-width: 720px) {
 				.topbar,
 				.method-head {
@@ -785,6 +822,7 @@ const apiBase =
 				}
 
 				.content {
+					gap: 0.85rem;
 					padding: 0.85rem;
 				}
 
@@ -802,9 +840,13 @@ const apiBase =
 				}
 
 				.code-row,
-				.metric-grid,
 				.activity-row {
 					grid-template-columns: 1fr;
+				}
+
+				.metric-grid {
+					grid-template-columns: 1fr;
+					overflow: hidden;
 				}
 
 				.metric {
@@ -818,6 +860,62 @@ const apiBase =
 
 				.button {
 					width: 100%;
+				}
+			}
+
+			@media (max-width: 540px) {
+				.login-card,
+				.rail,
+				.shell,
+				.panel {
+					border-radius: 12px;
+				}
+
+				.login-card {
+					padding: 1rem;
+				}
+
+				.brand-mark {
+					width: 2.35rem;
+					height: 2.35rem;
+					border-radius: var(--radius);
+				}
+
+				.nav {
+					grid-template-columns: 1fr;
+				}
+
+				.bot-list {
+					grid-template-columns: 1fr;
+				}
+
+				.topbar {
+					min-height: 0;
+					padding: 0.9rem;
+				}
+
+				.panel-head {
+					padding: 0.75rem 0.85rem;
+				}
+
+				table {
+					min-width: 38rem;
+				}
+			}
+
+			@media (max-width: 420px) {
+				.app,
+				.login-page {
+					padding: 0.5rem;
+				}
+
+				.content,
+				.panel-body {
+					padding: 0.75rem;
+				}
+
+				.login-card h1 {
+					font-size: 1.7rem;
 				}
 			}
 		</style>
@@ -981,7 +1079,7 @@ const apiBase =
 						</section>
 					</div>
 
-					<section class="panel" style="margin-top: 1rem">
+					<section class="panel">
 						<div class="panel-head">
 							<h2>Recent backups</h2>
 							<span id="backup-auto" class="chip neutral">Auto refresh paused</span>
