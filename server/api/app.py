@@ -26,6 +26,16 @@ BACKUP_SCRIPT = Path(
 	os.getenv("BACKUP_SCRIPT", "/opt/silentflare/deploy/ghost-db-backup.sh")
 )
 BACKUP_DIR = Path(os.getenv("BACKUP_DIR", "/opt/silentflare/backups/ghost-db"))
+BACKUP_ENV_FILE = Path(
+	os.getenv("BACKUP_ENV_FILE", "/opt/silentflare/deploy/ghost-db-backup.env")
+)
+BACKUP_TIMER_NAME = "silentflare-ghost-db-backup.timer"
+BACKUP_TIMER_OVERRIDE = Path(
+	os.getenv(
+		"BACKUP_TIMER_OVERRIDE",
+		f"/etc/systemd/system/{BACKUP_TIMER_NAME}.d/override.conf",
+	)
+)
 ADMIN_TOKEN = os.getenv("API_ADMIN_TOKEN", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -100,6 +110,10 @@ class TelegramCancelPayload(BaseModel):
 class TotpEnablePayload(BaseModel):
 	secret: str
 	code: str
+
+
+class BackupSchedulePayload(BaseModel):
+	interval_hours: int
 
 
 def cleanup_sessions() -> None:
@@ -473,14 +487,161 @@ def list_backups() -> list[dict[str, Any]]:
 	]
 
 
+def backup_timer_unit_name() -> str:
+	return BACKUP_TIMER_NAME
+
+
+def timer_schedule_options() -> list[dict[str, Any]]:
+	return [
+		{"interval_hours": 1, "label": "Every hour", "on_calendar": "*-*-* *:00:00"},
+		{"interval_hours": 3, "label": "Every 3 hours", "on_calendar": "*-*-* 00/3:00:00"},
+		{"interval_hours": 6, "label": "Every 6 hours", "on_calendar": "*-*-* 00/6:00:00"},
+		{"interval_hours": 12, "label": "Every 12 hours", "on_calendar": "*-*-* 00/12:00:00"},
+		{"interval_hours": 24, "label": "Daily", "on_calendar": "*-*-* 00:00:00"},
+	]
+
+
+def schedule_option_for_interval(interval_hours: int) -> dict[str, Any]:
+	for option in timer_schedule_options():
+		if option["interval_hours"] == interval_hours:
+			return option
+	raise HTTPException(status_code=400, detail="Unsupported backup interval")
+
+
+def parse_timer_value(raw: str) -> str:
+	value = raw.strip()
+	if not value or value == "n/a":
+		return ""
+	return value
+
+
+def read_timer_schedule() -> dict[str, Any]:
+	unit = backup_timer_unit_name()
+	result = subprocess.run(
+		[
+			"systemctl",
+			"show",
+			unit,
+			"-p",
+			"ActiveState",
+			"-p",
+			"NextElapseUSecRealtime",
+			"-p",
+			"LastTriggerUSec",
+			"-p",
+			"LastTriggerUSecRealtime",
+		],
+		check=False,
+		capture_output=True,
+		text=True,
+		timeout=10,
+	)
+	values: dict[str, str] = {}
+	for line in result.stdout.splitlines():
+		key, _, value = line.partition("=")
+		values[key] = value
+	cat = subprocess.run(
+		["systemctl", "cat", unit],
+		check=False,
+		capture_output=True,
+		text=True,
+		timeout=10,
+	)
+	on_calendar = ""
+	for line in cat.stdout.splitlines():
+		if line.startswith("OnCalendar=") and line != "OnCalendar=":
+			on_calendar = line.partition("=")[2].strip()
+	interval_hours = None
+	for option in timer_schedule_options():
+		if option["on_calendar"] == on_calendar:
+			interval_hours = option["interval_hours"]
+			break
+	return {
+		"active": values.get("ActiveState") == "active",
+		"unit": unit,
+		"interval_hours": interval_hours,
+		"on_calendar": on_calendar,
+		"next_run": parse_timer_value(values.get("NextElapseUSecRealtime", "")),
+		"last_run": parse_timer_value(
+			values.get("LastTriggerUSecRealtime", "")
+			or values.get("LastTriggerUSec", "")
+		),
+		"options": timer_schedule_options(),
+	}
+
+
+def write_timer_schedule(interval_hours: int) -> dict[str, Any]:
+	option = schedule_option_for_interval(interval_hours)
+	BACKUP_TIMER_OVERRIDE.parent.mkdir(parents=True, exist_ok=True)
+	BACKUP_TIMER_OVERRIDE.write_text(
+		"\n".join(
+			[
+				"[Timer]",
+				"OnCalendar=",
+				f"OnCalendar={option['on_calendar']}",
+				"",
+			]
+		),
+		encoding="utf-8",
+	)
+	for command in (
+		["systemctl", "daemon-reload"],
+		["systemctl", "restart", backup_timer_unit_name()],
+	):
+		result = subprocess.run(
+			command,
+			check=False,
+			capture_output=True,
+			text=True,
+			timeout=20,
+		)
+		if result.returncode != 0:
+			raise HTTPException(status_code=500, detail="Unable to update backup timer")
+	return read_timer_schedule()
+
+
 def timer_active() -> bool:
 	result = subprocess.run(
-		["systemctl", "is-active", "silentflare-ghost-db-backup.timer"],
+		["systemctl", "is-active", backup_timer_unit_name()],
 		check=False,
 		capture_output=True,
 		text=True,
 	)
 	return result.stdout.strip() == "active"
+
+
+def github_backup_status() -> dict[str, Any]:
+	if not BACKUP_ENV_FILE.exists():
+		return {"configured": False, "latest": None, "error": "Backup env file is missing"}
+	script = f"""
+set -Eeuo pipefail
+set -a
+. {BACKUP_ENV_FILE}
+set +a
+if [ "${{BACKUP_REMOTE:-}}" != "github_release" ] || [ -z "${{GH_TOKEN:-}}" ] || [ -z "${{GITHUB_REPO:-}}" ]; then
+  printf '{{"configured":false,"latest":null}}'
+  exit 0
+fi
+tag="$(GH_TOKEN="$GH_TOKEN" gh release list --repo "$GITHUB_REPO" --limit 20 --json tagName,publishedAt --jq '[.[] | select(.tagName | test("^(SilentFLare-DB-Backup|ghost-db)-[0-9]{{8}}T[0-9]{{6}}Z$"))] | sort_by(.publishedAt) | reverse | .[0].tagName')"
+if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+  printf '{{"configured":true,"latest":null}}'
+  exit 0
+fi
+GH_TOKEN="$GH_TOKEN" gh release view "$tag" --repo "$GITHUB_REPO" --json tagName,name,publishedAt,url --jq '{{configured:true,latest:.}}'
+"""
+	result = subprocess.run(
+		["bash", "-lc", script],
+		check=False,
+		capture_output=True,
+		text=True,
+		timeout=30,
+	)
+	if result.returncode != 0:
+		return {"configured": True, "latest": None, "error": "Unable to read GitHub backup releases"}
+	try:
+		return json.loads(result.stdout)
+	except json.JSONDecodeError:
+		return {"configured": True, "latest": None, "error": "Invalid GitHub release response"}
 
 
 def resolve_telegram_chat_id() -> str:
@@ -712,18 +873,52 @@ def settings_totp_enable(
 
 
 @app.get("/bots/{bot_id}/backup/status")
-def backup_status(bot_id: str, request: Request) -> dict[str, Any]:
-	require_session(request, bot_id=bot_id)
+def backup_status(
+	bot_id: str,
+	request: Request,
+	x_admin_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	if x_admin_token:
+		require_admin(x_admin_token)
+	else:
+		require_session(request, bot_id=bot_id)
 	bot = ensure_bot(bot_id)
 	backups = list_backups()
 	return {
 		"bot_id": bot["id"],
 		"timer_active": timer_active(),
+		"schedule": read_timer_schedule(),
+		"github": github_backup_status(),
 		"latest": backups[0] if backups else None,
-		"backups": backups,
+		"backups": backups[:5],
 		"message": "Complete SilentFlare database backups are available."
 		if backups
 		else "No local backups found.",
+	}
+
+
+@app.post("/bots/{bot_id}/backup/schedule")
+def backup_schedule_update(
+	bot_id: str,
+	payload: BackupSchedulePayload,
+	request: Request,
+	x_admin_token: str | None = Header(default=None),
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	if x_admin_token:
+		require_admin(x_admin_token)
+	else:
+		require_session(
+			request,
+			bot_id=bot_id,
+			x_csrf_token=x_csrf_token,
+			require_csrf=True,
+		)
+	bot = ensure_bot(bot_id)
+	return {
+		"ok": True,
+		"bot_id": bot["id"],
+		"schedule": write_timer_schedule(payload.interval_hours),
 	}
 
 

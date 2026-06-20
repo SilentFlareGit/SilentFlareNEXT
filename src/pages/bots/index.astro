@@ -229,7 +229,24 @@ const apiBase =
 				outline: none;
 			}
 
+			select {
+				width: 100%;
+				min-height: 2.75rem;
+				border: 1px solid var(--line);
+				border-radius: var(--radius);
+				background: #ffffff;
+				color: var(--text);
+				padding: 0 0.85rem;
+				font: inherit;
+				outline: none;
+			}
+
 			input:focus {
+				border-color: var(--primary);
+				box-shadow: 0 0 0 4px color-mix(in oklch, var(--primary) 18%, transparent);
+			}
+
+			select:focus {
 				border-color: var(--primary);
 				box-shadow: 0 0 0 4px color-mix(in oklch, var(--primary) 18%, transparent);
 			}
@@ -322,7 +339,7 @@ const apiBase =
 
 			.rail {
 				display: grid;
-				grid-template-rows: auto auto 1fr auto;
+				grid-template-rows: auto auto 1fr;
 				min-width: 0;
 				overflow: hidden;
 				border: 1px solid var(--line);
@@ -557,6 +574,12 @@ const apiBase =
 			}
 
 			.grid {
+				display: grid;
+				grid-template-columns: minmax(20rem, 0.9fr) minmax(22rem, 1.1fr);
+				gap: 1rem;
+			}
+
+			.summary-grid {
 				display: grid;
 				grid-template-columns: minmax(20rem, 0.9fr) minmax(22rem, 1.1fr);
 				gap: 1rem;
@@ -798,6 +821,7 @@ const apiBase =
 				}
 
 				.grid,
+				.summary-grid,
 				.settings-grid {
 					grid-template-columns: 1fr;
 				}
@@ -1016,10 +1040,6 @@ const apiBase =
 						<span>Settings</span>
 					</button>
 				</nav>
-				<div>
-					<p class="nav-label">Bots</p>
-					<div id="bot-list" class="bot-list"></div>
-				</div>
 				<div class="rail-status">
 					<div><strong id="rail-api">API online</strong></div>
 					<div>Session: <strong id="rail-session">Owner verified</strong></div>
@@ -1043,7 +1063,7 @@ const apiBase =
 					<div class="grid">
 						<section class="panel">
 							<div class="panel-head">
-								<h2>Selected bot</h2>
+								<h2>Backup control</h2>
 								<span id="selected-status" class="chip neutral">None selected</span>
 							</div>
 							<div class="panel-body">
@@ -1052,10 +1072,6 @@ const apiBase =
 									<button id="refresh-status" type="button" class="button" disabled>
 										<svg class="icon"><use href="#icon-refresh"></use></svg>
 										<span>Refresh</span>
-									</button>
-									<button id="telegram-test" type="button" class="button" disabled>
-										<svg class="icon"><use href="#icon-send"></use></svg>
-										<span>Test Telegram</span>
 									</button>
 									<button id="run-backup" type="button" class="button primary" disabled>
 										<svg class="icon"><use href="#icon-db"></use></svg>
@@ -1072,35 +1088,61 @@ const apiBase =
 
 						<section class="panel">
 							<div class="panel-head">
-								<h2>Activity</h2>
-								<button id="clear-activity" type="button" class="button ghost">Clear</button>
+								<h2>Schedule</h2>
+								<span id="schedule-state" class="chip neutral">Unknown</span>
 							</div>
-							<div id="activity" class="activity"></div>
+							<div class="panel-body">
+								<form id="schedule-form" class="code-row">
+									<select id="schedule-select" aria-label="Backup interval" disabled></select>
+									<button id="schedule-save" type="submit" class="button" disabled>Save</button>
+								</form>
+								<div class="metric-grid">
+									<div class="metric"><span>Current interval</span><strong id="schedule-current">Unknown</strong></div>
+									<div class="metric"><span>Next run</span><strong id="schedule-next">Unknown</strong></div>
+									<div class="metric"><span>Last run</span><strong id="schedule-last">Unknown</strong></div>
+								</div>
+							</div>
 						</section>
 					</div>
 
-					<section class="panel">
-						<div class="panel-head">
-							<h2>Recent backups</h2>
-							<span id="backup-auto" class="chip neutral">Auto refresh paused</span>
-						</div>
-						<div class="table-wrap">
-							<table>
-								<thead>
-									<tr>
-										<th>Filename</th>
-										<th>Created at</th>
-										<th>Size</th>
-										<th>SHA256 short</th>
-										<th>Result</th>
-									</tr>
-								</thead>
-								<tbody id="backup-history">
-									<tr><td colspan="5"><div class="empty-state">No bot selected.</div></td></tr>
-								</tbody>
-							</table>
-						</div>
-					</section>
+					<div class="summary-grid">
+						<section class="panel">
+							<div class="panel-head">
+								<h2>Latest files</h2>
+								<span id="backup-auto" class="chip neutral">Auto refresh paused</span>
+							</div>
+							<div class="table-wrap">
+								<table>
+									<thead>
+										<tr>
+											<th>Filename</th>
+											<th>Created at</th>
+											<th>Size</th>
+											<th>SHA256 short</th>
+										</tr>
+									</thead>
+									<tbody id="backup-history">
+										<tr><td colspan="4"><div class="empty-state">No bot selected.</div></td></tr>
+									</tbody>
+								</table>
+							</div>
+						</section>
+
+						<section class="panel">
+							<div class="panel-head">
+								<h2>GitHub status</h2>
+								<span id="github-state" class="chip neutral">Unknown</span>
+							</div>
+							<div class="panel-body">
+								<div class="metric-grid">
+									<div class="metric"><span>Latest release</span><strong id="github-release">Unknown</strong></div>
+									<div class="metric"><span>Published at</span><strong id="github-published">Unknown</strong></div>
+									<div class="metric"><span>Upload status</span><strong id="github-upload">Unknown</strong></div>
+								</div>
+								<div id="github-message" class="message">GitHub backup status has not loaded.</div>
+							</div>
+						</section>
+					</div>
 				</section>
 
 				<section id="settings-view" class="content hidden">
@@ -1151,7 +1193,6 @@ const apiBase =
 			const apiBase = document.body.dataset.apiBase ?? "https://api.silentflare.com";
 			const state = {
 				activeChallenge: "",
-				activity: [],
 				bots: [],
 				challengeExpiresAt: null,
 				countdownTimer: null,
@@ -1165,7 +1206,6 @@ const apiBase =
 
 			const $ = (id) => document.getElementById(id);
 			const nodes = {
-				activity: $("activity"),
 				appPage: $("app-page"),
 				backupAuto: $("backup-auto"),
 				backupCount: $("backup-count"),
@@ -1176,12 +1216,16 @@ const apiBase =
 				authSubtitle: $("auth-subtitle"),
 				authTitle: $("auth-title"),
 				botStep: $("bot-step"),
-				botList: $("bot-list"),
 				changeBot: $("change-bot"),
 				dashboardView: $("dashboard-view"),
 				enableTotpCode: $("enable-totp-code"),
 				enableTotpForm: $("enable-totp-form"),
 				generateTotp: $("generate-totp"),
+				githubMessage: $("github-message"),
+				githubPublished: $("github-published"),
+				githubRelease: $("github-release"),
+				githubState: $("github-state"),
+				githubUpload: $("github-upload"),
 				loginBotList: $("login-bot-list"),
 				loginMessage: $("login-message"),
 				loginMessageAuth: $("login-message-auth"),
@@ -1198,11 +1242,17 @@ const apiBase =
 				pageTitle: $("page-title"),
 				refreshStatus: $("refresh-status"),
 				runBackup: $("run-backup"),
+				scheduleCurrent: $("schedule-current"),
+				scheduleForm: $("schedule-form"),
+				scheduleLast: $("schedule-last"),
+				scheduleNext: $("schedule-next"),
+				scheduleSave: $("schedule-save"),
+				scheduleSelect: $("schedule-select"),
+				scheduleState: $("schedule-state"),
 				selectedMessage: $("selected-message"),
 				selectedStatus: $("selected-status"),
 				settingsMessage: $("settings-message"),
 				settingsView: $("settings-view"),
-				telegramTest: $("telegram-test"),
 				totpSecret: $("totp-secret"),
 				totpSecretBox: $("totp-secret-box"),
 				totpQr: $("totp-qr"),
@@ -1234,35 +1284,11 @@ const apiBase =
 			}
 
 			function addActivity(label, detail = "", tone = "neutral") {
-				state.activity.unshift({ label, detail, tone, time: new Date().toLocaleTimeString() });
-				state.activity = state.activity.slice(0, 30);
-				renderActivity();
 				if (tone !== "neutral") toast(label);
 			}
 
 			function renderActivity() {
-				nodes.activity.textContent = "";
-				if (state.activity.length === 0) {
-					const empty = document.createElement("div");
-					empty.className = "empty-state";
-					empty.textContent = "No activity yet.";
-					nodes.activity.append(empty);
-					return;
-				}
-				for (const item of state.activity) {
-					const row = document.createElement("div");
-					row.className = "activity-row";
-					const time = document.createElement("span");
-					time.textContent = item.time;
-					const label = document.createElement("strong");
-					label.textContent = item.label;
-					if (item.detail) label.title = item.detail;
-					const tone = document.createElement("span");
-					tone.className = "chip neutral";
-					tone.textContent = item.tone;
-					row.append(time, label, tone);
-					nodes.activity.append(row);
-				}
+				// Activity feed is intentionally hidden from this focused backup console.
 			}
 
 			function renderLoginBots() {
@@ -1454,25 +1480,7 @@ const apiBase =
 			}
 
 			function renderBots() {
-				nodes.botList.textContent = "";
-				if (state.bots.length === 0) {
-					const empty = document.createElement("div");
-					empty.className = "message";
-					empty.textContent = "No bots available.";
-					nodes.botList.append(empty);
-					return;
-				}
-				for (const bot of state.bots) {
-					const button = document.createElement("button");
-					button.type = "button";
-					button.className = "bot-card";
-					button.setAttribute("aria-pressed", String(state.selectedBot?.id === bot.id));
-					button.innerHTML = `<span class="bot-icon">${icon("bot")}</span><span><strong></strong><small></small></span>`;
-					button.querySelector("strong").textContent = botLabel(bot);
-					button.querySelector("small").textContent = `${bot.purpose} / ${bot.status}`;
-					button.addEventListener("click", () => selectBot(bot));
-					nodes.botList.append(button);
-				}
+				// The production console has a single bot-scoped session.
 			}
 
 			function selectBot(bot) {
@@ -1481,8 +1489,8 @@ const apiBase =
 				nodes.pageSubtitle.textContent = "Complete all-database backups remain valid across Ghost and schema updates.";
 				nodes.selectedStatus.textContent = bot.status;
 				nodes.selectedStatus.className = "chip";
-				setMessage(nodes.selectedMessage, `${bot.purpose} backend loaded for ${botLabel(bot)}.`, "success");
-				for (const button of [nodes.refreshStatus, nodes.telegramTest, nodes.runBackup]) button.disabled = false;
+				setMessage(nodes.selectedMessage, "Ready to run encrypted all-database backups.", "success");
+				for (const button of [nodes.refreshStatus, nodes.runBackup]) button.disabled = false;
 				renderBots();
 				loadStatus();
 				startStatusAutoRefresh();
@@ -1515,13 +1523,62 @@ const apiBase =
 				return `${value.slice(0, 10)}...${value.slice(-8)}`;
 			}
 
+			function scheduleLabel(schedule) {
+				if (!schedule?.interval_hours) return schedule?.on_calendar || "Custom";
+				const option = schedule.options?.find((item) => item.interval_hours === schedule.interval_hours);
+				return option?.label ?? `Every ${schedule.interval_hours} hours`;
+			}
+
+			function renderSchedule(schedule) {
+				nodes.scheduleState.textContent = schedule?.active ? "Active" : "Inactive";
+				nodes.scheduleState.className = schedule?.active ? "chip" : "chip neutral";
+				nodes.scheduleCurrent.textContent = scheduleLabel(schedule);
+				nodes.scheduleNext.textContent = schedule?.next_run || "Unknown";
+				nodes.scheduleLast.textContent = schedule?.last_run || "Unknown";
+				nodes.scheduleSelect.textContent = "";
+				for (const option of schedule?.options ?? []) {
+					const item = document.createElement("option");
+					item.value = String(option.interval_hours);
+					item.textContent = option.label;
+					item.selected = option.interval_hours === schedule.interval_hours;
+					nodes.scheduleSelect.append(item);
+				}
+				nodes.scheduleSelect.disabled = false;
+				nodes.scheduleSave.disabled = false;
+			}
+
+			function renderGithubStatus(github) {
+				if (!github?.configured) {
+					nodes.githubState.textContent = "Not configured";
+					nodes.githubState.className = "chip neutral";
+					nodes.githubRelease.textContent = "Local only";
+					nodes.githubPublished.textContent = "Unavailable";
+					nodes.githubUpload.textContent = "Disabled";
+					setMessage(nodes.githubMessage, github?.error ?? "GitHub Release upload is not configured.", "warning");
+					return;
+				}
+				const latest = github.latest;
+				nodes.githubState.textContent = latest ? "Connected" : "No release";
+				nodes.githubState.className = latest ? "chip" : "chip neutral";
+				nodes.githubRelease.textContent = latest?.tagName ?? "None";
+				nodes.githubPublished.textContent = latest?.publishedAt ?? "Unknown";
+				nodes.githubUpload.textContent = latest ? "Uploaded" : "Unknown";
+				setMessage(
+					nodes.githubMessage,
+					github.error ?? (latest ? `Latest GitHub backup release: ${latest.name ?? latest.tagName}.` : "No GitHub backup release found."),
+					github.error ? "warning" : "success",
+				);
+			}
+
 			function renderStatus(status) {
 				nodes.backupTimer.textContent = status.timer_active ? "Active" : "Inactive";
 				nodes.backupLatest.textContent = status.latest?.created_at ?? "None";
 				nodes.backupCount.textContent = `${status.backups.length} files`;
+				renderSchedule(status.schedule);
+				renderGithubStatus(status.github);
 				nodes.backupHistory.textContent = "";
 				if (status.backups.length === 0) {
-					nodes.backupHistory.innerHTML = '<tr><td colspan="5"><div class="empty-state">No local backups found.</div></td></tr>';
+					nodes.backupHistory.innerHTML = '<tr><td colspan="4"><div class="empty-state">No local backups found.</div></td></tr>';
 					return;
 				}
 				for (const item of status.backups) {
@@ -1532,7 +1589,6 @@ const apiBase =
 						item.created_at,
 						formatSize(item.size),
 						sha,
-						"Success",
 					]) {
 						const cell = document.createElement("td");
 						cell.textContent = value;
@@ -1555,6 +1611,27 @@ const apiBase =
 				}
 			}
 
+			async function saveSchedule(event) {
+				event.preventDefault();
+				if (!state.selectedBot) return;
+				nodes.scheduleSave.disabled = true;
+				try {
+					const result = await api(`/bots/${botPath(state.selectedBot)}/backup/schedule`, {
+						method: "POST",
+						csrf: true,
+						body: JSON.stringify({ interval_hours: Number(nodes.scheduleSelect.value) }),
+					});
+					renderSchedule(result.schedule);
+					setMessage(nodes.selectedMessage, "Backup schedule updated.", "success");
+					toast("Backup schedule updated");
+					await loadStatus({ quiet: true });
+				} catch (error) {
+					setMessage(nodes.selectedMessage, `Schedule update failed: ${error.message}`, "error");
+				} finally {
+					nodes.scheduleSave.disabled = false;
+				}
+			}
+
 			async function runBackup() {
 				if (!state.selectedBot) return;
 				nodes.runBackup.disabled = true;
@@ -1573,24 +1650,6 @@ const apiBase =
 					addActivity("Backup failed", error.message, "error");
 				} finally {
 					nodes.runBackup.disabled = false;
-				}
-			}
-
-			async function testTelegram() {
-				if (!state.selectedBot) return;
-				nodes.telegramTest.disabled = true;
-				try {
-					const result = await api(`/bots/${botPath(state.selectedBot)}/telegram/test`, {
-						method: "POST",
-						csrf: true,
-					});
-					setMessage(nodes.selectedMessage, result.message ?? "Telegram test notification sent.", "success");
-					addActivity("Telegram test sent", botLabel(state.selectedBot), "success");
-				} catch (error) {
-					setMessage(nodes.selectedMessage, `Telegram test failed: ${error.message}`, "error");
-					addActivity("Telegram test failed", error.message, "error");
-				} finally {
-					nodes.telegramTest.disabled = false;
 				}
 			}
 
@@ -1737,15 +1796,11 @@ const apiBase =
 			});
 			nodes.refreshStatus.addEventListener("click", () => loadStatus());
 			nodes.runBackup.addEventListener("click", runBackup);
-			nodes.telegramTest.addEventListener("click", testTelegram);
+			nodes.scheduleForm.addEventListener("submit", saveSchedule);
 			nodes.navDashboard.addEventListener("click", () => showView("dashboard"));
 			nodes.navSettings.addEventListener("click", () => showView("settings"));
 			nodes.generateTotp.addEventListener("click", generateTotp);
 			nodes.enableTotpForm.addEventListener("submit", enableTotp);
-			$("clear-activity").addEventListener("click", () => {
-				state.activity = [];
-				renderActivity();
-			});
 
 			boot();
 		</script>
