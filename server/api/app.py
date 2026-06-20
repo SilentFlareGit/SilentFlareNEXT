@@ -13,6 +13,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
 from urllib.request import Request as UrlRequest, urlopen
 from zoneinfo import ZoneInfo
@@ -595,13 +596,16 @@ def service_active(service_name: str) -> bool | None:
 
 def public_json_health(url: str) -> dict[str, Any]:
 	try:
-		with urlopen(url, timeout=15) as response:
+		request = UrlRequest(url, headers={"User-Agent": "SilentFlareBotAPI/1.0"})
+		with urlopen(request, timeout=15) as response:
 			body = response.read().decode("utf-8", "replace")
 		try:
 			payload = json.loads(body) if body else {}
 		except json.JSONDecodeError:
 			payload = {}
 		return {"ok": response.status < 400, "status": response.status, "payload": payload}
+	except HTTPError as exc:
+		return {"ok": False, "status": exc.code, "error": exc.__class__.__name__}
 	except Exception as exc:
 		return {"ok": False, "status": 0, "error": exc.__class__.__name__}
 
