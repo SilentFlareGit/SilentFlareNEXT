@@ -105,8 +105,6 @@ BACKUP_BOT_DESCRIPTION = (
 	"Complete all-database backup that remains valid across schema changes."
 )
 CHAT_BOT_ID = "Telegram Chat Bot"
-CHAT_BOT_ALIASES = {"telegram-chat-bot", "messages-helper-bot"}
-CHAT_BOT_DESCRIPTION = "Owner-controlled Telegram chat relay and web operations console."
 
 BOTS = [
 	{
@@ -119,13 +117,6 @@ BOTS = [
 			os.getenv("GHOST_DB_BACKUP_AUTH_METHOD", "telegram"),
 		),
 	},
-	{
-		"id": CHAT_BOT_ID,
-		"name": "Telegram Chat Bot",
-		"purpose": CHAT_BOT_DESCRIPTION,
-		"status": "active",
-		"auth_method": os.getenv("TELEGRAM_CHAT_BOT_AUTH_METHOD", "telegram"),
-	}
 ]
 
 SESSIONS: dict[str, dict[str, Any]] = {}
@@ -230,8 +221,6 @@ def normalize_bot_id(bot_id: str) -> str:
 	normalized = bot_id.strip()
 	if normalized == BACKUP_BOT_ID or normalized in BACKUP_BOT_ALIASES:
 		return BACKUP_BOT_ID
-	if normalized == CHAT_BOT_ID or normalized in CHAT_BOT_ALIASES:
-		return CHAT_BOT_ID
 	return normalized
 
 
