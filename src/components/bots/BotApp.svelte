@@ -791,10 +791,11 @@ $: toneToClass = (tone: string) => {
 };
 </script>
 
-<div class="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans selection:bg-indigo-500/30 flex flex-col">
-	<!-- Background Pattern -->
-	<div class="fixed inset-0 z-0 pointer-events-none opacity-40 mix-blend-soft-light dark:opacity-20"
-		style="background-image: radial-gradient(circle at center, rgb(99 102 241 / 0.15) 0, transparent 40%), radial-gradient(circle at 80% 20%, rgb(168 85 247 / 0.1) 0, transparent 30%);">
+<div class="min-h-screen bg-[#eef2f6] font-sans text-zinc-900 selection:bg-cyan-400/25 dark:bg-[#07111f] dark:text-zinc-100">
+	<!-- Console grid background -->
+	<div
+		class="fixed inset-0 z-0 pointer-events-none opacity-70 dark:opacity-40"
+		style="background-image: linear-gradient(rgb(15 23 42 / 0.045) 1px, transparent 1px), linear-gradient(90deg, rgb(15 23 42 / 0.045) 1px, transparent 1px); background-size: 32px 32px;">
 	</div>
 
 	{#if currentStep === 'bot' || currentStep === 'auth'}
@@ -922,54 +923,73 @@ $: toneToClass = (tone: string) => {
 
 	{#if currentStep === 'app'}
 		<!-- Main App Layout -->
-		<div class="relative z-10 flex-1 w-full max-w-[108rem] mx-auto p-3 md:p-5 grid grid-cols-1 lg:grid-cols-[15rem_1fr] gap-4 items-start">
-			
-			<!-- Left Rail Sidebar -->
-			<aside class="flex flex-col gap-4 lg:gap-6 bg-white/70 dark:bg-zinc-900/70 backdrop-blur-xl border border-zinc-200 dark:border-zinc-800 p-4 lg:p-5 rounded-2xl shadow-lg shadow-zinc-200/50 dark:shadow-black/20 lg:sticky lg:top-6">
-				<div class="flex items-center gap-3">
-					<div class="grid place-items-center w-10 h-10 rounded-xl bg-indigo-600 text-white font-bold text-lg shadow-inner shadow-black/20">SF</div>
-					<div>
-						<strong class="block text-md tracking-tight">SilentFlare</strong>
-						<span class="block text-xs text-zinc-500 dark:text-zinc-400">Owner console</span>
+		<div class="relative z-10 w-full max-w-[118rem] mx-auto p-2 sm:p-3 lg:p-4">
+			<div class="grid min-h-[calc(100vh-1rem)] overflow-hidden rounded-xl border border-slate-300/80 bg-white shadow-[0_18px_60px_rgb(15_23_42/0.12)] dark:border-slate-800 dark:bg-[#0c1726] dark:shadow-black/30 lg:min-h-[calc(100vh-2rem)] lg:grid-cols-[17rem_minmax(0,1fr)]">
+				<!-- Left Rail Sidebar -->
+				<aside class="flex min-h-0 flex-col border-b border-slate-200 bg-slate-950 text-slate-100 dark:border-slate-800 lg:border-b-0 lg:border-r">
+					<div class="border-b border-white/10 px-5 py-5">
+						<div class="flex items-center gap-3">
+							<div class="relative grid h-11 w-11 place-items-center rounded-lg border border-cyan-300/30 bg-cyan-400/10 text-sm font-black tracking-tight text-cyan-100">
+								SF
+								<span class="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-cyan-300 shadow-[0_0_14px_rgb(103_232_249/0.9)]"></span>
+							</div>
+							<div class="min-w-0">
+								<strong class="block text-base font-semibold tracking-tight">SilentFlare</strong>
+								<span class="block text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Owner Ops</span>
+							</div>
+						</div>
 					</div>
-				</div>
 
-				<nav class="flex flex-col gap-1">
-					<p class="px-2 py-1 text-xs font-bold uppercase tracking-wider text-zinc-400">Console</p>
-					<button class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-semibold transition-colors
-						{activeView === 'dashboard' ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400' : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-100'}"
-						on:click={() => activeView = 'dashboard'}>
-						{@html icon("db")} Dashboard
-					</button>
-					<button class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-semibold transition-colors
-						{activeView === 'settings' ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400' : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-100'}"
-						on:click={() => activeView = 'settings'}>
-						{@html icon("settings")} Settings
-					</button>
-				</nav>
+					<nav class="flex gap-2 overflow-x-auto px-3 py-3 lg:flex-col lg:overflow-visible lg:px-4 lg:py-5">
+						<p class="hidden px-2 py-1 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 lg:block">Console</p>
+						<button class="flex min-h-11 shrink-0 items-center gap-3 rounded-lg border px-3 py-2 text-sm font-semibold transition duration-150 active:scale-[0.99]
+							{activeView === 'dashboard' ? 'border-cyan-300/30 bg-cyan-300/10 text-cyan-100 shadow-[inset_3px_0_0_rgb(103_232_249)]' : 'border-transparent text-slate-300 hover:border-white/10 hover:bg-white/5 hover:text-white'}"
+							on:click={() => activeView = 'dashboard'}>
+							{@html icon("db")} Dashboard
+						</button>
+						<button class="flex min-h-11 shrink-0 items-center gap-3 rounded-lg border px-3 py-2 text-sm font-semibold transition duration-150 active:scale-[0.99]
+							{activeView === 'settings' ? 'border-cyan-300/30 bg-cyan-300/10 text-cyan-100 shadow-[inset_3px_0_0_rgb(103_232_249)]' : 'border-transparent text-slate-300 hover:border-white/10 hover:bg-white/5 hover:text-white'}"
+							on:click={() => activeView = 'settings'}>
+							{@html icon("settings")} Settings
+						</button>
+					</nav>
 
-				<div class="mt-auto flex flex-col gap-3 p-4 rounded-xl bg-zinc-50/50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700 text-xs text-zinc-600 dark:text-zinc-400">
-					<div><strong class="{unifiedCheck?.ok ? 'text-zinc-800 dark:text-zinc-100' : 'text-amber-700 dark:text-amber-300'}">{unifiedCheck?.ok ? 'API checked' : 'API check pending'}</strong></div>
-					<div>Session: <strong>Owner verified</strong></div>
-					<button class="flex items-center gap-2 mt-2 px-3 py-1.5 rounded bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors font-medium text-zinc-700 dark:text-zinc-300" on:click={logout}>
-						{@html icon("lock")} Lock session
-					</button>
-				</div>
-			</aside>
-
-			<!-- Main Content Shell -->
-			<main class="flex flex-col min-w-0 bg-white/70 dark:bg-zinc-900/70 backdrop-blur-xl border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-lg shadow-zinc-200/50 dark:shadow-black/20 overflow-hidden">
-				<header class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 md:p-6 border-b border-zinc-200 dark:border-zinc-800 bg-white/50 dark:bg-zinc-900/50">
-					<div>
-						<h1 class="text-2xl font-bold tracking-tight">{selectedBot ? botLabel(selectedBot) : 'Select a bot'}</h1>
-						<p class="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
-							{isChatBot() ? 'Owner-controlled Telegram chat relay and web operations console.' : 'Complete all-database backups remain valid across Ghost and schema updates.'}
-						</p>
+					<div class="mt-auto border-t border-white/10 p-4">
+						<div class="grid gap-3 text-xs">
+							<div class="rounded-lg border border-white/10 bg-white/[0.04] p-3">
+								<span class="block font-medium uppercase tracking-[0.16em] text-slate-500">API</span>
+								<strong class="mt-1 block text-sm {unifiedCheck?.ok ? 'text-cyan-200' : 'text-amber-200'}">{unifiedCheck?.ok ? 'Checked' : 'Pending'}</strong>
+							</div>
+							<div class="rounded-lg border border-white/10 bg-white/[0.04] p-3">
+								<span class="block font-medium uppercase tracking-[0.16em] text-slate-500">Session</span>
+								<strong class="mt-1 block text-sm text-slate-100">Owner verified</strong>
+							</div>
+							<button class="flex min-h-11 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.05] px-3 py-2 text-sm font-semibold text-slate-200 transition hover:border-cyan-300/30 hover:bg-cyan-300/10 hover:text-cyan-100 active:scale-[0.99]" on:click={logout}>
+								{@html icon("lock")} Lock session
+							</button>
+						</div>
 					</div>
-					<div class="flex-shrink-0 px-3 py-1 bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-400 text-xs font-bold uppercase tracking-wider rounded-full">
-						Owner verified
-					</div>
-				</header>
+				</aside>
+
+				<!-- Main Content Shell -->
+				<main class="flex min-w-0 flex-col bg-[#f7f9fc] dark:bg-[#0b1422]">
+					<header class="border-b border-slate-200 bg-white px-4 py-4 dark:border-slate-800 dark:bg-[#101b2b] md:px-6">
+						<div class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+							<div>
+								<p class="text-xs font-bold uppercase tracking-[0.18em] text-cyan-700 dark:text-cyan-300">Telegram Bot Owner Console</p>
+								<h1 class="mt-1 text-2xl font-semibold tracking-tight text-slate-950 dark:text-white md:text-3xl">{selectedBot ? botLabel(selectedBot) : 'Select a bot'}</h1>
+								<p class="mt-1 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-400">
+									{isChatBot() ? 'Owner-controlled chat relay, moderation actions, and web/bot handoff in one operations surface.' : 'Complete all-database backups remain valid across Ghost and schema updates.'}
+								</p>
+							</div>
+							<div class="grid grid-cols-2 gap-2 text-xs sm:flex sm:flex-wrap sm:justify-end">
+								<span class="rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-2 font-semibold text-cyan-800 dark:border-cyan-800/70 dark:bg-cyan-950/40 dark:text-cyan-200">Owner verified</span>
+								<span class="rounded-lg border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">{unifiedCheck?.ok ? 'API checked' : 'API pending'}</span>
+								<span class="rounded-lg border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">{selectedBot?.status ?? 'No bot selected'}</span>
+								<span class="rounded-lg border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">{statusTimer ? 'Auto refresh 30s' : 'Refresh paused'}</span>
+							</div>
+						</div>
+					</header>
 
 				{#if activeView === 'dashboard'}
 					<div class="{isChatBot() ? 'min-h-0 p-3 md:p-4' : 'p-5 md:p-6'} flex flex-col gap-8 animate-in fade-in duration-300">
@@ -1219,6 +1239,7 @@ $: toneToClass = (tone: string) => {
 					</div>
 				{/if}
 			</main>
+		</div>
 		</div>
 	{/if}
 </div>
