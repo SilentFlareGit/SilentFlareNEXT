@@ -791,7 +791,7 @@ $: toneToClass = (tone: string) => {
 };
 </script>
 
-<div class="min-h-screen bg-[#eef2f6] font-sans text-zinc-900 selection:bg-cyan-400/25 dark:bg-[#07111f] dark:text-zinc-100">
+<div class="min-h-screen {currentStep === 'app' && isChatBot() ? 'bg-[#07121a] text-slate-100' : 'bg-[#eef2f6] text-zinc-900 dark:bg-[#07111f] dark:text-zinc-100'} font-sans selection:bg-cyan-400/25">
 	<!-- Console grid background -->
 	<div
 		class="fixed inset-0 z-0 pointer-events-none opacity-70 dark:opacity-40"
@@ -923,10 +923,10 @@ $: toneToClass = (tone: string) => {
 
 	{#if currentStep === 'app'}
 		<!-- Main App Layout -->
-		<div class="relative z-10 w-full max-w-[118rem] mx-auto p-2 sm:p-3 lg:p-4">
-			<div class="grid min-h-[calc(100vh-1rem)] overflow-hidden rounded-xl border border-slate-300/80 bg-white shadow-[0_18px_60px_rgb(15_23_42/0.12)] dark:border-slate-800 dark:bg-[#0c1726] dark:shadow-black/30 lg:min-h-[calc(100vh-2rem)] lg:grid-cols-[17rem_minmax(0,1fr)]">
+		<div class="relative z-10 w-full {isChatBot() ? 'mx-0 p-0' : 'mx-auto max-w-[118rem] p-2 sm:p-3 lg:p-4'}">
+			<div class="grid overflow-hidden {isChatBot() ? 'min-h-screen rounded-none border-0 bg-[#0c1a24] shadow-none lg:grid-cols-[15.5rem_minmax(0,1fr)]' : 'min-h-[calc(100vh-1rem)] rounded-xl border border-slate-300/80 bg-white shadow-[0_18px_60px_rgb(15_23_42/0.12)] dark:border-slate-800 dark:bg-[#0c1726] dark:shadow-black/30 lg:min-h-[calc(100vh-2rem)] lg:grid-cols-[17rem_minmax(0,1fr)]'}">
 				<!-- Left Rail Sidebar -->
-				<aside class="flex min-h-0 flex-col border-b border-slate-200 bg-slate-950 text-slate-100 dark:border-slate-800 lg:border-b-0 lg:border-r">
+				<aside class="flex min-h-0 flex-col border-b border-slate-200 bg-slate-950 text-slate-100 dark:border-slate-800 lg:border-b-0 lg:border-r {isChatBot() ? 'border-[#203543] bg-[#08131c]' : ''}">
 					<div class="border-b border-white/10 px-5 py-5">
 						<div class="flex items-center gap-3">
 							<div class="relative grid h-11 w-11 place-items-center rounded-lg border border-cyan-300/30 bg-cyan-400/10 text-sm font-black tracking-tight text-cyan-100">
@@ -972,27 +972,27 @@ $: toneToClass = (tone: string) => {
 				</aside>
 
 				<!-- Main Content Shell -->
-				<main class="flex min-w-0 flex-col bg-[#f7f9fc] dark:bg-[#0b1422]">
-					<header class="border-b border-slate-200 bg-white px-4 py-4 dark:border-slate-800 dark:bg-[#101b2b] md:px-6">
+				<main class="flex min-w-0 flex-col {isChatBot() ? 'bg-[#0e1b25]' : 'bg-[#f7f9fc] dark:bg-[#0b1422]'}">
+					<header class="border-b px-4 py-4 md:px-6 {isChatBot() ? 'border-[#243b4b] bg-[#122634] text-slate-100' : 'border-slate-200 bg-white dark:border-slate-800 dark:bg-[#101b2b]'}">
 						<div class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
 							<div>
-								<p class="text-xs font-bold uppercase tracking-[0.18em] text-cyan-700 dark:text-cyan-300">Telegram Bot Owner Console</p>
-								<h1 class="mt-1 text-2xl font-semibold tracking-tight text-slate-950 dark:text-white md:text-3xl">{selectedBot ? botLabel(selectedBot) : 'Select a bot'}</h1>
-								<p class="mt-1 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-400">
+								<p class="text-xs font-bold uppercase tracking-[0.18em] {isChatBot() ? 'text-[#56c8e8]' : 'text-cyan-700 dark:text-cyan-300'}">Telegram Bot Owner Console</p>
+								<h1 class="mt-1 text-2xl font-semibold tracking-tight {isChatBot() ? 'text-white' : 'text-slate-950 dark:text-white'} md:text-3xl">{selectedBot ? botLabel(selectedBot) : 'Select a bot'}</h1>
+								<p class="mt-1 max-w-3xl text-sm leading-6 {isChatBot() ? 'text-slate-300' : 'text-slate-600 dark:text-slate-400'}">
 									{isChatBot() ? 'Owner-controlled chat relay, moderation actions, and web/bot handoff in one operations surface.' : 'Complete all-database backups remain valid across Ghost and schema updates.'}
 								</p>
 							</div>
 							<div class="grid grid-cols-2 gap-2 text-xs sm:flex sm:flex-wrap sm:justify-end">
-								<span class="rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-2 font-semibold text-cyan-800 dark:border-cyan-800/70 dark:bg-cyan-950/40 dark:text-cyan-200">Owner verified</span>
-								<span class="rounded-lg border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">{unifiedCheck?.ok ? 'API checked' : 'API pending'}</span>
-								<span class="rounded-lg border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">{selectedBot?.status ?? 'No bot selected'}</span>
-								<span class="rounded-lg border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">{statusTimer ? 'Auto refresh 30s' : 'Refresh paused'}</span>
+								<span class="rounded-lg border px-3 py-2 font-semibold {isChatBot() ? 'border-[#2f7186] bg-[#123847] text-[#77def7]' : 'border-cyan-200 bg-cyan-50 text-cyan-800 dark:border-cyan-800/70 dark:bg-cyan-950/40 dark:text-cyan-200'}">Owner verified</span>
+								<span class="rounded-lg border px-3 py-2 font-semibold {isChatBot() ? 'border-[#243b4b] bg-[#0e1b25] text-slate-200' : 'border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'}">{unifiedCheck?.ok ? 'API checked' : 'API pending'}</span>
+								<span class="rounded-lg border px-3 py-2 font-semibold {isChatBot() ? 'border-[#243b4b] bg-[#0e1b25] text-slate-200' : 'border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'}">{selectedBot?.status ?? 'No bot selected'}</span>
+								<span class="rounded-lg border px-3 py-2 font-semibold {isChatBot() ? 'border-[#243b4b] bg-[#0e1b25] text-slate-200' : 'border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'}">{statusTimer ? 'Auto refresh 30s' : 'Refresh paused'}</span>
 							</div>
 						</div>
 					</header>
 
 				{#if activeView === 'dashboard'}
-					<div class="{isChatBot() ? 'min-h-0 p-3 md:p-4' : 'p-5 md:p-6'} flex flex-col gap-8 animate-in fade-in duration-300">
+					<div class="{isChatBot() ? 'min-h-0 flex-1 p-0' : 'p-5 md:p-6'} flex flex-col gap-8 animate-in fade-in duration-300">
 						{#if isChatBot()}
 							<ChatBotConsole
 								{chatData}
