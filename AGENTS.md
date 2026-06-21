@@ -54,7 +54,8 @@ Current product state:
 - `SilentFlare DB Backup` is considered feature-complete for the current phase.
 - Future work should default to operations, monitoring, verification, small UI polish, and reliability improvements.
 - Avoid large auth, backup, or layout rewrites unless explicitly requested.
-- Keep changes to this surface narrowly scoped to `src/components/bots/BotApp.svelte`, `src/pages/bots/index.astro`, `server/api/app.py`, and directly related tests or docs.
+- Keep changes to this surface narrowly scoped to `src/components/bots/`, `src/pages/bots/index.astro`, `server/api/app.py`, and directly related tests or docs.
+- Keep the `/bots/` front end componentized. `BotApp.svelte` should coordinate API state, sessions, and view routing; feature-specific UI should live in smaller components such as `ChatBotConsole.svelte` and `GitHubStatusCard.svelte`.
 - The production UI is intentionally a bot-scoped owner console, not a general multi-user dashboard.
 
 Current bot auth model:
@@ -557,6 +558,9 @@ Current UI expectations:
 
 - The login flow should show Telegram approval as the primary path.
 - Authenticator 2FA should only show an input form when 2FA is configured; otherwise show a disabled/not-configured state.
+- Optimize the Telegram Chat Bot console first when improving `/bots/` UI, then improve GitHub/backup status cards.
+- Keep the management UI structurally layered. Do not turn `BotApp.svelte` back into a single large file for all markup; add focused components under `src/components/bots/` for distinct surfaces.
+- Loading states, click feedback, and responsive touch targets are part of the UI contract. Prefer lightweight CSS/Svelte interactions, avoid new animation dependencies unless explicitly requested, and keep buttons at mobile-friendly hit sizes.
 - Do not use green success panels for idle/informational states. Green should be reserved for completed successful operations or transient success toasts.
 - The dashboard should be layered by priority: backup controls and schedule first, GitHub/API checks second, latest files below.
 - Latest backup files should show both Germany/VPS time and Beijing time.

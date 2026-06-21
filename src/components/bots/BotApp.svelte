@@ -1,7 +1,9 @@
 <script lang="ts">
 // biome-ignore-all lint/suspicious/noExplicitAny: Bot API responses are dynamic and normalized at render boundaries.
 import QRCode from "qrcode";
-import { onDestroy, onMount, tick } from "svelte";
+import { onDestroy, onMount } from "svelte";
+import ChatBotConsole from "./ChatBotConsole.svelte";
+import GitHubStatusCard from "./GitHubStatusCard.svelte";
 
 export let apiBase = "https://api.silentflare.com";
 
@@ -60,9 +62,6 @@ let chatCommandText = "";
 let chatCommandResult = "";
 let chatUploadFile: File | null = null;
 let chatSearch = "";
-let filteredContacts: any[] = [];
-let chatMessagesPane: HTMLDivElement;
-let lastChatScrollKey = "";
 
 let isSendingTelegram = false;
 let isRunningBackup = false;
@@ -113,63 +112,6 @@ function shortSha(value: string) {
 function compactTime(value: string) {
 	if (!value) return "Unknown";
 	return value.replace(/:\d{2}(?:\s|$)/, " ").trim();
-}
-
-function initials(name = "") {
-	const parts = name.trim().split(/\s+/).filter(Boolean);
-	if (!parts.length) return "?";
-	return parts
-		.slice(0, 2)
-		.map((part) => part[0]?.toUpperCase())
-		.join("");
-}
-
-function chatTime(value = "") {
-	const match = value.match(/\d{2}:\d{2}(?::\d{2})?/);
-	return match ? match[0].slice(0, 5) : value;
-}
-
-function selectedChatContact() {
-	return (chatData?.contacts ?? []).find(
-		(contact: any) => contact.user_id === selectedChatUserId,
-	);
-}
-
-async function scrollChatToLatest() {
-	await tick();
-	if (!chatMessagesPane) return;
-	chatMessagesPane.scrollTop = chatMessagesPane.scrollHeight;
-}
-
-$: {
-	const query = chatSearch.trim().toLowerCase();
-	const contacts = chatData?.contacts ?? [];
-	filteredContacts = query
-		? contacts.filter((contact: any) =>
-				[contact.name, contact.username, contact.user_id, contact.last_text]
-					.join(" ")
-					.toLowerCase()
-					.includes(query),
-			)
-		: contacts;
-}
-
-$: {
-	const messages = chatData?.messages ?? [];
-	const latestMessage = messages.length
-		? messages[messages.length - 1]?.id
-		: "";
-	const scrollKey = `${currentStep}:${activeView}:${selectedBot?.id ?? ""}:${selectedChatUserId ?? ""}:${messages.length}:${latestMessage}`;
-	if (
-		currentStep === "app" &&
-		activeView === "dashboard" &&
-		isChatBot() &&
-		messages.length &&
-		scrollKey !== lastChatScrollKey
-	) {
-		lastChatScrollKey = scrollKey;
-		void scrollChatToLatest();
-	}
 }
 
 function chatMediaUrl(message: any) {
@@ -1032,143 +974,28 @@ $: toneToClass = (tone: string) => {
 				{#if activeView === 'dashboard'}
 					<div class="{isChatBot() ? 'min-h-0 p-3 md:p-4' : 'p-5 md:p-6'} flex flex-col gap-8 animate-in fade-in duration-300">
 						{#if isChatBot()}
-							<div class="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xl shadow-zinc-200/60 dark:border-zinc-800 dark:bg-[#17212b] dark:shadow-black/20 lg:h-[calc(100vh-12.5rem)] lg:min-h-[34rem]">
-								<div class="grid min-h-0 grid-cols-1 bg-white dark:bg-[#17212b] lg:h-full lg:grid-cols-[21rem_minmax(0,1fr)] xl:grid-cols-[21rem_minmax(0,1fr)_19rem]">
-									<section class="flex min-h-[24rem] flex-col border-r border-zinc-200 bg-white dark:border-[#253545] dark:bg-[#17212b] lg:h-full lg:min-h-0">
-										<div class="flex items-center gap-3 border-b border-zinc-100 px-4 py-3 dark:border-[#253545]">
-											<div class="grid h-9 w-9 place-items-center rounded-full bg-[#2aabee] text-sm font-bold text-white">SF</div>
-											<div class="min-w-0 flex-1">
-												<h2 class="truncate text-sm font-semibold text-zinc-950 dark:text-zinc-50">Telegram Chat Bot</h2>
-												<p class="text-xs text-zinc-500 dark:text-zinc-400">{chatData?.unread_total ?? 0} unread conversations</p>
-											</div>
-											<button class="grid h-9 w-9 place-items-center rounded-full text-zinc-500 transition hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-[#223142]" on:click={() => { loadChatStatus(); loadChatConsole(); }} aria-label="Refresh chat">
-												{@html icon("refresh")}
-											</button>
-										</div>
-										<div class="px-3 py-3">
-											<input class="w-full rounded-full bg-zinc-100 px-4 py-2 text-sm text-zinc-800 outline-none placeholder:text-zinc-500 focus:ring-2 focus:ring-[#2aabee]/30 dark:bg-[#242f3d] dark:text-zinc-100 dark:placeholder:text-zinc-400" bind:value={chatSearch} placeholder="Search conversations" />
-										</div>
-										<div class="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-										{#each filteredContacts as contact}
-											<button type="button" class="group mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors {selectedChatUserId === contact.user_id ? 'bg-[#2aabee] text-white' : 'text-zinc-800 hover:bg-zinc-100 dark:text-zinc-100 dark:hover:bg-[#223142]'}" on:click={() => selectChatContact(contact.user_id)}>
-												<div class="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[#2aabee] to-[#7c5cff] text-sm font-semibold text-white shadow-sm">
-													{initials(contact.name)}
-												</div>
-												<div class="min-w-0 flex-1">
-													<div class="flex items-center justify-between gap-2">
-														<strong class="truncate text-sm font-semibold">{contact.name}</strong>
-														<span class="shrink-0 text-[11px] opacity-70">{chatTime(contact.last_message_at)}</span>
-													</div>
-													<div class="mt-0.5 flex items-center gap-2">
-														<span class="truncate text-sm opacity-70">{contact.last_text || contact.username || contact.user_id}</span>
-														{#if contact.unread_count}
-															<span class="ml-auto rounded-full bg-white/95 px-2 py-0.5 text-[11px] font-semibold text-[#2aabee]">{contact.unread_count}</span>
-														{/if}
-													</div>
-													{#if contact.pending || contact.banned || contact.exempt}
-														<div class="mt-1 flex gap-1 text-[10px] uppercase tracking-wide opacity-70">
-															{#if contact.pending}<span>pending</span>{/if}
-															{#if contact.banned}<span>banned</span>{/if}
-															{#if contact.exempt}<span>exempt</span>{/if}
-														</div>
-													{/if}
-												</div>
-											</button>
-										{/each}
-										{#if !filteredContacts.length}
-											<p class="rounded-xl p-4 text-sm text-zinc-500 dark:text-zinc-400">No contacts yet.</p>
-										{/if}
-									</div>
-									</section>
-
-									<section class="flex min-h-[32rem] flex-col bg-[#e6ebee] dark:bg-[#0e1621] lg:h-full lg:min-h-0">
-										<div class="flex items-center gap-3 border-b border-zinc-200 bg-white/95 px-5 py-3 backdrop-blur dark:border-[#253545] dark:bg-[#17212b]/95">
-											<div class="grid h-10 w-10 place-items-center rounded-full bg-gradient-to-br from-[#2aabee] to-[#7c5cff] text-sm font-semibold text-white">
-												{initials(chatData?.profile?.name ?? selectedChatContact()?.name ?? '')}
-											</div>
-											<div class="min-w-0 flex-1">
-												<h2 class="truncate text-base font-semibold text-zinc-950 dark:text-zinc-50">{chatData?.profile?.name ?? 'Select a contact'}</h2>
-												<p class="truncate text-xs text-zinc-500 dark:text-zinc-400">{chatData?.profile ? `${chatData.profile.username} / ${chatData.profile.user_id} / ${chatData.profile.language}` : 'Choose a conversation from the inbox.'}</p>
-											</div>
-											<span class="hidden rounded-full bg-zinc-100 px-3 py-1 text-xs font-medium text-zinc-600 dark:bg-[#242f3d] dark:text-zinc-300 sm:inline-flex">{chatData?.settings?.operations_enabled ? 'Web control' : 'Bot takeover'}</span>
-										</div>
-										<div bind:this={chatMessagesPane} class="telegram-chat-bg min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-5 sm:px-8">
-										{#each chatData?.messages ?? [] as message}
-											<div class="flex {message.direction === 'outbound' ? 'justify-end' : 'justify-start'}">
-												<div class="max-w-[min(78%,42rem)] rounded-2xl px-3.5 py-2 text-[15px] leading-relaxed shadow-sm {message.direction === 'outbound' ? 'rounded-br-md bg-[#2aabee] text-white' : 'rounded-bl-md bg-white text-zinc-900 dark:bg-[#182533] dark:text-zinc-50'}">
-													<p class="whitespace-pre-wrap break-words">{message.text || message.message_type}</p>
-													{#if message.media}
-														<a class="mt-2 block rounded-xl bg-black/5 px-3 py-2 text-xs underline-offset-2 hover:underline dark:bg-white/10" href={chatMediaUrl(message)} target="_blank" rel="noreferrer">{message.media.kind}: {message.media.filename}</a>
-													{/if}
-													<p class="mt-1 text-right text-[11px] opacity-65">{chatTime(message.created_at)}</p>
-												</div>
-											</div>
-										{/each}
-										{#if !(chatData?.messages ?? []).length}
-											<p class="mx-auto mt-20 max-w-sm rounded-2xl bg-white/80 p-5 text-center text-sm text-zinc-500 shadow-sm dark:bg-[#182533] dark:text-zinc-300">Select a conversation to start managing replies.</p>
-										{/if}
-										{#if chatCommandResult}
-											<pre class="mx-auto max-w-2xl whitespace-pre-wrap rounded-2xl bg-white/90 p-4 text-xs text-zinc-700 shadow-sm dark:bg-[#182533] dark:text-zinc-200">{chatCommandResult}</pre>
-										{/if}
-									</div>
-										<form class="border-t border-zinc-200 bg-white px-4 py-3 dark:border-[#253545] dark:bg-[#17212b]" on:submit={sendChatReply}>
-											<div class="flex items-end gap-2">
-											<label class="grid h-11 w-11 shrink-0 cursor-pointer place-items-center rounded-full text-zinc-500 transition hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-[#242f3d]" title="Attach file">
-												<span class="text-xl">+</span>
-												<input class="hidden" type="file" disabled={!chatData?.profile || !chatData?.settings?.operations_enabled || isSendingChat} on:change={(event) => { chatUploadFile = (event.currentTarget as HTMLInputElement).files?.[0] ?? null; }} />
-											</label>
-											<div class="min-w-0 flex-1 rounded-2xl bg-zinc-100 px-4 py-2 dark:bg-[#242f3d]">
-												{#if chatUploadFile}
-													<div class="mb-2 flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-xs text-zinc-700 dark:bg-[#17212b] dark:text-zinc-200">
-														<span class="min-w-0 flex-1 truncate">{chatUploadFile.name}</span>
-														<button type="button" class="text-zinc-500 hover:text-zinc-900 dark:hover:text-white" on:click={() => { chatUploadFile = null; }}>Remove</button>
-													</div>
-												{/if}
-												<textarea class="max-h-32 min-h-7 w-full resize-none bg-transparent text-sm text-zinc-950 outline-none placeholder:text-zinc-400 dark:text-zinc-50" bind:value={chatReplyText} placeholder={chatData?.settings?.operations_enabled ? 'Message' : 'Web control is locked'} disabled={!chatData?.profile || !chatData?.settings?.operations_enabled || isSendingChat}></textarea>
-											</div>
-											<button class="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#2aabee] text-sm font-semibold text-white transition hover:bg-[#229ed9] disabled:opacity-50" disabled={!chatData?.profile || (!chatReplyText.trim() && !chatUploadFile) || !chatData?.settings?.operations_enabled || isSendingChat} aria-label="Send message">
-												{#if isSendingChat}...{:else}{@html icon("send")}{/if}
-											</button>
-										</div>
-									</form>
-									</section>
-
-									<aside class="hidden h-full min-h-0 flex-col border-l border-zinc-200 bg-white dark:border-[#253545] dark:bg-[#17212b] xl:flex">
-										<div class="border-b border-zinc-100 px-5 py-5 text-center dark:border-[#253545]">
-											<div class="mx-auto grid h-20 w-20 place-items-center rounded-full bg-gradient-to-br from-[#2aabee] to-[#7c5cff] text-xl font-semibold text-white shadow-sm">
-												{initials(chatData?.profile?.name ?? selectedChatContact()?.name ?? '')}
-											</div>
-											<h2 class="mt-3 truncate text-base font-semibold text-zinc-950 dark:text-zinc-50">{chatData?.profile?.name ?? 'No contact selected'}</h2>
-											<p class="mt-1 truncate text-xs text-zinc-500 dark:text-zinc-400">{chatData?.profile?.username ?? 'Select a conversation'}</p>
-										</div>
-										<div class="min-h-0 flex-1 overflow-y-auto p-4">
-											<div class="rounded-2xl bg-zinc-50 p-3 text-sm dark:bg-[#242f3d]">
-												<div class="flex justify-between gap-3 py-1"><span class="text-zinc-500 dark:text-zinc-400">Status</span><strong class="text-zinc-900 dark:text-zinc-100">{chatData?.profile?.ban_text || 'normal'}</strong></div>
-												<div class="flex justify-between gap-3 py-1"><span class="text-zinc-500 dark:text-zinc-400">Web</span><strong class="text-zinc-900 dark:text-zinc-100">{chatStatus?.services?.web?.status ?? 'unknown'}</strong></div>
-												<div class="flex justify-between gap-3 py-1"><span class="text-zinc-500 dark:text-zinc-400">Bot</span><strong class="text-zinc-900 dark:text-zinc-100">{chatStatus?.services?.bot?.status ?? 'unknown'}</strong></div>
-											</div>
-											<div class="mt-4 grid grid-cols-2 gap-2">
-												<button class="rounded-xl bg-zinc-100 px-3 py-2 text-sm text-zinc-800 transition hover:bg-zinc-200 disabled:opacity-50 dark:bg-[#242f3d] dark:text-zinc-100 dark:hover:bg-[#2b3b4e]" disabled={!chatData?.profile || !chatData?.settings?.operations_enabled} on:click={() => runChatUserAction('ban', 30)}>Ban 30m</button>
-												<button class="rounded-xl bg-zinc-100 px-3 py-2 text-sm text-zinc-800 transition hover:bg-zinc-200 disabled:opacity-50 dark:bg-[#242f3d] dark:text-zinc-100 dark:hover:bg-[#2b3b4e]" disabled={!chatData?.profile || !chatData?.settings?.operations_enabled} on:click={() => runChatUserAction('ban', null)}>Forever</button>
-												<button class="rounded-xl bg-zinc-100 px-3 py-2 text-sm text-zinc-800 transition hover:bg-zinc-200 disabled:opacity-50 dark:bg-[#242f3d] dark:text-zinc-100 dark:hover:bg-[#2b3b4e]" disabled={!chatData?.profile || !chatData?.settings?.operations_enabled} on:click={() => runChatUserAction('pardon')}>Pardon</button>
-												<button class="rounded-xl bg-zinc-100 px-3 py-2 text-sm text-zinc-800 transition hover:bg-zinc-200 disabled:opacity-50 dark:bg-[#242f3d] dark:text-zinc-100 dark:hover:bg-[#2b3b4e]" disabled={!chatData?.profile || !chatData?.settings?.operations_enabled} on:click={() => runChatUserAction(chatData?.profile?.exempt ? 'unexempt' : 'exempt')}>{chatData?.profile?.exempt ? 'Unexempt' : 'Exempt'}</button>
-											</div>
-											<div class="mt-5 space-y-2">
-												<button class="w-full rounded-xl bg-[#2aabee] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#229ed9]" on:click={() => { loadChatStatus(); loadChatConsole(); }}>Refresh</button>
-												<button class="w-full rounded-xl bg-zinc-100 px-3 py-2 text-sm text-zinc-800 transition hover:bg-zinc-200 disabled:opacity-50 dark:bg-[#242f3d] dark:text-zinc-100 dark:hover:bg-[#2b3b4e]" on:click={() => runChatAction("takeover")} disabled={!chatStatus?.control?.configured}>Bot takeover</button>
-												<button class="w-full rounded-xl bg-zinc-100 px-3 py-2 text-sm text-zinc-800 transition hover:bg-zinc-200 disabled:opacity-50 dark:bg-[#242f3d] dark:text-zinc-100 dark:hover:bg-[#2b3b4e]" on:click={() => runChatAction("resume-web")} disabled={!chatStatus?.control?.configured}>Resume Web</button>
-											</div>
-											<button class="mt-4 w-full rounded-xl bg-zinc-100 px-3 py-2 text-sm text-zinc-800 transition hover:bg-zinc-200 disabled:opacity-50 dark:bg-[#242f3d] dark:text-zinc-100 dark:hover:bg-[#2b3b4e]" disabled={!chatData?.settings?.operations_enabled} on:click={toggleChatNotifications}>
-												{chatData?.settings?.bot_notifications_enabled ? 'Disable previews' : 'Enable previews'}
-											</button>
-											<form class="mt-4 flex gap-2" on:submit|preventDefault={() => runChatCommand(chatCommandText)}>
-												<input class="min-w-0 flex-1 rounded-xl bg-zinc-100 px-3 py-2 text-sm outline-none dark:bg-[#242f3d] dark:text-zinc-100" bind:value={chatCommandText} placeholder="/status" />
-												<button class="rounded-xl bg-zinc-100 px-3 py-2 text-sm dark:bg-[#242f3d] dark:text-zinc-100">Run</button>
-											</form>
-										</div>
-									</aside>
-								</div>
-							</div>
+							<ChatBotConsole
+								{chatData}
+								{chatStatus}
+								bind:selectedChatUserId
+								bind:chatSearch
+								bind:chatReplyText
+								bind:chatCommandText
+								bind:chatUploadFile
+								{chatCommandResult}
+								{isSendingChat}
+								mediaUrl={chatMediaUrl}
+								onRefresh={() => {
+									loadChatStatus();
+									loadChatConsole();
+								}}
+								onSelectContact={selectChatContact}
+								onSendReply={sendChatReply}
+								onUserAction={runChatUserAction}
+								onChatAction={runChatAction}
+								onToggleNotifications={toggleChatNotifications}
+								onRunCommand={runChatCommand}
+							/>
 						{:else}
 						<!-- Primary action -->
 						<div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1.15fr)_minmax(24rem,0.85fr)] gap-6">
@@ -1253,35 +1080,12 @@ $: toneToClass = (tone: string) => {
 
 						<!-- Secondary status -->
 						<div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-6">
-							<div class="flex flex-col bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl overflow-hidden shadow-sm h-fit">
-								<div class="flex items-center justify-between px-4 py-3 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
-									<h2 class="font-semibold text-sm">GitHub status</h2>
-									<span class="px-2 py-0.5 text-xs font-medium rounded-full {backupStatus?.github?.latest ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800' : 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400'}">
-										{backupStatus?.github?.configured ? (backupStatus.github.latest ? 'Connected' : 'No release') : 'Not configured'}
-									</span>
-								</div>
-								<div class="p-4 flex flex-col gap-4">
-									<div class="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-zinc-100 dark:divide-zinc-800 bg-zinc-50 dark:bg-zinc-800/50 rounded-lg border border-zinc-200 dark:border-zinc-700 text-sm">
-										<div class="p-3">
-											<span class="text-xs text-zinc-500 font-medium">Latest release</span>
-											<strong class="mt-1 block truncate">{backupStatus?.github?.latest?.tagName ?? (backupStatus?.github?.configured ? 'None' : 'Local only')}</strong>
-										</div>
-										<div class="p-3">
-											<span class="text-xs text-zinc-500 font-medium">Published at</span>
-											<strong class="mt-1 block truncate">{backupStatus?.github?.latest?.publishedAt ?? 'Unavailable'}</strong>
-										</div>
-										<div class="p-3">
-											<span class="text-xs text-zinc-500 font-medium">Upload status</span>
-											<strong class="mt-1 block truncate">{!backupStatus?.github?.configured ? 'Disabled' : (backupStatus?.github?.latest ? 'Uploaded' : 'Unknown')}</strong>
-										</div>
-									</div>
-									{#if githubMessageTone !== "neutral" || backupStatus?.github?.error}
-										<div class="text-sm p-3 rounded-lg border {toneToClass(githubMessageTone)}">
-											{githubMessage}
-										</div>
-									{/if}
-								</div>
-							</div>
+							<GitHubStatusCard
+								{backupStatus}
+								{githubMessage}
+								{githubMessageTone}
+								{toneToClass}
+							/>
 
 							<div class="flex flex-col bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl overflow-hidden shadow-sm h-fit">
 								<div class="flex items-center justify-between px-4 py-3 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
@@ -1424,20 +1228,3 @@ $: toneToClass = (tone: string) => {
 		{noticeMessage}
 	</div>
 {/if}
-
-<style>
-	.telegram-chat-bg {
-		background-color: #e6ebee;
-		background-image:
-			radial-gradient(circle at 12px 18px, rgb(42 171 238 / 0.06) 0 2px, transparent 2px),
-			radial-gradient(circle at 44px 42px, rgb(42 171 238 / 0.05) 0 1.5px, transparent 1.5px);
-		background-size: 64px 64px;
-	}
-
-	:global(.dark) .telegram-chat-bg {
-		background-color: #0e1621;
-		background-image:
-			radial-gradient(circle at 12px 18px, rgb(42 171 238 / 0.08) 0 2px, transparent 2px),
-			radial-gradient(circle at 44px 42px, rgb(42 171 238 / 0.07) 0 1.5px, transparent 1.5px);
-	}
-</style>
