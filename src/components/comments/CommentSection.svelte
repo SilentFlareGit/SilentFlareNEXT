@@ -12,6 +12,7 @@ let user = $state<CurrentUser | null>(null);
 let comments = $state<CommentRecord[]>([]);
 let loading = $state(true);
 let error = $state("");
+let accountHref = $state("/account/");
 
 async function loadUser() {
 	try {
@@ -38,11 +39,8 @@ async function refresh() {
 	loading = false;
 }
 
-function openAuth() {
-	document.dispatchEvent(new CustomEvent("silentflare-auth-open"));
-}
-
 onMount(() => {
+	accountHref = `/account/?next=${encodeURIComponent(window.location.pathname)}`;
 	void refresh();
 	const refreshAuth = () => void loadUser();
 	document.addEventListener("silentflare-auth-change", refreshAuth);
@@ -80,9 +78,9 @@ onMount(() => {
 			{:else}
 				<div class="rounded-xl border border-dashed border-[var(--line-divider)] bg-black/[0.015] p-4 dark:bg-white/[0.02]">
 					<p class="mb-3 text-75">Login to publish a comment.</p>
-					<button class="btn-regular min-h-11 rounded-lg px-4 font-bold active:scale-95" type="button" onclick={openAuth}>
+					<a class="btn-regular min-h-11 rounded-lg px-4 font-bold active:scale-95" href={accountHref}>
 						Login / Register
-					</button>
+					</a>
 				</div>
 			{/if}
 		</div>

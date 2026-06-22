@@ -7,6 +7,7 @@ const requiredFiles = [
 	"index.html",
 	"404.html",
 	"about/index.html",
+	"account/index.html",
 	"archive/index.html",
 	"admin/index.html",
 	"bots/index.html",
@@ -77,6 +78,26 @@ if (missingAdminNeedles.length > 0) {
 }
 
 console.log("Verified admin management page content.");
+
+const accountHtml = await readFile(
+	path.join("dist", "account", "index.html"),
+	"utf8",
+);
+const requiredAccountNeedles = [
+	"SilentFlare Account",
+	"SilentFlare account center",
+	"login register profile avatar bio",
+];
+const missingAccountNeedles = requiredAccountNeedles.filter(
+	(needle) => !accountHtml.includes(needle),
+);
+if (missingAccountNeedles.length > 0) {
+	throw new Error(
+		`Account page verification failed. Missing content: ${missingAccountNeedles.join(", ")}`,
+	);
+}
+
+console.log("Verified account center page content.");
 
 if (requireContent) {
 	const contentRoutes = [

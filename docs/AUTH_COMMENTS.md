@@ -17,6 +17,8 @@ TURNSTILE_SECRET_KEY=
 TURNSTILE_EXPECTED_HOSTNAME=blog.silentflare.com
 SESSION_COOKIE_NAME=sf_session
 SESSION_SECRET=
+ACCOUNT_SESSION_COOKIE_NAME=sf_account_session
+ACCOUNT_COOKIE_DOMAIN=.silentflare.com
 ```
 
 Cloudflare binding:
@@ -33,7 +35,20 @@ CLOUDFLARE_D1_DATABASE_ID=
 CLOUDFLARE_API_TOKEN=
 ```
 
-These are backend-only. They allow `admin.silentflare.com` to manage public users and comments through `api.silentflare.com` without exposing D1 credentials to the browser.
+These are backend-only. They allow `account.silentflare.com` to handle user accounts and `admin.silentflare.com` to manage public users and comments through `api.silentflare.com` without exposing D1 credentials to the browser.
+
+The FNS1 FastAPI account endpoints are:
+
+```text
+POST /account/auth/register
+POST /account/auth/login
+POST /account/auth/logout
+GET  /account/auth/me
+GET  /account/profile
+POST /account/profile
+```
+
+`account.silentflare.com` should call these through the same-origin `/account-api/` proxy. `ACCOUNT_COOKIE_DOMAIN=.silentflare.com` lets the HttpOnly account session survive across SilentFlare subdomains when needed.
 
 Do not commit `.env`, `.dev.vars`, Turnstile secrets, session secrets, or D1 production credentials.
 
@@ -72,7 +87,7 @@ Configure in the Pages project settings:
 - Secret: `TURNSTILE_SECRET_KEY`.
 - Secret: `SESSION_SECRET`.
 
-For the FNS1 admin console, add the Cloudflare D1 REST variables above to `/opt/silentflare/api/api.env`, then restart `silentflare-api.service`. Do not print their values.
+For the FNS1 account/admin API, add the Cloudflare D1 REST variables, `TURNSTILE_SECRET_KEY`, `SESSION_SECRET`, and optional `ACCOUNT_COOKIE_DOMAIN` to `/opt/silentflare/api/api.env`, then restart `silentflare-api.service`. Do not print their values.
 
 ## Manual API Checks
 
@@ -87,12 +102,13 @@ curl.exe --ssl-no-revoke -i -X POST https://blog.silentflare.com/api/comments/cr
 Browser test flow:
 
 1. Open a post page.
-2. Use `Login / Register` in the navbar to create an account.
-3. Confirm `/api/auth/me` returns `{ "user": ... }` in the browser network tab.
-4. Publish a comment from the post comment form.
-5. Refresh comments and confirm the comment appears without exposing email.
-6. Delete your own comment and confirm it disappears.
-7. Log out and confirm `/api/auth/me` returns `{ "user": null }`.
+2. Use the navbar Account link, or open `https://account.silentflare.com/`.
+3. Register or log in through the account center.
+4. Confirm `/account-api/account/auth/me` returns `{ "user": ... }` in the browser network tab on the account subsite.
+5. Publish a comment from the post comment form.
+6. Refresh comments and confirm the comment appears without exposing email.
+7. Delete your own comment and confirm it disappears.
+8. Log out from the account center and confirm `/account-api/account/auth/me` returns `{ "user": null }`.
 
 ## Security Notes
 

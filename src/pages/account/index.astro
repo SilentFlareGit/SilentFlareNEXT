@@ -1,10 +1,10 @@
 ---
-import AdminApp from "../../components/admin/AdminApp.svelte";
+import AccountApp from "../../components/account/AccountApp.svelte";
 import "@fontsource/roboto/400.css";
 import "@fontsource/roboto/500.css";
 import "@fontsource/roboto/700.css";
 
-const apiBase = "/admin-api";
+const apiBase = "/account-api";
 ---
 
 <!doctype html>
@@ -12,10 +12,10 @@ const apiBase = "/admin-api";
 	<head>
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<title>SilentFlare Admin</title>
+		<title>SilentFlare Account</title>
 		<meta
 			name="description"
-			content="SilentFlare owner console for public users and comments"
+			content="SilentFlare account center for login, registration, avatar, and profile settings"
 		/>
 		<script is:inline>
 			if (localStorage.theme === 'light') {
@@ -26,7 +26,7 @@ const apiBase = "/admin-api";
 		</script>
 	</head>
 	<body class="m-0 min-h-screen bg-[#0b111c] antialiased">
-		<div style="position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0);" aria-hidden="true">SilentFlare user and comment control public users and comments</div>
-		<AdminApp client:only="svelte" {apiBase} />
+		<div style="position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0);" aria-hidden="true">SilentFlare account center login register profile avatar bio</div>
+		<AccountApp client:only="svelte" {apiBase} />
 	</body>
 </html>

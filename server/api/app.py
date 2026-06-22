@@ -10,6 +10,7 @@ import secrets
 import struct
 import subprocess
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -80,8 +81,16 @@ WEB_LOGIN_ATTEMPTS = int(os.getenv("WEB_LOGIN_ATTEMPTS", "5"))
 WEB_LOGIN_WINDOW_SECONDS = int(os.getenv("WEB_LOGIN_WINDOW_SECONDS", "900"))
 WEB_LOGIN_SESSION_EPOCH = os.getenv("WEB_LOGIN_SESSION_EPOCH", "")
 SESSION_COOKIE = "sf_bot_session"
+ACCOUNT_SESSION_COOKIE = os.getenv("ACCOUNT_SESSION_COOKIE_NAME", "sf_account_session")
+ACCOUNT_SESSION_SECRET = os.getenv("SESSION_SECRET") or os.getenv("ACCOUNT_SESSION_SECRET", "")
+ACCOUNT_COOKIE_DOMAIN = os.getenv("ACCOUNT_COOKIE_DOMAIN", "")
 LOGIN_CHALLENGE_TTL = 5 * 60
 PBKDF2_PREFIX = "pbkdf2_sha256"
+ACCOUNT_PBKDF2_PREFIX = "pbkdf2-sha256"
+ACCOUNT_PBKDF2_ITERATIONS = int(os.getenv("ACCOUNT_PBKDF2_ITERATIONS", "210000"))
+ACCOUNT_SESSION_TTL = int(os.getenv("ACCOUNT_SESSION_TTL", "2592000"))
+TURNSTILE_SECRET_KEY = os.getenv("TURNSTILE_SECRET_KEY", "")
+TURNSTILE_EXPECTED_HOSTNAME = os.getenv("TURNSTILE_EXPECTED_HOSTNAME", "")
 
 app = FastAPI(title=APP_NAME)
 app.add_middleware(
@@ -89,10 +98,12 @@ app.add_middleware(
 	allow_origins=[
 		"https://blog.silentflare.com",
 		"https://admin.silentflare.com",
+		"https://account.silentflare.com",
 		"https://tgbot.silentflare.com",
 		"https://tgbotmanagement.silentflare.com",
 		"http://blog.silentflare.com",
 		"http://admin.silentflare.com",
+		"http://account.silentflare.com",
 		"http://tgbot.silentflare.com",
 		"http://tgbotmanagement.silentflare.com",
 	],
@@ -189,6 +200,25 @@ class BackupSchedulePayload(BaseModel):
 
 class UserRolePayload(BaseModel):
 	role: str
+
+
+class AccountRegisterPayload(BaseModel):
+	email: str
+	username: str
+	password: str
+	turnstileToken: str | None = None
+
+
+class AccountLoginPayload(BaseModel):
+	email: str
+	password: str
+	turnstileToken: str | None = None
+
+
+class AccountProfilePayload(BaseModel):
+	display_name: str | None = None
+	avatar_url: str | None = None
+	bio: str | None = None
 
 
 def cleanup_sessions() -> None:
@@ -717,6 +747,241 @@ def admin_data_status() -> dict[str, Any]:
 		"users_available": d1_configured(),
 		"comments_available": d1_configured(),
 	}
+
+
+def utc_now() -> str:
+	return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def account_auth_configured() -> bool:
+	return d1_configured() and len(ACCOUNT_SESSION_SECRET) >= 32
+
+
+def verify_turnstile_token(token: str | None, remote_ip: str, expected_action: str) -> None:
+	clean_token = (token or "").strip()
+	if not clean_token:
+		raise HTTPException(status_code=403, detail="Human verification is required")
+	if len(clean_token) > 2048:
+		raise HTTPException(status_code=403, detail="Human verification failed")
+	if not TURNSTILE_SECRET_KEY:
+		raise HTTPException(status_code=503, detail="Human verification is not configured")
+	payload = urlencode(
+		{
+			"secret": TURNSTILE_SECRET_KEY,
+			"response": clean_token,
+			"remoteip": remote_ip,
+		}
+	).encode()
+	request = UrlRequest(
+		"https://challenges.cloudflare.com/turnstile/v0/siteverify",
+		data=payload,
+		method="POST",
+	)
+	request.add_header("Content-Type", "application/x-www-form-urlencoded")
+	try:
+		with urlopen(request, timeout=15) as response:
+			body = json.loads(response.read().decode("utf-8"))
+	except Exception as exc:
+		raise HTTPException(status_code=403, detail="Human verification failed") from exc
+	if not body.get("success"):
+		raise HTTPException(status_code=403, detail="Human verification failed")
+	if body.get("action") and body.get("action") != expected_action:
+		raise HTTPException(status_code=403, detail="Human verification failed")
+	if TURNSTILE_EXPECTED_HOSTNAME and body.get("hostname") != TURNSTILE_EXPECTED_HOSTNAME:
+		raise HTTPException(status_code=403, detail="Human verification failed")
+
+
+def normalize_email(email: str) -> str:
+	value = email.strip().lower()
+	if (
+		not value
+		or len(value) > 254
+		or "@" not in value
+		or value.startswith("@")
+		or value.endswith("@")
+		or "." not in value.rsplit("@", 1)[-1]
+	):
+		raise HTTPException(status_code=400, detail="Enter a valid email address")
+	return value
+
+
+def normalize_username(username: str) -> str:
+	value = username.strip()
+	if len(value) < 3 or len(value) > 24:
+		raise HTTPException(status_code=400, detail="Username must be 3-24 characters")
+	if not all(char.isalnum() or char in {"_", "-"} for char in value):
+		raise HTTPException(
+			status_code=400,
+			detail="Username can only contain letters, numbers, underscores, and hyphens",
+		)
+	return value
+
+
+def validate_account_password(password: str) -> str:
+	if len(password) < 8:
+		raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+	if len(password) > 256:
+		raise HTTPException(status_code=400, detail="Password is too long")
+	return password
+
+
+def hash_account_password(password: str, salt: str | None = None) -> tuple[str, str]:
+	password_salt = salt or base64.b64encode(secrets.token_bytes(16)).decode("ascii")
+	key = hashlib.pbkdf2_hmac(
+		"sha256",
+		password.encode("utf-8"),
+		base64.b64decode(password_salt),
+		ACCOUNT_PBKDF2_ITERATIONS,
+		32,
+	)
+	return (
+		f"{ACCOUNT_PBKDF2_PREFIX}:{ACCOUNT_PBKDF2_ITERATIONS}:{base64.b64encode(key).decode('ascii')}",
+		password_salt,
+	)
+
+
+def verify_account_password(password: str, password_hash: str, salt: str) -> bool:
+	try:
+		prefix, iterations, stored_hash = password_hash.split(":", 2)
+	except ValueError:
+		return False
+	if prefix != ACCOUNT_PBKDF2_PREFIX:
+		return False
+	try:
+		iteration_count = int(iterations)
+		key = hashlib.pbkdf2_hmac(
+			"sha256",
+			password.encode("utf-8"),
+			base64.b64decode(salt),
+			iteration_count,
+			32,
+		)
+	except Exception:
+		return False
+	return hmac.compare_digest(base64.b64encode(key).decode("ascii"), stored_hash)
+
+
+def account_session_hash(token: str) -> str:
+	if len(ACCOUNT_SESSION_SECRET) < 32:
+		raise HTTPException(status_code=503, detail="Account session secret is not configured")
+	return base64.b64encode(
+		hmac.new(
+			ACCOUNT_SESSION_SECRET.encode("utf-8"),
+			token.encode("utf-8"),
+			hashlib.sha256,
+		).digest()
+	).decode("ascii")
+
+
+def account_user_payload(row: dict[str, Any]) -> dict[str, Any]:
+	return {
+		"id": row["id"],
+		"email": row["email"],
+		"username": row["username"],
+		"role": row.get("role", "user"),
+		"displayName": row.get("display_name") or "",
+		"avatarUrl": row.get("avatar_url") or "",
+		"bio": row.get("bio") or "",
+	}
+
+
+def create_account_session(response: Response, request: Request, user_id: str) -> None:
+	if not account_auth_configured():
+		raise HTTPException(status_code=503, detail="Account API is not configured")
+	now = utc_now()
+	expires_at = datetime.fromtimestamp(
+		time.time() + ACCOUNT_SESSION_TTL,
+		tz=timezone.utc,
+	).isoformat().replace("+00:00", "Z")
+	token = secrets.token_urlsafe(32)
+	d1_query(
+		"""
+		INSERT INTO sessions
+			(id, user_id, session_hash, created_at, expires_at, user_agent, ip_hash)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		""",
+		[
+			str(uuid.uuid4()),
+			user_id,
+			account_session_hash(token),
+			now,
+			expires_at,
+			(request.headers.get("user-agent") or "")[:500],
+			hashlib.sha256(client_key(request).encode("utf-8")).hexdigest(),
+		],
+	)
+	response.set_cookie(
+		ACCOUNT_SESSION_COOKIE,
+		token,
+		httponly=True,
+		secure=WEB_COOKIE_SECURE,
+		samesite="none" if WEB_COOKIE_SECURE else "lax",
+		max_age=ACCOUNT_SESSION_TTL,
+		path="/",
+		domain=ACCOUNT_COOKIE_DOMAIN or None,
+	)
+
+
+def clear_account_cookie(response: Response) -> None:
+	response.delete_cookie(
+		ACCOUNT_SESSION_COOKIE,
+		secure=WEB_COOKIE_SECURE,
+		samesite="none" if WEB_COOKIE_SECURE else "lax",
+		path="/",
+		domain=ACCOUNT_COOKIE_DOMAIN or None,
+	)
+
+
+def get_account_user(request: Request) -> dict[str, Any] | None:
+	token = request.cookies.get(ACCOUNT_SESSION_COOKIE, "")
+	if not token:
+		return None
+	now = utc_now()
+	rows = d1_query(
+		"""
+		SELECT
+			users.id,
+			users.email,
+			users.username,
+			users.role,
+			users.display_name,
+			users.avatar_url,
+			users.bio,
+			users.disabled_at
+		FROM sessions
+		INNER JOIN users ON users.id = sessions.user_id
+		WHERE sessions.session_hash = ?
+			AND sessions.expires_at > ?
+			AND users.disabled_at IS NULL
+		LIMIT 1
+		""",
+		[account_session_hash(token), now],
+	)
+	if not rows:
+		return None
+	return rows[0]
+
+
+def require_account_user(request: Request) -> dict[str, Any]:
+	user = get_account_user(request)
+	if not user:
+		raise HTTPException(status_code=401, detail="Login required")
+	return user
+
+
+def normalize_profile_payload(payload: AccountProfilePayload) -> dict[str, str]:
+	display_name = (payload.display_name or "").strip()
+	avatar_url = (payload.avatar_url or "").strip()
+	bio = (payload.bio or "").strip()
+	if len(display_name) > 80:
+		raise HTTPException(status_code=400, detail="Display name is too long")
+	if len(avatar_url) > 500:
+		raise HTTPException(status_code=400, detail="Avatar URL is too long")
+	if avatar_url and not avatar_url.startswith(("https://", "http://")):
+		raise HTTPException(status_code=400, detail="Avatar URL must start with http:// or https://")
+	if len(bio) > 500:
+		raise HTTPException(status_code=400, detail="Bio is too long")
+	return {"display_name": display_name, "avatar_url": avatar_url, "bio": bio}
 
 
 def chat_bot_control_configured() -> bool:
@@ -1696,6 +1961,163 @@ def auth_logout(
 	require_session(request, x_csrf_token=x_csrf_token, require_csrf=True)
 	destroy_session(request, response)
 	return {"ok": True}
+
+
+@app.post("/account/auth/register")
+def account_register(
+	payload: AccountRegisterPayload,
+	request: Request,
+	response: Response,
+) -> dict[str, Any]:
+	check_login_rate_limit(request)
+	if not account_auth_configured():
+		raise HTTPException(status_code=503, detail="Account API is not configured")
+	verify_turnstile_token(
+		payload.turnstileToken,
+		request.headers.get("cf-connecting-ip") or client_key(request),
+		"register",
+	)
+	email = normalize_email(payload.email)
+	username = normalize_username(payload.username)
+	password = validate_account_password(payload.password)
+	existing = d1_query(
+		"SELECT id FROM users WHERE email = ? OR username = ? LIMIT 1",
+		[email, username],
+	)
+	if existing:
+		record_login_failure(request)
+		raise HTTPException(status_code=409, detail="Email or username is already in use")
+	password_hash, salt = hash_account_password(password)
+	now = utc_now()
+	user_id = str(uuid.uuid4())
+	d1_query(
+		"""
+		INSERT INTO users
+			(id, email, username, password_hash, password_salt, role, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, 'user', ?, ?)
+		""",
+		[user_id, email, username, password_hash, salt, now, now],
+	)
+	create_account_session(response, request, user_id)
+	LOGIN_FAILURES.pop(client_key(request), None)
+	return {
+		"ok": True,
+		"user": {
+			"id": user_id,
+			"email": email,
+			"username": username,
+			"role": "user",
+			"displayName": "",
+			"avatarUrl": "",
+			"bio": "",
+		},
+	}
+
+
+@app.post("/account/auth/login")
+def account_login(
+	payload: AccountLoginPayload,
+	request: Request,
+	response: Response,
+) -> dict[str, Any]:
+	check_login_rate_limit(request)
+	if not account_auth_configured():
+		raise HTTPException(status_code=503, detail="Account API is not configured")
+	verify_turnstile_token(
+		payload.turnstileToken,
+		request.headers.get("cf-connecting-ip") or client_key(request),
+		"login",
+	)
+	email = normalize_email(payload.email)
+	rows = d1_query(
+		"""
+		SELECT
+			id,
+			email,
+			username,
+			password_hash,
+			password_salt,
+			role,
+			display_name,
+			avatar_url,
+			bio,
+			disabled_at
+		FROM users
+		WHERE email = ?
+		LIMIT 1
+		""",
+		[email],
+	)
+	if (
+		not rows
+		or rows[0].get("disabled_at")
+		or not verify_account_password(
+			payload.password,
+			str(rows[0].get("password_hash") or ""),
+			str(rows[0].get("password_salt") or ""),
+		)
+	):
+		record_login_failure(request)
+		raise HTTPException(status_code=401, detail="Invalid email or password")
+	create_account_session(response, request, str(rows[0]["id"]))
+	LOGIN_FAILURES.pop(client_key(request), None)
+	return {"ok": True, "user": account_user_payload(rows[0])}
+
+
+@app.post("/account/auth/logout")
+def account_logout(
+	request: Request,
+	response: Response,
+) -> dict[str, Any]:
+	token = request.cookies.get(ACCOUNT_SESSION_COOKIE, "")
+	if token and account_auth_configured():
+		d1_query("DELETE FROM sessions WHERE session_hash = ?", [account_session_hash(token)])
+	clear_account_cookie(response)
+	return {"ok": True}
+
+
+@app.get("/account/auth/me")
+def account_me(request: Request, response: Response) -> dict[str, Any]:
+	if not account_auth_configured():
+		return {"user": None, "configured": False}
+	d1_query("DELETE FROM sessions WHERE expires_at <= ?", [utc_now()])
+	user = get_account_user(request)
+	if not user:
+		clear_account_cookie(response)
+		return {"user": None, "configured": True}
+	return {"user": account_user_payload(user), "configured": True}
+
+
+@app.get("/account/profile")
+def account_profile(request: Request) -> dict[str, Any]:
+	user = require_account_user(request)
+	return {"ok": True, "user": account_user_payload(user)}
+
+
+@app.post("/account/profile")
+def account_profile_update(
+	payload: AccountProfilePayload,
+	request: Request,
+) -> dict[str, Any]:
+	user = require_account_user(request)
+	profile = normalize_profile_payload(payload)
+	now = utc_now()
+	d1_query(
+		"""
+		UPDATE users
+		SET display_name = ?, avatar_url = ?, bio = ?, updated_at = ?
+		WHERE id = ?
+		""",
+		[
+			profile["display_name"],
+			profile["avatar_url"],
+			profile["bio"],
+			now,
+			user["id"],
+		],
+	)
+	updated = {**user, **profile}
+	return {"ok": True, "user": account_user_payload(updated)}
 
 
 @app.get("/admin/status")
