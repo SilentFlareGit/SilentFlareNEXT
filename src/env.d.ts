@@ -9,6 +9,7 @@ interface ImportMetaEnv {
 	readonly GHOST_REQUEST_PROTO?: string;
 	readonly GHOST_ALLOW_EMPTY?: string;
 	readonly SITE_URL?: string;
+	readonly PUBLIC_TURNSTILE_SITE_KEY?: string;
 }
 
 interface ImportMeta {

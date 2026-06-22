@@ -1,0 +1,19 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "silentflare-next",
+	"compatibility_date": "2026-06-22",
+	"pages_build_output_dir": "dist",
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "silentflare-next",
+			"database_id": "replace_with_cloudflare_d1_database_id",
+			"migrations_dir": "migrations"
+		}
+	],
+	"vars": {
+		"PUBLIC_TURNSTILE_SITE_KEY": "",
+		"TURNSTILE_EXPECTED_HOSTNAME": "blog.silentflare.com",
+		"SESSION_COOKIE_NAME": "sf_session"
+	}
+}

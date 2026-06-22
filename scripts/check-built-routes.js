@@ -8,6 +8,7 @@ const requiredFiles = [
 	"404.html",
 	"about/index.html",
 	"archive/index.html",
+	"admin/index.html",
 	"bots/index.html",
 	"cms/index.html",
 	"robots.txt",
@@ -56,6 +57,26 @@ if (botsHtml.includes("login-username")) {
 }
 
 console.log("Verified bot management page content.");
+
+const adminHtml = await readFile(
+	path.join("dist", "admin", "index.html"),
+	"utf8",
+);
+const requiredAdminNeedles = [
+	"SilentFlare Admin",
+	"custom API management console",
+	"non-article operations",
+];
+const missingAdminNeedles = requiredAdminNeedles.filter(
+	(needle) => !adminHtml.includes(needle),
+);
+if (missingAdminNeedles.length > 0) {
+	throw new Error(
+		`Admin page verification failed. Missing content: ${missingAdminNeedles.join(", ")}`,
+	);
+}
+
+console.log("Verified admin management page content.");
 
 if (requireContent) {
 	const contentRoutes = [

@@ -16,15 +16,33 @@ SilentFlare uses separate hostnames for separate responsibilities:
 - `blog.silentflare.com`: public Astro/Fuwari front end, served by this app.
 - `cms.silentflare.com`: external Ghost CMS and Ghost Admin at `/ghost`.
 - `api.silentflare.com`: reserved for the future SilentFlare custom API.
-- `admin.silentflare.com`: reserved for the future SilentFlare custom admin dashboard.
+- `admin.silentflare.com`: SilentFlare custom admin dashboard for non-article operations.
 
 Placeholder and status routes are available in this app until the external services are built:
 
 - `/cms/`: Ghost CMS boundary and Content API connection status.
 - `/api/`: custom API boundary placeholder.
-- `/admin/`: custom admin boundary placeholder.
+- `/admin/`: custom API admin console for accounts, comments, bots, backups, and health checks.
 
 See [docs/SUBSITES.md](docs/SUBSITES.md) for the current subsite map.
+
+## Public Accounts And Comments
+
+The public blog includes Cloudflare Pages Functions for account registration, login, logout, current-user lookup, and post comments. User data, sessions, and comments are stored in Cloudflare D1; blog post content still comes from Ghost.
+
+Implemented API routes:
+
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
+- `GET /api/auth/me`
+- `GET /api/comments?postSlug=...`
+- `POST /api/comments/create`
+- `DELETE /api/comments/:id`
+
+Registration, login, and comment creation require Cloudflare Turnstile. Sessions use HttpOnly Secure SameSite=Lax cookies; raw session tokens are never stored in D1.
+
+See [docs/AUTH_COMMENTS.md](docs/AUTH_COMMENTS.md) for D1 migration commands, Cloudflare Pages variables, and manual test steps.
 
 ## What Was Initialized
 
@@ -84,6 +102,7 @@ GHOST_CONTENT_API_KEY=your_content_api_key
 GHOST_API_VERSION=v5.0
 SITE_URL=https://blog.silentflare.com
 PUBLIC_API_BASE_URL=https://api.silentflare.com
+PUBLIC_TURNSTILE_SITE_KEY=your_turnstile_site_key
 ```
 
 Install and run:
@@ -111,6 +130,13 @@ Lint and typecheck:
 ```cmd
 pnpm lint
 pnpm typecheck
+```
+
+Cloudflare D1 migrations:
+
+```cmd
+corepack pnpm db:migrate:local
+corepack pnpm db:migrate:remote
 ```
 
 For UI-only local previews without Ghost credentials:

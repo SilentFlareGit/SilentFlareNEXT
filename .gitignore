@@ -37,6 +37,7 @@ ghost-cms/content/logs/*.log
 .DS_Store
 
 .vercel
+.wrangler
 
 package-lock.json
 bun.lockb

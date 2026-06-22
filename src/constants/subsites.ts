@@ -37,6 +37,20 @@ export const subsites: Subsite[] = [
 			"Expose public content through the Ghost Content API",
 		],
 	},
+	{
+		name: "Admin",
+		host: "admin.silentflare.com",
+		path: "/admin/",
+		status: "live",
+		purpose: "Custom API management",
+		details:
+			"SilentFlare-owned control surface for accounts, comments, bots, backups, health checks, and other non-article operations.",
+		actions: [
+			"Inspect custom API health and bot registry",
+			"Route operators to bot and backup management",
+			"Keep article editing inside Ghost",
+		],
+	},
 ];
 
 export function getSubsite(name: string): Subsite {

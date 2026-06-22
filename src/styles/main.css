@@ -110,6 +110,20 @@
     .btn-regular-dark.success {
         @apply bg-[oklch(0.75_0.14_var(--hue))] dark:bg-[oklch(0.75_0.14_var(--hue))]
     }
+
+    .auth-input {
+        @apply w-full rounded-lg border border-[var(--line-divider)] bg-white/70 px-3 py-3 text-base text-black/80 outline-none transition
+        placeholder:text-black/30 focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--primary)]
+        dark:bg-white/5 dark:text-white/80 dark:placeholder:text-white/30
+    }
+
+    .auth-tab {
+        @apply min-h-11 rounded-lg px-3 text-sm font-bold text-black/55 transition active:scale-95 dark:text-white/55
+    }
+
+    .auth-tab-active {
+        @apply bg-[var(--card-bg)] text-[var(--primary)] shadow-sm
+    }
 }
 
 .custom-md img, #post-cover img {

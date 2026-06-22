@@ -9,6 +9,7 @@ import { getPostUrlBySlug } from "@utils/url-utils";
 import type { MarkdownHeading } from "astro";
 import { Icon } from "astro-icon/components";
 import { licenseConfig, siteConfig } from "src/config";
+import CommentSection from "../../components/comments/CommentSection.svelte";
 import ImageWrapper from "../../components/misc/ImageWrapper.astro";
 import PostMetadata from "../../components/PostMeta.astro";
 import { formatDateToYYYYMMDD } from "../../utils/date-utils";
@@ -108,6 +109,8 @@ const jsonLd = {
 
         </div>
     </div>
+
+    <CommentSection client:load postSlug={entry.slug}></CommentSection>
 
     <div class="flex flex-col md:flex-row justify-between mb-4 gap-4 overflow-hidden w-full">
         <a href={entry.nextSlug ? getPostUrlBySlug(entry.nextSlug) : "#"}
