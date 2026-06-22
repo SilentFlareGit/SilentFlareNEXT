@@ -1970,13 +1970,13 @@ def account_register(
 	response: Response,
 ) -> dict[str, Any]:
 	check_login_rate_limit(request)
-	if not account_auth_configured():
-		raise HTTPException(status_code=503, detail="Account API is not configured")
 	verify_turnstile_token(
 		payload.turnstileToken,
 		request.headers.get("cf-connecting-ip") or client_key(request),
 		"register",
 	)
+	if not account_auth_configured():
+		raise HTTPException(status_code=503, detail="Account API is not configured")
 	email = normalize_email(payload.email)
 	username = normalize_username(payload.username)
 	password = validate_account_password(payload.password)
@@ -2021,13 +2021,13 @@ def account_login(
 	response: Response,
 ) -> dict[str, Any]:
 	check_login_rate_limit(request)
-	if not account_auth_configured():
-		raise HTTPException(status_code=503, detail="Account API is not configured")
 	verify_turnstile_token(
 		payload.turnstileToken,
 		request.headers.get("cf-connecting-ip") or client_key(request),
 		"login",
 	)
+	if not account_auth_configured():
+		raise HTTPException(status_code=503, detail="Account API is not configured")
 	email = normalize_email(payload.email)
 	rows = d1_query(
 		"""
