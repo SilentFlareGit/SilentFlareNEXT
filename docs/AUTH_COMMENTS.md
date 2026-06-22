@@ -1,6 +1,6 @@
 # Auth, Turnstile, And Comments
 
-This repo now includes Cloudflare Pages Functions for account sessions and post comments. Ghost still owns blog content; D1 only stores public-site users, sessions, and comments keyed by Ghost post slug.
+SilentFlare accounts and comments are served by the FNS1 FastAPI app. Ghost still owns blog content. The FNS1 local account database stores public users, sessions, profiles, and comments keyed by Ghost post slug.
 
 ## Environment
 
@@ -10,34 +10,27 @@ Frontend-safe:
 PUBLIC_TURNSTILE_SITE_KEY=
 ```
 
-Backend-only:
+Backend-only values for `/opt/silentflare/api/api.env`:
 
 ```env
 TURNSTILE_SECRET_KEY=
-TURNSTILE_EXPECTED_HOSTNAME=accounts.silentflare.com,blog.silentflare.com
-SESSION_COOKIE_NAME=sf_session
+TURNSTILE_EXPECTED_HOSTNAMES=accounts.silentflare.com,silentflare.com,www.silentflare.com
+# Legacy fallback if TURNSTILE_EXPECTED_HOSTNAMES is unset:
+# TURNSTILE_EXPECTED_HOSTNAME=accounts.silentflare.com
 SESSION_SECRET=
 ACCOUNT_SESSION_COOKIE_NAME=sf_account_session
 ACCOUNT_COOKIE_DOMAIN=.silentflare.com
+ACCOUNT_SESSION_TTL=2592000
+ACCOUNT_DB_PATH=/opt/silentflare/api/account.db
 ```
 
-Cloudflare binding:
+`TURNSTILE_SECRET_KEY`, `SESSION_SECRET`, `ACCOUNT_COOKIE_DOMAIN`, and a Turnstile hostname allowlist are required for account runtime configuration. Do not print secrets, raw cookies, or Turnstile tokens.
 
-```text
-DB -> D1 database silentflare-next
-```
+`CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_D1_DATABASE_ID`, and `CLOUDFLARE_API_TOKEN` are not required for production accounts or comments. The production database is local to FNS1.
 
-Optional FNS1 FastAPI admin-console variables:
+## API Surface
 
-```env
-CLOUDFLARE_ACCOUNT_ID=
-CLOUDFLARE_D1_DATABASE_ID=
-CLOUDFLARE_API_TOKEN=
-```
-
-These are backend-only. They allow `accounts.silentflare.com` to handle user accounts and `admin.silentflare.com` to manage public users and comments through `api.silentflare.com` without exposing D1 credentials to the browser.
-
-The FNS1 FastAPI account endpoints are:
+The FNS1 FastAPI account and comment endpoints are:
 
 ```text
 POST /account/auth/register
@@ -51,46 +44,24 @@ POST /comments/create
 DELETE /comments/{comment_id}
 ```
 
-`accounts.silentflare.com` should call these through the same-origin `/accounts-api/` proxy. `ACCOUNT_COOKIE_DOMAIN=.silentflare.com` lets the HttpOnly account session survive across SilentFlare subdomains when needed.
+`accounts.silentflare.com` calls these through the same-origin `/accounts-api/` proxy. Blog pages call comments through the public API path. `ACCOUNT_COOKIE_DOMAIN=.silentflare.com` lets the HttpOnly account session work across SilentFlare subdomains when needed.
 
-Do not commit `.env`, `.dev.vars`, Turnstile secrets, session secrets, or D1 production credentials.
+Registration, login, and comment creation must submit a Turnstile token. After Cloudflare siteverify succeeds, the API validates the returned `hostname` against the configured allowlist.
 
-## Local D1
+## Local Smoke Test
 
-Create the D1 database once in Cloudflare if it does not exist:
-
-```cmd
-npx wrangler d1 create silentflare-next
-```
-
-Copy the returned `database_id` into `wrangler.jsonc`, then run migrations:
+Run the account/comment smoke test without real Turnstile or production data:
 
 ```cmd
-corepack pnpm db:migrate:local
-corepack pnpm db:migrate:remote
+corepack pnpm test:smoke:account-comments
 ```
 
-For local Pages Functions development, put backend-only values in `.dev.vars`:
+The test uses a temporary SQLite database and a mocked successful Turnstile response. It verifies:
 
-```env
-TURNSTILE_SECRET_KEY=your_turnstile_secret
-TURNSTILE_EXPECTED_HOSTNAME=localhost
-SESSION_COOKIE_NAME=sf_session
-SESSION_SECRET=replace_with_at_least_32_random_characters
-```
-
-## Cloudflare Pages
-
-Configure in the Pages project settings:
-
-- D1 binding: `DB` pointing to the production D1 database.
-- Variable: `PUBLIC_TURNSTILE_SITE_KEY`.
-- Variable: `TURNSTILE_EXPECTED_HOSTNAME=accounts.silentflare.com,blog.silentflare.com`.
-- Variable: `SESSION_COOKIE_NAME=sf_session`.
-- Secret: `TURNSTILE_SECRET_KEY`.
-- Secret: `SESSION_SECRET`.
-
-For the FNS1 account/admin API, add the Cloudflare D1 REST variables, `TURNSTILE_SECRET_KEY`, `SESSION_SECRET`, and optional `ACCOUNT_COOKIE_DOMAIN` to `/opt/silentflare/api/api.env`, then restart `silentflare-api.service`. Do not print their values.
+- registration without Turnstile returns `403`;
+- mocked successful Turnstile allows registration and login to proceed;
+- mocked successful Turnstile allows authenticated comment creation;
+- the comment is written to the local database.
 
 ## Manual API Checks
 
@@ -115,8 +86,8 @@ Browser test flow:
 
 ## Security Notes
 
-- Passwords use Workers-compatible PBKDF2-SHA256 with random salt.
-- Session cookies are HttpOnly, Secure, SameSite=Lax.
-- D1 stores only `session_hash`, never the raw cookie token.
+- Passwords use PBKDF2-SHA256 with random salt.
+- Session cookies are HttpOnly, Secure, SameSite=Lax in production.
+- The database stores only `session_hash`, never the raw cookie token.
 - Comments are stored and rendered as plain text; the frontend does not use unsafe HTML.
-- Login, registration, and comment creation have a `checkRateLimit` placeholder in `functions/_lib/validators.ts`. Replace it with a D1 or KV sliding-window limiter before high-traffic launch.
+- Keep `/opt/silentflare/api/account.db` and `/opt/silentflare/api/api.env` out of the repository.

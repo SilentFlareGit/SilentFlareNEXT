@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import os
 import secrets
+import sqlite3
 import struct
 import subprocess
 import time
@@ -84,6 +85,7 @@ SESSION_COOKIE = "sf_bot_session"
 ACCOUNT_SESSION_COOKIE = os.getenv("ACCOUNT_SESSION_COOKIE_NAME", "sf_account_session")
 ACCOUNT_SESSION_SECRET = os.getenv("SESSION_SECRET") or os.getenv("ACCOUNT_SESSION_SECRET", "")
 ACCOUNT_COOKIE_DOMAIN = os.getenv("ACCOUNT_COOKIE_DOMAIN", "")
+ACCOUNT_DB_PATH = Path(os.getenv("ACCOUNT_DB_PATH", "/opt/silentflare/api/account.db"))
 LOGIN_CHALLENGE_TTL = 5 * 60
 PBKDF2_PREFIX = "pbkdf2_sha256"
 ACCOUNT_PBKDF2_PREFIX = "pbkdf2-sha256"
@@ -91,6 +93,7 @@ ACCOUNT_PBKDF2_ITERATIONS = int(os.getenv("ACCOUNT_PBKDF2_ITERATIONS", "210000")
 ACCOUNT_SESSION_TTL = int(os.getenv("ACCOUNT_SESSION_TTL", "2592000"))
 TURNSTILE_SECRET_KEY = os.getenv("TURNSTILE_SECRET_KEY", "")
 TURNSTILE_EXPECTED_HOSTNAME = os.getenv("TURNSTILE_EXPECTED_HOSTNAME", "")
+TURNSTILE_EXPECTED_HOSTNAMES = os.getenv("TURNSTILE_EXPECTED_HOSTNAMES", "")
 
 app = FastAPI(title=APP_NAME)
 app.add_middleware(
@@ -703,55 +706,128 @@ def public_json_health(url: str) -> dict[str, Any]:
 		return {"ok": False, "status": 0, "error": exc.__class__.__name__}
 
 
-def d1_config() -> dict[str, str]:
-	return {
-		"account_id": os.getenv("CLOUDFLARE_ACCOUNT_ID", ""),
-		"database_id": os.getenv("CLOUDFLARE_D1_DATABASE_ID", ""),
-		"api_token": os.getenv("CLOUDFLARE_API_TOKEN", ""),
-	}
+def expected_turnstile_hostnames() -> set[str]:
+	raw = TURNSTILE_EXPECTED_HOSTNAMES or TURNSTILE_EXPECTED_HOSTNAME
+	return {hostname.strip().lower() for hostname in raw.split(",") if hostname.strip()}
+
+
+def local_db_configured() -> bool:
+	return True
+
+
+def account_runtime_configured() -> bool:
+	return (
+		bool(TURNSTILE_SECRET_KEY)
+		and len(ACCOUNT_SESSION_SECRET) >= 32
+		and bool(ACCOUNT_COOKIE_DOMAIN)
+		and bool(expected_turnstile_hostnames())
+	)
+
+
+def ensure_account_db() -> None:
+	ACCOUNT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+	with sqlite3.connect(ACCOUNT_DB_PATH) as connection:
+		connection.execute("PRAGMA foreign_keys = ON")
+		connection.executescript(
+			"""
+			CREATE TABLE IF NOT EXISTS users (
+				id TEXT PRIMARY KEY,
+				email TEXT UNIQUE NOT NULL,
+				username TEXT UNIQUE NOT NULL,
+				password_hash TEXT NOT NULL,
+				password_salt TEXT NOT NULL,
+				role TEXT NOT NULL DEFAULT 'user',
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				disabled_at TEXT,
+				display_name TEXT,
+				avatar_url TEXT,
+				bio TEXT
+			);
+
+			CREATE TABLE IF NOT EXISTS sessions (
+				id TEXT PRIMARY KEY,
+				user_id TEXT NOT NULL,
+				session_hash TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				expires_at TEXT NOT NULL,
+				user_agent TEXT,
+				ip_hash TEXT,
+				FOREIGN KEY(user_id) REFERENCES users(id)
+			);
+
+			CREATE TABLE IF NOT EXISTS comments (
+				id TEXT PRIMARY KEY,
+				post_slug TEXT NOT NULL,
+				user_id TEXT NOT NULL,
+				parent_id TEXT,
+				content TEXT NOT NULL,
+				status TEXT NOT NULL DEFAULT 'published',
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				deleted_at TEXT,
+				FOREIGN KEY(user_id) REFERENCES users(id),
+				FOREIGN KEY(parent_id) REFERENCES comments(id)
+			);
+
+			CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+			CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+			CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+			CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+			CREATE INDEX IF NOT EXISTS idx_sessions_session_hash ON sessions(session_hash);
+			CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+			CREATE INDEX IF NOT EXISTS idx_comments_post_slug ON comments(post_slug);
+			CREATE INDEX IF NOT EXISTS idx_comments_user_id ON comments(user_id);
+			CREATE INDEX IF NOT EXISTS idx_comments_created_at ON comments(created_at);
+			"""
+		)
+		for column_name, column_type in (
+			("display_name", "TEXT"),
+			("avatar_url", "TEXT"),
+			("bio", "TEXT"),
+		):
+			try:
+				connection.execute(f"ALTER TABLE users ADD COLUMN {column_name} {column_type}")
+			except sqlite3.OperationalError as exc:
+				if "duplicate column name" not in str(exc).lower():
+					raise
+		connection.commit()
+
+
+def local_db_query(sql: str, params: list[Any] | None = None) -> list[dict[str, Any]]:
+	try:
+		ensure_account_db()
+		with sqlite3.connect(ACCOUNT_DB_PATH) as connection:
+			connection.row_factory = sqlite3.Row
+			connection.execute("PRAGMA foreign_keys = ON")
+			cursor = connection.execute(sql, params or [])
+			try:
+				if cursor.description is None:
+					connection.commit()
+					return []
+				rows = [dict(row) for row in cursor.fetchall()]
+				connection.commit()
+				return rows
+			finally:
+				cursor.close()
+	except sqlite3.Error as exc:
+		raise HTTPException(status_code=500, detail="Local account database query failed") from exc
 
 
 def d1_configured() -> bool:
-	config = d1_config()
-	return all(config.values())
+	return local_db_configured()
 
 
 def d1_query(sql: str, params: list[Any] | None = None) -> list[dict[str, Any]]:
-	config = d1_config()
-	if not all(config.values()):
-		raise HTTPException(status_code=503, detail="D1 admin API is not configured")
-	payload = json.dumps({"sql": sql, "params": params or []}).encode()
-	request = UrlRequest(
-		(
-			"https://api.cloudflare.com/client/v4/accounts/"
-			f"{config['account_id']}/d1/database/{config['database_id']}/query"
-		),
-		data=payload,
-		method="POST",
-	)
-	request.add_header("Authorization", f"Bearer {config['api_token']}")
-	request.add_header("Content-Type", "application/json")
-	try:
-		with urlopen(request, timeout=20) as response:
-			body = json.loads(response.read().decode("utf-8"))
-	except HTTPError as exc:
-		raise HTTPException(status_code=502, detail="D1 admin API request failed") from exc
-	except Exception as exc:
-		raise HTTPException(status_code=502, detail="D1 admin API is unavailable") from exc
-	if not body.get("success"):
-		raise HTTPException(status_code=502, detail="D1 admin API returned an error")
-	results = body.get("result") or []
-	if not results:
-		return []
-	first = results[0] or {}
-	return first.get("results") or []
+	return local_db_query(sql, params)
 
 
 def admin_data_status() -> dict[str, Any]:
 	return {
-		"d1_configured": d1_configured(),
-		"users_available": d1_configured(),
-		"comments_available": d1_configured(),
+		"d1_configured": local_db_configured(),
+		"users_available": local_db_configured(),
+		"comments_available": local_db_configured(),
+		"storage": "local",
 	}
 
 
@@ -760,7 +836,7 @@ def utc_now() -> str:
 
 
 def account_auth_configured() -> bool:
-	return d1_configured() and len(ACCOUNT_SESSION_SECRET) >= 32
+	return account_runtime_configured()
 
 
 def verify_turnstile_token(token: str | None, remote_ip: str, expected_action: str) -> None:
@@ -793,14 +869,15 @@ def verify_turnstile_token(token: str | None, remote_ip: str, expected_action: s
 		raise HTTPException(status_code=403, detail="Human verification failed")
 	if body.get("action") and body.get("action") != expected_action:
 		raise HTTPException(status_code=403, detail="Human verification failed")
-	if TURNSTILE_EXPECTED_HOSTNAME:
-		expected_hostnames = {
-			hostname.strip()
-			for hostname in TURNSTILE_EXPECTED_HOSTNAME.split(",")
-			if hostname.strip()
-		}
-		if expected_hostnames and body.get("hostname") not in expected_hostnames:
-			raise HTTPException(status_code=403, detail="Human verification failed")
+	expected_hostnames = expected_turnstile_hostnames()
+	if not expected_hostnames:
+		raise HTTPException(
+			status_code=503,
+			detail="Human verification hostname allowlist is not configured",
+		)
+	hostname = str(body.get("hostname") or "").strip().lower()
+	if hostname not in expected_hostnames:
+		raise HTTPException(status_code=403, detail="Human verification failed")
 
 
 def normalize_email(email: str) -> str:

@@ -36,6 +36,7 @@ type AdminStatus = {
 	d1_configured?: boolean;
 	users_available?: boolean;
 	comments_available?: boolean;
+	storage?: string;
 	totp_enabled?: boolean;
 };
 
@@ -74,7 +75,7 @@ let actionTone = $state<"neutral" | "warning" | "error" | "success">("neutral");
 
 const telegramAvailable = $derived(Boolean(authOptions?.methods?.telegram));
 const totpAvailable = $derived(Boolean(authOptions?.methods?.totp));
-const d1Ready = $derived(Boolean(status?.d1_configured));
+const accountDbReady = $derived(Boolean(status?.d1_configured));
 
 function toneClass(tone: string) {
 	if (tone === "success")
@@ -277,11 +278,17 @@ async function loadUsers() {
 	loadingUsers = true;
 	actionMessage = "";
 	try {
-		const data = await api<{ users: UserRow[]; d1_configured?: boolean }>(
-			"/admin/users",
-		);
+		const data = await api<{
+			users: UserRow[];
+			d1_configured?: boolean;
+			storage?: string;
+		}>("/admin/users");
 		users = data.users ?? [];
-		status = { ...status, d1_configured: data.d1_configured };
+		status = {
+			...status,
+			d1_configured: data.d1_configured,
+			storage: data.storage,
+		};
 	} catch (error) {
 		actionMessage =
 			error instanceof Error ? error.message : "Unable to load users.";
@@ -298,11 +305,17 @@ async function loadComments() {
 		? `?post_slug=${encodeURIComponent(postSlugFilter.trim())}`
 		: "";
 	try {
-		const data = await api<{ comments: CommentRow[]; d1_configured?: boolean }>(
-			`/admin/comments${query}`,
-		);
+		const data = await api<{
+			comments: CommentRow[];
+			d1_configured?: boolean;
+			storage?: string;
+		}>(`/admin/comments${query}`);
 		comments = data.comments ?? [];
-		status = { ...status, d1_configured: data.d1_configured };
+		status = {
+			...status,
+			d1_configured: data.d1_configured,
+			storage: data.storage,
+		};
 	} catch (error) {
 		actionMessage =
 			error instanceof Error ? error.message : "Unable to load comments.";
@@ -491,10 +504,10 @@ onDestroy(stopPolling);
 		</section>
 
 		<div class="mx-auto grid w-full max-w-7xl gap-4 px-4 py-5 md:px-6">
-			{#if !d1Ready}
+			{#if !accountDbReady}
 				<div class="rounded-lg border border-amber-300/30 bg-amber-300/10 p-4 text-amber-100">
-					<p class="font-bold">D1 management is not configured</p>
-					<p class="mt-2 text-sm leading-6">Set backend-only `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_D1_DATABASE_ID`, and `CLOUDFLARE_API_TOKEN` in the FNS1 API environment to enable user and comment operations.</p>
+					<p class="font-bold">Account database is not available</p>
+					<p class="mt-2 text-sm leading-6">Check the FNS1 API local database path and filesystem permissions to enable user and comment operations.</p>
 				</div>
 			{/if}
 

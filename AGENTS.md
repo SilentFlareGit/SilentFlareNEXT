@@ -14,7 +14,7 @@ SilentFlareNEXT is an Astro/Fuwari front end for a Ghost Headless CMS. Treat thi
 - `public`: static public files served as-is.
 - `docs`: operational documentation and setup notes.
 - `scripts`: local verification and authoring helpers.
-- `migrations`: Cloudflare D1 migrations for SilentFlare-owned users, sessions, comments, and account profile fields.
+- `migrations`: historical schema references for SilentFlare-owned users, sessions, comments, and account profile fields. Production accounts/comments use the FNS1 local API database, not Cloudflare D1.
 - `server/api`: FastAPI custom API used by account, admin, and bot-management surfaces. This is deployed manually to FNS1 under `/opt/silentflare/api`; it is not bundled into the Astro static site.
 - `dist`: generated output. Do not edit by hand.
 - `ghost-cms`: local Ghost artifacts may exist for experimentation. Do not treat this as production Ghost source and do not wire it into the front end.
@@ -33,7 +33,7 @@ SilentFlareNEXT is an Astro/Fuwari front end for a Ghost Headless CMS. Treat thi
 - Custom admin UI route: `/admin/`, also served from `admin.silentflare.com`.
 - Custom management UI route: `/bots/`, also served from `tgbot.silentflare.com` and `tgbotmanagement.silentflare.com`.
 - Custom API domain: `api.silentflare.com`, backed by FastAPI on FNS1.
-- Cloudflare D1 owns SilentFlare public users, sessions, comments, and account profile fields. Ghost does not own this data.
+- The FNS1 local account database owns SilentFlare public users, sessions, comments, and account profile fields. Ghost does not own this data.
 - Second managed bot: `Telegram Chat Bot`, backed by the separate MessagesHelperBot service on the Telegram Chat VPS.
 - Ghost Admin API keys are forbidden in this repo. The front end may only use a Ghost Content API key.
 - `GHOST_ALLOW_EMPTY=true` is a local or CI fallback for layout/build checks. It must not be used to prove production content integration.
@@ -139,7 +139,7 @@ Current account behavior:
 - Account login and registration require Cloudflare Turnstile.
 - Account sessions use HttpOnly cookies. Do not store account tokens in `localStorage`.
 - Account passwords use PBKDF2-SHA256 and random salts. Do not add bcrypt, native SQLite, or Node-only password packages.
-- Account profile content is stored in D1 user columns: `display_name`, `avatar_url`, and `bio`.
+- Account profile content is stored in local user columns: `display_name`, `avatar_url`, and `bio`.
 
 Current admin behavior:
 
@@ -151,19 +151,19 @@ Current admin behavior:
 
 Important account FastAPI endpoints:
 
-- `POST /account/auth/register`: register a public user, verify Turnstile action `register`, create a D1 session, set HttpOnly account cookie.
-- `POST /account/auth/login`: verify Turnstile action `login`, validate password, create a D1 session, set HttpOnly account cookie.
-- `POST /account/auth/logout`: delete the D1 session hash when possible and clear the account cookie.
-- `GET /account/auth/me`: return `{ "user": null }` or the current user. If FNS1 account/D1 config is incomplete, returns `configured:false`.
+- `POST /account/auth/register`: register a public user, verify Turnstile action `register`, create a local session, set HttpOnly account cookie.
+- `POST /account/auth/login`: verify Turnstile action `login`, validate password, create a local session, set HttpOnly account cookie.
+- `POST /account/auth/logout`: delete the local session hash when possible and clear the account cookie.
+- `GET /account/auth/me`: return `{ "user": null }` or the current user. If FNS1 account runtime config is incomplete, returns `configured:false`.
 - `GET /account/profile`: current authenticated user profile.
 - `POST /account/profile`: update `display_name`, `avatar_url`, and `bio`.
 - `GET /comments?postSlug=...`: public comment list for a Ghost post slug.
 - `POST /comments/create`: authenticated public-user comment creation with Turnstile action `comment`.
-- `DELETE /comments/{comment_id}`: authenticated public-user soft delete for the author or a D1 `admin` role user.
+- `DELETE /comments/{comment_id}`: authenticated public-user soft delete for the author or a local `admin` role user.
 
 Important admin FastAPI endpoints:
 
-- `GET /admin/status`: admin session and D1 configuration status.
+- `GET /admin/status`: admin session and local account/comment database status.
 - `GET /admin/users`: list public users without password hashes or salts.
 - `POST /admin/users/{user_id}/disable`: soft-disable a user.
 - `POST /admin/users/{user_id}/enable`: re-enable a user.
@@ -188,8 +188,8 @@ The latest known account/admin deployment added:
 
 Known current production caveat:
 
-- If `GET https://accounts.silentflare.com/accounts-api/account/auth/me` returns `{"user":null,"configured":false}`, FNS1 is missing account/D1 API configuration in `/opt/silentflare/api/api.env`.
-- In that state, Accounts pages and proxies are live, and no-token Turnstile checks still return `403`, but real registration/login/profile persistence cannot work until D1 and secret variables are configured.
+- If `GET https://accounts.silentflare.com/accounts-api/account/auth/me` returns `{"user":null,"configured":false}`, FNS1 is missing account runtime configuration in `/opt/silentflare/api/api.env`.
+- In that state, Accounts pages and proxies are live, and no-token Turnstile checks still return `403`, but real registration/login/profile persistence cannot work until Turnstile, session, cookie-domain, and hostname allowlist variables are configured.
 
 ## Environment Variables
 
@@ -228,21 +228,21 @@ WEB_SESSION_TTL=43200
 WEB_LOGIN_ATTEMPTS=5
 WEB_LOGIN_WINDOW_SECONDS=900
 
-# Account/admin D1 and Turnstile support for FNS1 FastAPI:
-CLOUDFLARE_ACCOUNT_ID=<cloudflare-account-id>
-CLOUDFLARE_D1_DATABASE_ID=<d1-database-id>
-CLOUDFLARE_API_TOKEN=<cloudflare-api-token-with-d1-query-access>
+# Account/admin local database and Turnstile support for FNS1 FastAPI:
 TURNSTILE_SECRET_KEY=<turnstile-secret>
-TURNSTILE_EXPECTED_HOSTNAME=accounts.silentflare.com,blog.silentflare.com
+TURNSTILE_EXPECTED_HOSTNAMES=accounts.silentflare.com,silentflare.com,www.silentflare.com
+# Backwards-compatible legacy name if TURNSTILE_EXPECTED_HOSTNAMES is unset:
+TURNSTILE_EXPECTED_HOSTNAME=accounts.silentflare.com
 SESSION_SECRET=<at-least-32-random-characters>
 ACCOUNT_SESSION_COOKIE_NAME=sf_account_session
 ACCOUNT_COOKIE_DOMAIN=.silentflare.com
 ACCOUNT_SESSION_TTL=2592000
+ACCOUNT_DB_PATH=/opt/silentflare/api/account.db
 ```
 
 Legacy `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, and `TELEGRAM_WEBHOOK_SECRET` are DB Backup compatibility fallbacks only. New multi-bot work should use the explicit per-bot variables above.
 
-The Cloudflare D1 REST variables above are required for both `accounts.silentflare.com` account persistence and `admin.silentflare.com` user/comment management. Do not print their values. Status-only checks may print whether the variable names are present.
+`CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_D1_DATABASE_ID`, and `CLOUDFLARE_API_TOKEN` are not required for production account persistence or admin user/comment management. Production accounts/comments use the FNS1 local account database. Do not print `TURNSTILE_SECRET_KEY`, `SESSION_SECRET`, raw cookies, or tokens. Status-only checks may print whether variable names are present.
 
 Telegram Chat Bot remote-control variables for FNS1 API:
 
@@ -309,21 +309,13 @@ corepack pnpm build
 corepack pnpm test:smoke
 ```
 
-D1 migrations:
+Account/comment local smoke test:
 
 ```cmd
-corepack pnpm db:migrate:local
-corepack pnpm db:migrate:remote
+corepack pnpm test:smoke:account-comments
 ```
 
-On this Windows machine, the `db:migrate:*` package scripts may fail because they contain `pnpm dlx` and `pnpm` may be absent from `PATH`. Use the direct Corepack form if needed:
-
-```cmd
-corepack pnpm dlx wrangler@latest d1 migrations apply silentflare-next --local
-corepack pnpm dlx wrangler@latest d1 migrations apply silentflare-next --remote
-```
-
-If the direct Wrangler command fails with `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, treat it as a local certificate/tooling issue, not a migration syntax result.
+This uses a temporary local database and mocked Turnstile success. It must verify that missing Turnstile returns `403` and mocked successful Turnstile can proceed through registration, login, and comment creation.
 
 Standard local validation without real Ghost:
 
@@ -562,7 +554,7 @@ Expected:
 - `ADMIN=200`.
 - `ACCOUNT_ME=200`.
 - `ADMIN_OPTIONS=200`.
-- `ACCOUNT_ME` returns `configured:true` once FNS1 has D1/session/Turnstile variables; `configured:false` means the page/proxy is up but account persistence is not configured.
+- `ACCOUNT_ME` returns `configured:true` once FNS1 has Turnstile/session/cookie-domain/hostname variables; `configured:false` means the page/proxy is up but account runtime configuration is incomplete.
 
 Verify account/admin public edge:
 
@@ -584,7 +576,7 @@ curl.exe --ssl-no-revoke -sS -o NUL -w "ACCOUNT_REGISTER_NO_TURNSTILE=%{http_cod
 curl.exe --ssl-no-revoke -sS -o NUL -w "ACCOUNT_LOGIN_NO_TURNSTILE=%{http_code}\n" -X POST "https://accounts.silentflare.com/accounts-api/account/auth/login" -H "content-type: application/json" --data-binary "@D:\tmp\account-login-no-turnstile.json"
 ```
 
-Expected: both `403`, even if D1 account configuration is incomplete.
+Expected: both `403`, even if account runtime configuration is incomplete.
 
 Verify bot management origin and API:
 
@@ -848,10 +840,10 @@ Known live state after the last deployment:
 - FNS1 static checkout was manually deployed to `f4f9583`.
 - Active release was `/opt/silentflare/blog/releases/20260622T061853Z`.
 - `accounts.silentflare.com`, `admin.silentflare.com`, `blog.silentflare.com`, and `api.silentflare.com/health` returned public `200`.
-- `accounts.silentflare.com/accounts-api/account/auth/me` returned `configured:false` because FNS1 still lacked D1 account/admin variables in `/opt/silentflare/api/api.env`.
+- `accounts.silentflare.com/accounts-api/account/auth/me` returned `configured:false` because FNS1 still lacked account runtime variables in `/opt/silentflare/api/api.env`.
 - No-token account register/login checks returned `403`.
 
-If continuing this work, first add the missing D1/Turnstile/session variables to FNS1 without printing values, then apply `migrations/0002_user_profile.sql` to the production D1 database. After that, retest real account registration, login, profile save, admin user listing, and admin comment listing.
+If continuing this work, first add the missing Turnstile/session/cookie-domain/hostname variables to FNS1 without printing values. After that, retest real account registration, login, profile save, admin user listing, and admin comment listing.
 
 ## Commit And Pull Request Guidelines
 

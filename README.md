@@ -28,21 +28,21 @@ See [docs/SUBSITES.md](docs/SUBSITES.md) for the current subsite map.
 
 ## Public Accounts And Comments
 
-The public blog includes Cloudflare Pages Functions for account registration, login, logout, current-user lookup, and post comments. User data, sessions, and comments are stored in Cloudflare D1; blog post content still comes from Ghost.
+The public blog uses the FNS1 FastAPI backend for account registration, login, logout, current-user lookup, and post comments. User data, sessions, profiles, and comments are stored in the FNS1 local account database; blog post content still comes from Ghost.
 
 Implemented API routes:
 
-- `POST /api/auth/register`
-- `POST /api/auth/login`
-- `POST /api/auth/logout`
-- `GET /api/auth/me`
-- `GET /api/comments?postSlug=...`
-- `POST /api/comments/create`
-- `DELETE /api/comments/:id`
+- `POST /account/auth/register`
+- `POST /account/auth/login`
+- `POST /account/auth/logout`
+- `GET /account/auth/me`
+- `GET /comments?postSlug=...`
+- `POST /comments/create`
+- `DELETE /comments/{comment_id}`
 
-Registration, login, and comment creation require Cloudflare Turnstile. Sessions use HttpOnly Secure SameSite=Lax cookies; raw session tokens are never stored in D1.
+Registration, login, and comment creation require Cloudflare Turnstile. Sessions use HttpOnly Secure SameSite=Lax cookies; raw session tokens are never stored in the local database.
 
-See [docs/AUTH_COMMENTS.md](docs/AUTH_COMMENTS.md) for D1 migration commands, Cloudflare Pages variables, and manual test steps.
+See [docs/AUTH_COMMENTS.md](docs/AUTH_COMMENTS.md) for FNS1 FastAPI variables, Turnstile hostname allowlists, the local smoke test, and manual test steps.
 
 ## What Was Initialized
 
@@ -132,11 +132,10 @@ pnpm lint
 pnpm typecheck
 ```
 
-Cloudflare D1 migrations:
+Account/comment smoke test:
 
 ```cmd
-corepack pnpm db:migrate:local
-corepack pnpm db:migrate:remote
+corepack pnpm test:smoke:account-comments
 ```
 
 For UI-only local previews without Ghost credentials:
