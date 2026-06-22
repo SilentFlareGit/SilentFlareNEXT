@@ -14,7 +14,7 @@ Backend-only:
 
 ```env
 TURNSTILE_SECRET_KEY=
-TURNSTILE_EXPECTED_HOSTNAME=blog.silentflare.com
+TURNSTILE_EXPECTED_HOSTNAME=accounts.silentflare.com,blog.silentflare.com
 SESSION_COOKIE_NAME=sf_session
 SESSION_SECRET=
 ACCOUNT_SESSION_COOKIE_NAME=sf_account_session
@@ -35,7 +35,7 @@ CLOUDFLARE_D1_DATABASE_ID=
 CLOUDFLARE_API_TOKEN=
 ```
 
-These are backend-only. They allow `account.silentflare.com` to handle user accounts and `admin.silentflare.com` to manage public users and comments through `api.silentflare.com` without exposing D1 credentials to the browser.
+These are backend-only. They allow `accounts.silentflare.com` to handle user accounts and `admin.silentflare.com` to manage public users and comments through `api.silentflare.com` without exposing D1 credentials to the browser.
 
 The FNS1 FastAPI account endpoints are:
 
@@ -46,9 +46,12 @@ POST /account/auth/logout
 GET  /account/auth/me
 GET  /account/profile
 POST /account/profile
+GET  /comments?postSlug=...
+POST /comments/create
+DELETE /comments/{comment_id}
 ```
 
-`account.silentflare.com` should call these through the same-origin `/account-api/` proxy. `ACCOUNT_COOKIE_DOMAIN=.silentflare.com` lets the HttpOnly account session survive across SilentFlare subdomains when needed.
+`accounts.silentflare.com` should call these through the same-origin `/accounts-api/` proxy. `ACCOUNT_COOKIE_DOMAIN=.silentflare.com` lets the HttpOnly account session survive across SilentFlare subdomains when needed.
 
 Do not commit `.env`, `.dev.vars`, Turnstile secrets, session secrets, or D1 production credentials.
 
@@ -82,7 +85,7 @@ Configure in the Pages project settings:
 
 - D1 binding: `DB` pointing to the production D1 database.
 - Variable: `PUBLIC_TURNSTILE_SITE_KEY`.
-- Variable: `TURNSTILE_EXPECTED_HOSTNAME=blog.silentflare.com`.
+- Variable: `TURNSTILE_EXPECTED_HOSTNAME=accounts.silentflare.com,blog.silentflare.com`.
 - Variable: `SESSION_COOKIE_NAME=sf_session`.
 - Secret: `TURNSTILE_SECRET_KEY`.
 - Secret: `SESSION_SECRET`.
@@ -94,21 +97,21 @@ For the FNS1 account/admin API, add the Cloudflare D1 REST variables, `TURNSTILE
 Without a Turnstile token these must fail with `403`:
 
 ```cmd
-curl.exe --ssl-no-revoke -i -X POST https://blog.silentflare.com/api/auth/register -H "content-type: application/json" --data "{\"email\":\"a@example.com\",\"username\":\"tester\",\"password\":\"password123\",\"turnstileToken\":\"\"}"
-curl.exe --ssl-no-revoke -i -X POST https://blog.silentflare.com/api/auth/login -H "content-type: application/json" --data "{\"email\":\"a@example.com\",\"password\":\"password123\",\"turnstileToken\":\"\"}"
-curl.exe --ssl-no-revoke -i -X POST https://blog.silentflare.com/api/comments/create -H "content-type: application/json" --data "{\"postSlug\":\"123123\",\"content\":\"test\",\"turnstileToken\":\"\"}"
+curl.exe --ssl-no-revoke -i -X POST https://accounts.silentflare.com/accounts-api/account/auth/register -H "content-type: application/json" --data "{\"email\":\"a@example.com\",\"username\":\"tester\",\"password\":\"password123\",\"turnstileToken\":\"\"}"
+curl.exe --ssl-no-revoke -i -X POST https://accounts.silentflare.com/accounts-api/account/auth/login -H "content-type: application/json" --data "{\"email\":\"a@example.com\",\"password\":\"password123\",\"turnstileToken\":\"\"}"
+curl.exe --ssl-no-revoke -i -X POST https://api.silentflare.com/comments/create -H "content-type: application/json" --data "{\"postSlug\":\"123123\",\"content\":\"test\",\"turnstileToken\":\"\"}"
 ```
 
 Browser test flow:
 
 1. Open a post page.
-2. Use the navbar Account link, or open `https://account.silentflare.com/`.
-3. Register or log in through the account center.
-4. Confirm `/account-api/account/auth/me` returns `{ "user": ... }` in the browser network tab on the account subsite.
+2. Use the navbar Accounts link, or open `https://accounts.silentflare.com/`.
+3. Register or log in through the accounts center.
+4. Confirm `/accounts-api/account/auth/me` returns `{ "user": ... }` in the browser network tab on the accounts subsite.
 5. Publish a comment from the post comment form.
 6. Refresh comments and confirm the comment appears without exposing email.
 7. Delete your own comment and confirm it disappears.
-8. Log out from the account center and confirm `/account-api/account/auth/me` returns `{ "user": null }`.
+8. Log out from the accounts center and confirm `/accounts-api/account/auth/me` returns `{ "user": null }`.
 
 ## Security Notes
 

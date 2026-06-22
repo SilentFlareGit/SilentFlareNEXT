@@ -98,12 +98,12 @@ app.add_middleware(
 	allow_origins=[
 		"https://blog.silentflare.com",
 		"https://admin.silentflare.com",
-		"https://account.silentflare.com",
+		"https://accounts.silentflare.com",
 		"https://tgbot.silentflare.com",
 		"https://tgbotmanagement.silentflare.com",
 		"http://blog.silentflare.com",
 		"http://admin.silentflare.com",
-		"http://account.silentflare.com",
+		"http://accounts.silentflare.com",
 		"http://tgbot.silentflare.com",
 		"http://tgbotmanagement.silentflare.com",
 	],
@@ -219,6 +219,12 @@ class AccountProfilePayload(BaseModel):
 	display_name: str | None = None
 	avatar_url: str | None = None
 	bio: str | None = None
+
+
+class CommentCreatePayload(BaseModel):
+	postSlug: str
+	content: str
+	turnstileToken: str | None = None
 
 
 def cleanup_sessions() -> None:
@@ -787,8 +793,14 @@ def verify_turnstile_token(token: str | None, remote_ip: str, expected_action: s
 		raise HTTPException(status_code=403, detail="Human verification failed")
 	if body.get("action") and body.get("action") != expected_action:
 		raise HTTPException(status_code=403, detail="Human verification failed")
-	if TURNSTILE_EXPECTED_HOSTNAME and body.get("hostname") != TURNSTILE_EXPECTED_HOSTNAME:
-		raise HTTPException(status_code=403, detail="Human verification failed")
+	if TURNSTILE_EXPECTED_HOSTNAME:
+		expected_hostnames = {
+			hostname.strip()
+			for hostname in TURNSTILE_EXPECTED_HOSTNAME.split(",")
+			if hostname.strip()
+		}
+		if expected_hostnames and body.get("hostname") not in expected_hostnames:
+			raise HTTPException(status_code=403, detail="Human verification failed")
 
 
 def normalize_email(email: str) -> str:
@@ -982,6 +994,37 @@ def normalize_profile_payload(payload: AccountProfilePayload) -> dict[str, str]:
 	if len(bio) > 500:
 		raise HTTPException(status_code=400, detail="Bio is too long")
 	return {"display_name": display_name, "avatar_url": avatar_url, "bio": bio}
+
+
+def normalize_comment_content(content: str) -> str:
+	normalized = content.strip()
+	if not normalized:
+		raise HTTPException(status_code=400, detail="Comment content is required")
+	if len(normalized) > 1000:
+		raise HTTPException(status_code=400, detail="Comment must be 1000 characters or less")
+	return normalized
+
+
+def normalize_post_slug(post_slug: str) -> str:
+	normalized = post_slug.strip().strip("/")
+	if not normalized:
+		raise HTTPException(status_code=400, detail="Post slug is required")
+	if len(normalized) > 200:
+		raise HTTPException(status_code=400, detail="Post slug is too long")
+	return normalized
+
+
+def comment_payload(row: dict[str, Any]) -> dict[str, Any]:
+	return {
+		"id": row["id"],
+		"postSlug": row["post_slug"],
+		"userId": row["user_id"],
+		"parentId": row.get("parent_id"),
+		"content": row["content"],
+		"createdAt": row["created_at"],
+		"updatedAt": row["updated_at"],
+		"username": row["username"],
+	}
 
 
 def chat_bot_control_configured() -> bool:
@@ -2118,6 +2161,89 @@ def account_profile_update(
 	)
 	updated = {**user, **profile}
 	return {"ok": True, "user": account_user_payload(updated)}
+
+
+@app.get("/comments")
+def comments(postSlug: str) -> dict[str, Any]:
+	if not d1_configured():
+		return {"ok": True, "comments": [], "configured": False}
+	post_slug = normalize_post_slug(postSlug)
+	rows = d1_query(
+		"""
+		SELECT
+			comments.id,
+			comments.post_slug,
+			comments.user_id,
+			comments.parent_id,
+			users.username,
+			comments.content,
+			comments.created_at,
+			comments.updated_at
+		FROM comments
+		INNER JOIN users ON users.id = comments.user_id
+		WHERE comments.post_slug = ?
+			AND comments.status = 'published'
+			AND comments.deleted_at IS NULL
+		ORDER BY comments.created_at ASC
+		LIMIT 200
+		""",
+		[post_slug],
+	)
+	return {"ok": True, "comments": [comment_payload(row) for row in rows], "configured": True}
+
+
+@app.post("/comments/create")
+def comment_create(payload: CommentCreatePayload, request: Request) -> dict[str, Any]:
+	verify_turnstile_token(
+		payload.turnstileToken,
+		request.headers.get("cf-connecting-ip") or client_key(request),
+		"comment",
+	)
+	user = require_account_user(request)
+	post_slug = normalize_post_slug(payload.postSlug)
+	content = normalize_comment_content(payload.content)
+	now = utc_now()
+	comment_id = str(uuid.uuid4())
+	d1_query(
+		"""
+		INSERT INTO comments
+			(id, post_slug, user_id, parent_id, content, status, created_at, updated_at)
+		VALUES (?, ?, ?, NULL, ?, 'published', ?, ?)
+		""",
+		[comment_id, post_slug, user["id"], content, now, now],
+	)
+	return {
+		"ok": True,
+		"comment": {
+			"id": comment_id,
+			"postSlug": post_slug,
+			"userId": user["id"],
+			"parentId": None,
+			"content": content,
+			"createdAt": now,
+			"updatedAt": now,
+			"username": user["username"],
+		},
+	}
+
+
+@app.delete("/comments/{comment_id}")
+def comment_delete(comment_id: str, request: Request) -> dict[str, Any]:
+	user = require_account_user(request)
+	rows = d1_query(
+		"SELECT id, user_id FROM comments WHERE id = ? LIMIT 1",
+		[comment_id],
+	)
+	if not rows:
+		raise HTTPException(status_code=404, detail="Comment not found")
+	if rows[0]["user_id"] != user["id"] and user.get("role") != "admin":
+		raise HTTPException(status_code=403, detail="Comment delete is not allowed")
+	now = utc_now()
+	d1_query(
+		"UPDATE comments SET status = 'deleted', deleted_at = ?, updated_at = ? WHERE id = ?",
+		[now, now, comment_id],
+	)
+	return {"ok": True}
 
 
 @app.get("/admin/status")

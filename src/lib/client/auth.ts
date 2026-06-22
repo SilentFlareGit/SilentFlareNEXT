@@ -25,36 +25,57 @@ async function fetchJson<T>(url: string, init: RequestInit = {}): Promise<T> {
 		},
 	});
 	const data = (await response.json().catch(() => ({}))) as {
+		detail?: string;
 		error?: string;
 	};
 	if (!response.ok) {
-		throw new Error(data.error || "Request failed");
+		throw new Error(data.detail || data.error || "Request failed");
 	}
 	return data as T;
 }
 
+function accountApiUrl(path: string) {
+	if (typeof window === "undefined") return path;
+	if (window.location.hostname === "accounts.silentflare.com") {
+		return `/accounts-api${path}`;
+	}
+	if (window.location.hostname.endsWith(".silentflare.com")) {
+		return `https://api.silentflare.com${path}`;
+	}
+	return path;
+}
+
 export async function getCurrentUser() {
-	return fetchJson<{ user: CurrentUser | null }>("/api/auth/me", {
-		method: "GET",
-	});
+	return fetchJson<{ user: CurrentUser | null }>(
+		accountApiUrl("/account/auth/me"),
+		{
+			method: "GET",
+		},
+	);
 }
 
 export async function login(payload: AuthPayload) {
-	return fetchJson<{ user: CurrentUser }>("/api/auth/login", {
-		method: "POST",
-		body: JSON.stringify(payload),
-	});
+	return fetchJson<{ user: CurrentUser }>(
+		accountApiUrl("/account/auth/login"),
+		{
+			method: "POST",
+			body: JSON.stringify(payload),
+		},
+	);
 }
 
 export async function register(payload: RegisterPayload) {
-	return fetchJson<{ user: CurrentUser }>("/api/auth/register", {
-		method: "POST",
-		body: JSON.stringify(payload),
-	});
+	return fetchJson<{ user: CurrentUser }>(
+		accountApiUrl("/account/auth/register"),
+		{
+			method: "POST",
+			body: JSON.stringify(payload),
+		},
+	);
 }
 
 export async function logout() {
-	return fetchJson<{ ok: true }>("/api/auth/logout", {
+	return fetchJson<{ ok: true }>(accountApiUrl("/account/auth/logout"), {
 		method: "POST",
 		body: JSON.stringify({}),
 	});

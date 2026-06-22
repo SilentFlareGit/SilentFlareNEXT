@@ -4,7 +4,7 @@ import "@fontsource/roboto/400.css";
 import "@fontsource/roboto/500.css";
 import "@fontsource/roboto/700.css";
 
-const apiBase = "/account-api";
+const apiBase = "/accounts-api";
 ---
 
 <!doctype html>
@@ -12,10 +12,10 @@ const apiBase = "/account-api";
 	<head>
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<title>SilentFlare Account</title>
+		<title>SilentFlare Accounts</title>
 		<meta
 			name="description"
-			content="SilentFlare account center for login, registration, avatar, and profile settings"
+			content="SilentFlare accounts center for login, registration, avatar, and profile settings"
 		/>
 		<script is:inline>
 			if (localStorage.theme === 'light') {
@@ -26,7 +26,7 @@ const apiBase = "/account-api";
 		</script>
 	</head>
 	<body class="m-0 min-h-screen bg-[#0b111c] antialiased">
-		<div style="position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0);" aria-hidden="true">SilentFlare account center login register profile avatar bio</div>
+		<div style="position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0);" aria-hidden="true">SilentFlare accounts center login register profile avatar bio</div>
 		<AccountApp client:only="svelte" {apiBase} />
 	</body>
 </html>

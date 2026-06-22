@@ -13,7 +13,7 @@ type AccountUser = {
 	bio: string;
 };
 
-let { apiBase = "/account-api" } = $props<{ apiBase?: string }>();
+let { apiBase = "/accounts-api" } = $props<{ apiBase?: string }>();
 
 let user = $state<AccountUser | null>(null);
 let mode = $state<"login" | "register">("login");
@@ -217,11 +217,11 @@ onMount(() => {
 			<span>SilentFlare</span>
 		</a>
 		<div>
-			<p class="eyebrow">Account center</p>
+			<p class="eyebrow">Accounts center</p>
 			<h1 id="account-title">Your SilentFlare identity</h1>
 			<p class="hero-copy">
 				Manage sign-in, registration, avatar, and public profile details from the
-				account subsite.
+				accounts subsite.
 			</p>
 		</div>
 	</section>
