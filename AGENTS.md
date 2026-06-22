@@ -5,7 +5,7 @@ SilentFlareNEXT is an Astro/Fuwari front end for a Ghost Headless CMS. Treat thi
 ## Project Structure & Ownership
 
 - `src/components`: Astro/Svelte UI components.
-- `src/pages`: public routes, including `/`, `/posts/[slug]/`, `/tags/[tag]/`, `/authors/[author]/`, `/archive/`, `/cms/`, `rss.xml`, and `robots.txt`.
+- `src/pages`: public routes, including `/`, `/posts/[slug]/`, `/tags/[tag]/`, `/authors/[author]/`, `/archive/`, `/cms/`, `/account/`, `/admin/`, `/bots/`, `rss.xml`, and `robots.txt`.
 - `src/layouts`: page layout shells and shared front-end scripts.
 - `src/lib`: Ghost types, adapter, and Content API client.
 - `src/utils`: shared data and URL utilities. Blog data should go through `src/utils/content-utils.ts`, not raw Ghost objects in pages.
@@ -14,7 +14,8 @@ SilentFlareNEXT is an Astro/Fuwari front end for a Ghost Headless CMS. Treat thi
 - `public`: static public files served as-is.
 - `docs`: operational documentation and setup notes.
 - `scripts`: local verification and authoring helpers.
-- `server/api`: FastAPI custom API used by management surfaces such as Telegram bot management. This is deployed manually to FNS1 under `/opt/silentflare/api`; it is not bundled into the Astro static site.
+- `migrations`: Cloudflare D1 migrations for SilentFlare-owned users, sessions, comments, and account profile fields.
+- `server/api`: FastAPI custom API used by account, admin, and bot-management surfaces. This is deployed manually to FNS1 under `/opt/silentflare/api`; it is not bundled into the Astro static site.
 - `dist`: generated output. Do not edit by hand.
 - `ghost-cms`: local Ghost artifacts may exist for experimentation. Do not treat this as production Ghost source and do not wire it into the front end.
 
@@ -24,10 +25,15 @@ SilentFlareNEXT is an Astro/Fuwari front end for a Ghost Headless CMS. Treat thi
 - Public blog renderer: Astro static build.
 - Production CMS/admin domain: `cms.silentflare.com`.
 - Production public blog domain: `blog.silentflare.com`.
+- Production account domain: `account.silentflare.com`.
+- Production custom admin domain: `admin.silentflare.com`.
 - Ghost owns content only: posts, tags, authors, cover images, SEO metadata, and media under `/content/`.
 - Astro owns public rendering, RSS, sitemap, layout, search index, and public route shape.
+- Public account UI route: `/account/`, also served from `account.silentflare.com`.
+- Custom admin UI route: `/admin/`, also served from `admin.silentflare.com`.
 - Custom management UI route: `/bots/`, also served from `tgbot.silentflare.com` and `tgbotmanagement.silentflare.com`.
 - Custom API domain: `api.silentflare.com`, backed by FastAPI on FNS1.
+- Cloudflare D1 owns SilentFlare public users, sessions, comments, and account profile fields. Ghost does not own this data.
 - Second managed bot: `Telegram Chat Bot`, backed by the separate MessagesHelperBot service on the Telegram Chat VPS.
 - Ghost Admin API keys are forbidden in this repo. The front end may only use a Ghost Content API key.
 - `GHOST_ALLOW_EMPTY=true` is a local or CI fallback for layout/build checks. It must not be used to prove production content integration.
@@ -108,6 +114,80 @@ The Telegram Chat Bot console in `/bots/` should use the Astro/Svelte management
 
 Do not print values from `/opt/silentflare/api/api.env`. Reading variable names and checking whether a key is present is acceptable.
 
+## Account And Admin Surfaces
+
+SilentFlare account and admin features are split by audience:
+
+- `account.silentflare.com`: public user account center for login, registration, logout, avatar URL, display name, and bio/profile updates.
+- `admin.silentflare.com`: owner/admin console for public user management and comment management only.
+- `api.silentflare.com`: FastAPI backend that supports both surfaces.
+- `blog.silentflare.com`: public blog renderer. Do not put account forms or admin data management directly into the blog layout.
+
+Front end sources:
+
+- Account page: `src/pages/account/index.astro`.
+- Account app: `src/components/account/AccountApp.svelte`.
+- Admin page: `src/pages/admin/index.astro`.
+- Admin app: `src/components/admin/AdminApp.svelte`.
+- Blog navbar account entry: `src/components/auth/UserMenu.svelte`.
+- Blog comment login redirect: `src/components/comments/CommentSection.svelte`.
+
+Current account behavior:
+
+- The blog navbar shows an Account link, not an inline login/register modal.
+- Comment prompts link to `/account/?next=<current-path>` so account login/registration can return users to the article.
+- Account login and registration require Cloudflare Turnstile.
+- Account sessions use HttpOnly cookies. Do not store account tokens in `localStorage`.
+- Account passwords use PBKDF2-SHA256 and random salts. Do not add bcrypt, native SQLite, or Node-only password packages.
+- Account profile content is stored in D1 user columns: `display_name`, `avatar_url`, and `bio`.
+
+Current admin behavior:
+
+- Admin login uses the existing bot-style owner auth surface through `SilentFlare Admin`.
+- Admin supports Telegram bot approval and optional 2FA only.
+- If 2FA is not configured, the UI should show it as unavailable instead of presenting a usable 2FA form.
+- Admin must not show bot backup, chat, health-dashboard, or unrelated operational controls.
+- Admin data actions require the admin session plus `X-CSRF-Token`.
+
+Important account FastAPI endpoints:
+
+- `POST /account/auth/register`: register a public user, verify Turnstile action `register`, create a D1 session, set HttpOnly account cookie.
+- `POST /account/auth/login`: verify Turnstile action `login`, validate password, create a D1 session, set HttpOnly account cookie.
+- `POST /account/auth/logout`: delete the D1 session hash when possible and clear the account cookie.
+- `GET /account/auth/me`: return `{ "user": null }` or the current user. If FNS1 account/D1 config is incomplete, returns `configured:false`.
+- `GET /account/profile`: current authenticated user profile.
+- `POST /account/profile`: update `display_name`, `avatar_url`, and `bio`.
+
+Important admin FastAPI endpoints:
+
+- `GET /admin/status`: admin session and D1 configuration status.
+- `GET /admin/users`: list public users without password hashes or salts.
+- `POST /admin/users/{user_id}/disable`: soft-disable a user.
+- `POST /admin/users/{user_id}/enable`: re-enable a user.
+- `POST /admin/users/{user_id}/role`: set `user` or `admin`.
+- `GET /admin/comments`: list comments with usernames but not user emails.
+- `POST /admin/comments/{comment_id}/delete`: soft-delete a comment.
+- `POST /admin/comments/{comment_id}/restore`: restore a soft-deleted comment.
+
+Production Nginx subsite routing on FNS1:
+
+- `account.silentflare.com/` serves `/opt/silentflare/blog/current/account/index.html`.
+- `admin.silentflare.com/` serves `/opt/silentflare/blog/current/admin/index.html`.
+- `account.silentflare.com/account-api/*` proxies to `http://127.0.0.1:9010/*`.
+- `admin.silentflare.com/admin-api/*` proxies to `http://127.0.0.1:9010/*`.
+- Both proxy locations should strip the prefix by using `proxy_pass http://127.0.0.1:9010/;`.
+
+The latest known account/admin deployment added:
+
+- `migrations/0002_user_profile.sql`.
+- `/etc/nginx/sites-available/silentflare-account`.
+- `/etc/nginx/sites-available/silentflare-admin` with `/admin-api/` proxy.
+
+Known current production caveat:
+
+- If `GET https://account.silentflare.com/account-api/account/auth/me` returns `{"user":null,"configured":false}`, FNS1 is missing account/D1 API configuration in `/opt/silentflare/api/api.env`.
+- In that state, account pages and proxies are live, and no-token Turnstile checks still return `403`, but real registration/login/profile persistence cannot work until D1 and secret variables are configured.
+
 ## Environment Variables
 
 Use `.env.example` as the template. Never commit `.env`.
@@ -144,9 +224,22 @@ WEB_COOKIE_SECURE=1
 WEB_SESSION_TTL=43200
 WEB_LOGIN_ATTEMPTS=5
 WEB_LOGIN_WINDOW_SECONDS=900
+
+# Account/admin D1 and Turnstile support for FNS1 FastAPI:
+CLOUDFLARE_ACCOUNT_ID=<cloudflare-account-id>
+CLOUDFLARE_D1_DATABASE_ID=<d1-database-id>
+CLOUDFLARE_API_TOKEN=<cloudflare-api-token-with-d1-query-access>
+TURNSTILE_SECRET_KEY=<turnstile-secret>
+TURNSTILE_EXPECTED_HOSTNAME=account.silentflare.com
+SESSION_SECRET=<at-least-32-random-characters>
+ACCOUNT_SESSION_COOKIE_NAME=sf_account_session
+ACCOUNT_COOKIE_DOMAIN=.silentflare.com
+ACCOUNT_SESSION_TTL=2592000
 ```
 
 Legacy `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, and `TELEGRAM_WEBHOOK_SECRET` are DB Backup compatibility fallbacks only. New multi-bot work should use the explicit per-bot variables above.
+
+The Cloudflare D1 REST variables above are required for both `account.silentflare.com` account persistence and `admin.silentflare.com` user/comment management. Do not print their values. Status-only checks may print whether the variable names are present.
 
 Telegram Chat Bot remote-control variables for FNS1 API:
 
@@ -212,6 +305,22 @@ corepack pnpm check
 corepack pnpm build
 corepack pnpm test:smoke
 ```
+
+D1 migrations:
+
+```cmd
+corepack pnpm db:migrate:local
+corepack pnpm db:migrate:remote
+```
+
+On this Windows machine, the `db:migrate:*` package scripts may fail because they contain `pnpm dlx` and `pnpm` may be absent from `PATH`. Use the direct Corepack form if needed:
+
+```cmd
+corepack pnpm dlx wrangler@latest d1 migrations apply silentflare-next --local
+corepack pnpm dlx wrangler@latest d1 migrations apply silentflare-next --remote
+```
+
+If the direct Wrangler command fails with `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, treat it as a local certificate/tooling issue, not a migration syntax result.
 
 Standard local validation without real Ghost:
 
@@ -314,6 +423,32 @@ ssh -i $key root@167.233.129.17 'systemctl restart silentflare-api.service; syst
 
 Expected API service status: `active`.
 
+The deploy script also does not manage Nginx subsite configuration. When account/admin routing changes, update these files manually on FNS1 and test/reload Nginx:
+
+```text
+/etc/nginx/sites-available/silentflare-account
+/etc/nginx/sites-available/silentflare-admin
+```
+
+Expected account/admin routing:
+
+```nginx
+location /account-api/ {
+    proxy_pass http://127.0.0.1:9010/;
+}
+
+location /admin-api/ {
+    proxy_pass http://127.0.0.1:9010/;
+}
+```
+
+After editing Nginx:
+
+```powershell
+$key = Join-Path $env:USERPROFILE '.ssh\hetzner_cx23'
+ssh -i $key root@167.233.129.17 'nginx -t && systemctl reload nginx'
+```
+
 Do not print or commit values from:
 
 - `/opt/silentflare/deploy/deploy.env`
@@ -408,6 +543,45 @@ curl.exe --ssl-no-revoke -L -sS -o NUL -w "PUBLIC_POST=%{http_code}\n" https://b
 ```
 
 Expected: both `200`.
+
+Verify account/admin origin:
+
+```powershell
+$key = Join-Path $env:USERPROFILE '.ssh\hetzner_cx23'
+ssh -i $key root@167.233.129.17 'set -Eeuo pipefail; test -f /opt/silentflare/blog/current/account/index.html && echo ACCOUNT_FILE=present; test -f /opt/silentflare/blog/current/admin/index.html && echo ADMIN_FILE=present; curl -sS -o /dev/null -w ACCOUNT=%{http_code} -H Host:account.silentflare.com http://127.0.0.1/; echo; curl -sS -o /dev/null -w ADMIN=%{http_code} -H Host:admin.silentflare.com http://127.0.0.1/; echo; curl -sS -o /tmp/account-me.txt -w ACCOUNT_ME=%{http_code} -H Host:account.silentflare.com http://127.0.0.1/account-api/account/auth/me; echo; cat /tmp/account-me.txt; echo; curl -sS -o /dev/null -w ADMIN_OPTIONS=%{http_code} -H Host:admin.silentflare.com http://127.0.0.1/admin-api/auth/options; echo'
+```
+
+Expected:
+
+- `ACCOUNT_FILE=present`.
+- `ADMIN_FILE=present`.
+- `ACCOUNT=200`.
+- `ADMIN=200`.
+- `ACCOUNT_ME=200`.
+- `ADMIN_OPTIONS=200`.
+- `ACCOUNT_ME` returns `configured:true` once FNS1 has D1/session/Turnstile variables; `configured:false` means the page/proxy is up but account persistence is not configured.
+
+Verify account/admin public edge:
+
+```powershell
+curl.exe --ssl-no-revoke -L -sS -o NUL -w "ACCOUNT_PUBLIC=%{http_code}\n" https://account.silentflare.com/
+curl.exe --ssl-no-revoke -L -sS -o NUL -w "ADMIN_PUBLIC=%{http_code}\n" https://admin.silentflare.com/
+curl.exe --ssl-no-revoke -L -sS -o NUL -w "ACCOUNT_ME_PUBLIC=%{http_code}\n" https://account.silentflare.com/account-api/account/auth/me
+curl.exe --ssl-no-revoke -L -sS -o NUL -w "ADMIN_OPTIONS_PUBLIC=%{http_code}\n" https://admin.silentflare.com/admin-api/auth/options
+```
+
+Expected: all `200`.
+
+Verify account Turnstile failure priority:
+
+```powershell
+Set-Content -Path D:\tmp\account-register-no-turnstile.json -Value '{"email":"a@example.com","username":"tester","password":"password123","turnstileToken":""}' -NoNewline
+Set-Content -Path D:\tmp\account-login-no-turnstile.json -Value '{"email":"a@example.com","password":"password123","turnstileToken":""}' -NoNewline
+curl.exe --ssl-no-revoke -sS -o NUL -w "ACCOUNT_REGISTER_NO_TURNSTILE=%{http_code}\n" -X POST "https://account.silentflare.com/account-api/account/auth/register" -H "content-type: application/json" --data-binary "@D:\tmp\account-register-no-turnstile.json"
+curl.exe --ssl-no-revoke -sS -o NUL -w "ACCOUNT_LOGIN_NO_TURNSTILE=%{http_code}\n" -X POST "https://account.silentflare.com/account-api/account/auth/login" -H "content-type: application/json" --data-binary "@D:\tmp\account-login-no-turnstile.json"
+```
+
+Expected: both `403`, even if D1 account configuration is incomplete.
 
 Verify bot management origin and API:
 
@@ -652,26 +826,29 @@ Useful scoped search:
 Get-ChildItem -Recurse -File src,scripts,.github,docs | Select-String -Pattern 'TODO|FIXME|HACK|XXX|console\.log|debugger|@ts-ignore|@ts-expect-error' -CaseSensitive:$false
 ```
 
-## Current Debug Cleanup Context
+## Current Account/Admin Context
 
-A recent debug pass intentionally made these code cleanups:
+Recent account/admin work intentionally made these changes:
 
-- removed production `console.log` noise from Pagefind/search related code,
-- removed GitHub card success logging from generated client script,
-- changed `Search.svelte` reactive async calls from async IIFEs to `void search(...)`,
-- removed an unnecessary `_cssVar` parameter and stale `@ts-expect-error` in the Expressive Code language badge plugin.
+- added the `/account/` standalone Svelte account center and `account.silentflare.com` routing;
+- moved blog navbar login/registration entry points to the Account link instead of the old inline auth modal;
+- changed comment unauthenticated prompts to link to `/account/?next=<current-path>`;
+- deleted the old `AuthModal.svelte`, `LoginForm.svelte`, and `RegisterForm.svelte` components;
+- added FNS1 FastAPI account endpoints under `/account/auth/*` and `/account/profile`;
+- narrowed `admin.silentflare.com` to user and comment management only;
+- added same-origin `account-api` and `admin-api` proxy expectations;
+- added `migrations/0002_user_profile.sql` for `display_name`, `avatar_url`, and `bio`.
 
-If these changes are still uncommitted when you start, do not overwrite them. Validate with:
+Known live state after the last deployment:
 
-```cmd
-cmd /c "set GHOST_ALLOW_EMPTY=true&& set GHOST_URL=https://cms.silentflare.com&& set GHOST_CONTENT_API_KEY=placeholder&& set SITE_URL=https://blog.silentflare.com&& corepack pnpm lint&& corepack pnpm check&& corepack pnpm build&& corepack pnpm test:smoke"
-```
+- GitHub Actions run `27933470944` completed successfully for `f4f9583`.
+- FNS1 static checkout was manually deployed to `f4f9583`.
+- Active release was `/opt/silentflare/blog/releases/20260622T061853Z`.
+- `account.silentflare.com`, `admin.silentflare.com`, `blog.silentflare.com`, and `api.silentflare.com/health` returned public `200`.
+- `account.silentflare.com/account-api/account/auth/me` returned `configured:false` because FNS1 still lacked D1 account/admin variables in `/opt/silentflare/api/api.env`.
+- No-token account register/login checks returned `403`.
 
-Then commit with:
-
-```text
-fix: reduce frontend debug noise
-```
+If continuing this work, first add the missing D1/Turnstile/session variables to FNS1 without printing values, then apply `migrations/0002_user_profile.sql` to the production D1 database. After that, retest real account registration, login, profile save, admin user listing, and admin comment listing.
 
 ## Commit And Pull Request Guidelines
 
