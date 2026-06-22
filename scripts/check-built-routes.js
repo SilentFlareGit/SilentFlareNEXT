@@ -64,8 +64,8 @@ const adminHtml = await readFile(
 );
 const requiredAdminNeedles = [
 	"SilentFlare Admin",
-	"custom API management console",
-	"non-article operations",
+	"public users and comments",
+	"SilentFlare user and comment control",
 ];
 const missingAdminNeedles = requiredAdminNeedles.filter(
 	(needle) => !adminHtml.includes(needle),

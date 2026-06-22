@@ -7,7 +7,7 @@ SilentFlare uses separate hostnames for separate responsibilities.
 | `blog.silentflare.com` | Public blog front end | This Astro/Fuwari app |
 | `cms.silentflare.com` | Ghost CMS and Ghost Admin | External Ghost service |
 | `api.silentflare.com` | Custom business API | FastAPI management backend plus Cloudflare Pages Functions for public auth/comments |
-| `admin.silentflare.com` | SilentFlare custom admin | `/admin/` management console for non-article operations |
+| `admin.silentflare.com` | SilentFlare custom admin | `/admin/` owner console for public users and comments |
 
 ## Local Mapping
 
@@ -25,6 +25,6 @@ http://localhost:2368/ghost/  -> Ghost Admin, when Ghost is running locally
 
 Ghost owns article content only: posts, pages, tags, authors, cover images, and SEO metadata. The Astro `/cms/` route reads Ghost settings and content counts through the Ghost Content API to verify that the blog front end can reach the CMS.
 
-SilentFlare-owned services should own users, comments, likes, bookmarks, analytics, automations, AI features, and any custom business data. The `/admin/` console is the operator-facing entry point for these non-article surfaces.
+SilentFlare-owned services should own users, comments, likes, bookmarks, analytics, automations, AI features, and any custom business data. The `/admin/` console currently exposes only public user and comment management. Bot, backup, and chat operations stay under `/bots/`.
 
 Keep `GHOST_ADMIN_API_KEY` in a server-side API service only. Do not expose it through this Astro front end.

@@ -88,14 +88,16 @@ app.add_middleware(
 	CORSMiddleware,
 	allow_origins=[
 		"https://blog.silentflare.com",
+		"https://admin.silentflare.com",
 		"https://tgbot.silentflare.com",
 		"https://tgbotmanagement.silentflare.com",
 		"http://blog.silentflare.com",
+		"http://admin.silentflare.com",
 		"http://tgbot.silentflare.com",
 		"http://tgbotmanagement.silentflare.com",
 	],
 	allow_credentials=True,
-	allow_methods=["GET", "POST", "OPTIONS"],
+	allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
 	allow_headers=["Content-Type", "X-Admin-Token", "X-CSRF-Token"],
 )
 
@@ -105,6 +107,14 @@ BACKUP_BOT_DESCRIPTION = (
 	"Complete all-database backup that remains valid across schema changes."
 )
 CHAT_BOT_ID = "Telegram Chat Bot"
+ADMIN_AUTH_ID = "SilentFlare Admin"
+ADMIN_AUTH_BOT = {
+	"id": ADMIN_AUTH_ID,
+	"name": "SilentFlare Admin",
+	"purpose": "Owner console for public users and comments.",
+	"status": "active",
+	"auth_method": "telegram",
+}
 
 BOTS = [
 	{
@@ -118,6 +128,7 @@ BOTS = [
 		),
 	},
 ]
+AUTH_TARGETS = [*BOTS, ADMIN_AUTH_BOT]
 
 SESSIONS: dict[str, dict[str, Any]] = {}
 LOGIN_CHALLENGES: dict[str, dict[str, Any]] = {}
@@ -174,6 +185,10 @@ class TotpEnablePayload(BaseModel):
 
 class BackupSchedulePayload(BaseModel):
 	interval_hours: int
+
+
+class UserRolePayload(BaseModel):
+	role: str
 
 
 def cleanup_sessions() -> None:
@@ -297,8 +312,20 @@ def public_bot(bot: dict[str, str]) -> dict[str, str]:
 	}
 
 
+def is_admin_auth_id(bot_id: str) -> bool:
+	return normalize_bot_id(bot_id) == ADMIN_AUTH_ID
+
+
 def telegram_auth_config(bot_id: str) -> dict[str, Any]:
 	normalized = normalize_bot_id(bot_id)
+	if normalized == ADMIN_AUTH_ID:
+		return {
+			"bot_id": ADMIN_AUTH_ID,
+			"token": DB_BACKUP_TELEGRAM_BOT_TOKEN,
+			"chat_id": DB_BACKUP_TELEGRAM_CHAT_ID,
+			"webhook_secret": DB_BACKUP_TELEGRAM_WEBHOOK_SECRET,
+			"owner_id": DB_BACKUP_TELEGRAM_OWNER_ID,
+		}
 	if normalized == BACKUP_BOT_ID:
 		return {
 			"bot_id": BACKUP_BOT_ID,
@@ -325,13 +352,13 @@ def telegram_auth_config(bot_id: str) -> dict[str, Any]:
 
 
 def telegram_config_from_webhook_token(token: str) -> dict[str, Any] | None:
-	for bot in BOTS:
+	for bot in AUTH_TARGETS:
 		config = telegram_auth_config(bot["id"])
 		secret = str(config.get("webhook_secret") or "")
 		if secret and hmac.compare_digest(token, secret):
 			return config
 	if not token and not any(
-		telegram_auth_config(bot["id"]).get("webhook_secret") for bot in BOTS
+		telegram_auth_config(bot["id"]).get("webhook_secret") for bot in AUTH_TARGETS
 	):
 		return telegram_auth_config(BACKUP_BOT_ID)
 	return None
@@ -396,7 +423,7 @@ def send_login_approval(bot: dict[str, str], challenge: dict[str, Any]) -> dict[
 		{
 			"chat_id": chat_id,
 			"text": (
-				"SilentFlare Bot Management login requested.\n"
+				"SilentFlare owner-console login requested.\n"
 				f"Bot: {bot['name']} ({bot['id']})\n"
 				"Approve only if this was you."
 			),
@@ -426,13 +453,13 @@ def edit_login_approval_message(
 		return
 	if approved:
 		text = (
-			"SilentFlare Bot Management login approved.\n"
+			"SilentFlare owner-console login approved.\n"
 			f"Bot: {challenge['bot_id']}\n"
 			"This approval link is now expired."
 		)
 	else:
 		text = (
-			"SilentFlare Bot Management login request is expired or unauthorized.\n"
+			"SilentFlare owner-console login request is expired or unauthorized.\n"
 			f"Bot: {challenge.get('bot_id', 'Unknown')}\n"
 			"This approval link is no longer valid."
 		)
@@ -590,9 +617,22 @@ def require_admin(x_admin_token: str | None) -> None:
 		raise HTTPException(status_code=401, detail="Invalid admin token")
 
 
+def require_admin_console_session(
+	request: Request,
+	x_csrf_token: str | None = None,
+	require_csrf: bool = False,
+) -> dict[str, Any]:
+	return require_session(
+		request,
+		bot_id=ADMIN_AUTH_ID,
+		x_csrf_token=x_csrf_token,
+		require_csrf=require_csrf,
+	)
+
+
 def ensure_bot(bot_id: str) -> dict[str, str]:
 	bot_id = normalize_bot_id(bot_id)
-	for bot in BOTS:
+	for bot in AUTH_TARGETS:
 		if bot["id"] == bot_id:
 			return bot
 	raise HTTPException(status_code=404, detail="Bot not found")
@@ -625,6 +665,58 @@ def public_json_health(url: str) -> dict[str, Any]:
 		return {"ok": False, "status": exc.code, "error": exc.__class__.__name__}
 	except Exception as exc:
 		return {"ok": False, "status": 0, "error": exc.__class__.__name__}
+
+
+def d1_config() -> dict[str, str]:
+	return {
+		"account_id": os.getenv("CLOUDFLARE_ACCOUNT_ID", ""),
+		"database_id": os.getenv("CLOUDFLARE_D1_DATABASE_ID", ""),
+		"api_token": os.getenv("CLOUDFLARE_API_TOKEN", ""),
+	}
+
+
+def d1_configured() -> bool:
+	config = d1_config()
+	return all(config.values())
+
+
+def d1_query(sql: str, params: list[Any] | None = None) -> list[dict[str, Any]]:
+	config = d1_config()
+	if not all(config.values()):
+		raise HTTPException(status_code=503, detail="D1 admin API is not configured")
+	payload = json.dumps({"sql": sql, "params": params or []}).encode()
+	request = UrlRequest(
+		(
+			"https://api.cloudflare.com/client/v4/accounts/"
+			f"{config['account_id']}/d1/database/{config['database_id']}/query"
+		),
+		data=payload,
+		method="POST",
+	)
+	request.add_header("Authorization", f"Bearer {config['api_token']}")
+	request.add_header("Content-Type", "application/json")
+	try:
+		with urlopen(request, timeout=20) as response:
+			body = json.loads(response.read().decode("utf-8"))
+	except HTTPError as exc:
+		raise HTTPException(status_code=502, detail="D1 admin API request failed") from exc
+	except Exception as exc:
+		raise HTTPException(status_code=502, detail="D1 admin API is unavailable") from exc
+	if not body.get("success"):
+		raise HTTPException(status_code=502, detail="D1 admin API returned an error")
+	results = body.get("result") or []
+	if not results:
+		return []
+	first = results[0] or {}
+	return first.get("results") or []
+
+
+def admin_data_status() -> dict[str, Any]:
+	return {
+		"d1_configured": d1_configured(),
+		"users_available": d1_configured(),
+		"comments_available": d1_configured(),
+	}
 
 
 def chat_bot_control_configured() -> bool:
@@ -1486,7 +1578,7 @@ def health() -> dict[str, Any]:
 
 @app.get("/auth/options")
 def auth_options() -> dict[str, Any]:
-	telegram_ready = any(bool(telegram_auth_config(bot["id"])["token"]) for bot in BOTS)
+	telegram_ready = any(bool(telegram_auth_config(bot["id"])["token"]) for bot in AUTH_TARGETS)
 	return {
 		"methods": {
 			"telegram": telegram_ready,
@@ -1603,6 +1695,138 @@ def auth_logout(
 ) -> dict[str, Any]:
 	require_session(request, x_csrf_token=x_csrf_token, require_csrf=True)
 	destroy_session(request, response)
+	return {"ok": True}
+
+
+@app.get("/admin/status")
+def admin_status(request: Request) -> dict[str, Any]:
+	session = require_admin_console_session(request)
+	return {
+		"ok": True,
+		"bot_id": session["bot_id"],
+		"totp_enabled": bool(console_totp_secret()),
+		**admin_data_status(),
+	}
+
+
+@app.get("/admin/users")
+def admin_users(request: Request) -> dict[str, Any]:
+	require_admin_console_session(request)
+	users = d1_query(
+		"""
+		SELECT id, email, username, role, created_at, updated_at, disabled_at
+		FROM users
+		ORDER BY created_at DESC
+		LIMIT 200
+		"""
+	)
+	return {"ok": True, "users": users, **admin_data_status()}
+
+
+@app.post("/admin/users/{user_id}/disable")
+def admin_user_disable(
+	user_id: str,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	require_admin_console_session(request, x_csrf_token=x_csrf_token, require_csrf=True)
+	now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+	d1_query(
+		"UPDATE users SET disabled_at = ?, updated_at = ? WHERE id = ?",
+		[now, now, user_id],
+	)
+	return {"ok": True}
+
+
+@app.post("/admin/users/{user_id}/enable")
+def admin_user_enable(
+	user_id: str,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	require_admin_console_session(request, x_csrf_token=x_csrf_token, require_csrf=True)
+	now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+	d1_query(
+		"UPDATE users SET disabled_at = NULL, updated_at = ? WHERE id = ?",
+		[now, user_id],
+	)
+	return {"ok": True}
+
+
+@app.post("/admin/users/{user_id}/role")
+def admin_user_role(
+	user_id: str,
+	payload: UserRolePayload,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	require_admin_console_session(request, x_csrf_token=x_csrf_token, require_csrf=True)
+	role = payload.role.strip().lower()
+	if role not in {"user", "admin"}:
+		raise HTTPException(status_code=400, detail="Role must be user or admin")
+	now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+	d1_query("UPDATE users SET role = ?, updated_at = ? WHERE id = ?", [role, now, user_id])
+	return {"ok": True}
+
+
+@app.get("/admin/comments")
+def admin_comments(request: Request, post_slug: str | None = None) -> dict[str, Any]:
+	require_admin_console_session(request)
+	params: list[Any] = []
+	where = ""
+	if post_slug:
+		where = "WHERE comments.post_slug = ?"
+		params.append(post_slug)
+	comments = d1_query(
+		f"""
+		SELECT
+			comments.id,
+			comments.post_slug,
+			comments.user_id,
+			users.username,
+			comments.content,
+			comments.status,
+			comments.created_at,
+			comments.updated_at,
+			comments.deleted_at
+		FROM comments
+		INNER JOIN users ON users.id = comments.user_id
+		{where}
+		ORDER BY comments.created_at DESC
+		LIMIT 200
+		""",
+		params,
+	)
+	return {"ok": True, "comments": comments, **admin_data_status()}
+
+
+@app.post("/admin/comments/{comment_id}/delete")
+def admin_comment_delete(
+	comment_id: str,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	require_admin_console_session(request, x_csrf_token=x_csrf_token, require_csrf=True)
+	now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+	d1_query(
+		"UPDATE comments SET status = 'deleted', deleted_at = ?, updated_at = ? WHERE id = ?",
+		[now, now, comment_id],
+	)
+	return {"ok": True}
+
+
+@app.post("/admin/comments/{comment_id}/restore")
+def admin_comment_restore(
+	comment_id: str,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	require_admin_console_session(request, x_csrf_token=x_csrf_token, require_csrf=True)
+	now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+	d1_query(
+		"UPDATE comments SET status = 'published', deleted_at = NULL, updated_at = ? WHERE id = ?",
+		[now, comment_id],
+	)
 	return {"ok": True}
 
 

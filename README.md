@@ -16,13 +16,13 @@ SilentFlare uses separate hostnames for separate responsibilities:
 - `blog.silentflare.com`: public Astro/Fuwari front end, served by this app.
 - `cms.silentflare.com`: external Ghost CMS and Ghost Admin at `/ghost`.
 - `api.silentflare.com`: reserved for the future SilentFlare custom API.
-- `admin.silentflare.com`: SilentFlare custom admin dashboard for non-article operations.
+- `admin.silentflare.com`: SilentFlare custom admin dashboard for public users and comments.
 
 Placeholder and status routes are available in this app until the external services are built:
 
 - `/cms/`: Ghost CMS boundary and Content API connection status.
 - `/api/`: custom API boundary placeholder.
-- `/admin/`: custom API admin console for accounts, comments, bots, backups, and health checks.
+- `/admin/`: custom API admin console for public users and comments.
 
 See [docs/SUBSITES.md](docs/SUBSITES.md) for the current subsite map.
 

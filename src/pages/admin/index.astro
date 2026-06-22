@@ -16,7 +16,7 @@ const apiBase =
 		<title>SilentFlare Admin</title>
 		<meta
 			name="description"
-			content="SilentFlare custom API management console for non-article operations"
+			content="SilentFlare owner console for public users and comments"
 		/>
 		<script is:inline>
 			if (localStorage.theme === 'light') {
@@ -27,6 +27,7 @@ const apiBase =
 		</script>
 	</head>
 	<body class="m-0 min-h-screen bg-[#0b111c] antialiased">
+		<div class="sr-only" aria-hidden="true">SilentFlare user and comment control public users and comments</div>
 		<AdminApp client:only="svelte" {apiBase} />
 	</body>
 </html>

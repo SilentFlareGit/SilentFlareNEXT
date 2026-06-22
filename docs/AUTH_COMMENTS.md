@@ -25,6 +25,16 @@ Cloudflare binding:
 DB -> D1 database silentflare-next
 ```
 
+Optional FNS1 FastAPI admin-console variables:
+
+```env
+CLOUDFLARE_ACCOUNT_ID=
+CLOUDFLARE_D1_DATABASE_ID=
+CLOUDFLARE_API_TOKEN=
+```
+
+These are backend-only. They allow `admin.silentflare.com` to manage public users and comments through `api.silentflare.com` without exposing D1 credentials to the browser.
+
 Do not commit `.env`, `.dev.vars`, Turnstile secrets, session secrets, or D1 production credentials.
 
 ## Local D1
@@ -61,6 +71,8 @@ Configure in the Pages project settings:
 - Variable: `SESSION_COOKIE_NAME=sf_session`.
 - Secret: `TURNSTILE_SECRET_KEY`.
 - Secret: `SESSION_SECRET`.
+
+For the FNS1 admin console, add the Cloudflare D1 REST variables above to `/opt/silentflare/api/api.env`, then restart `silentflare-api.service`. Do not print their values.
 
 ## Manual API Checks
 
