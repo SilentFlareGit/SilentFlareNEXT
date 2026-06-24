@@ -3,6 +3,8 @@ import AccountApp from "../../components/account/AccountApp.svelte";
 import "@fontsource/roboto/400.css";
 import "@fontsource/roboto/500.css";
 import "@fontsource/roboto/700.css";
+import "../../styles/variables.styl";
+import "../../styles/main.css";
 
 const apiBase = "/accounts-api";
 ---
@@ -23,9 +25,11 @@ const apiBase = "/accounts-api";
 			} else {
 				document.documentElement.classList.add('dark');
 			}
+			const hue = localStorage.getItem('hue') || '250';
+			document.documentElement.style.setProperty('--hue', hue);
 		</script>
 	</head>
-	<body class="m-0 min-h-screen bg-[#0b111c] antialiased">
+	<body class="m-0 min-h-screen bg-[var(--page-bg)] transition antialiased text-[14px] md:text-[16px] text-black/90 dark:text-white/90">
 		<div style="position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0);" aria-hidden="true">SilentFlare accounts center login register profile avatar bio</div>
 		<AccountApp client:only="svelte" {apiBase} />
 	</body>

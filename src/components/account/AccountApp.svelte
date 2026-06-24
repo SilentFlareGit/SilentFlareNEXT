@@ -210,429 +210,166 @@ onMount(() => {
 });
 </script>
 
-<main class="account-shell">
-	<section class="account-hero" aria-labelledby="account-title">
-		<a class="brand-link" href="/">
-			<Icon icon="material-symbols:arrow-back-rounded" />
-			<span>SilentFlare</span>
-		</a>
-		<div>
-			<p class="eyebrow">Accounts center</p>
-			<h1 id="account-title">Your SilentFlare identity</h1>
-			<p class="hero-copy">
-				Manage sign-in, registration, avatar, and public profile details from the
-				accounts subsite.
-			</p>
-		</div>
-	</section>
-
-	<section class="account-panel" aria-live="polite">
-		{#if loading}
-			<div class="loading-stack">
-				<div></div>
-				<div></div>
-				<div></div>
+<main class="min-h-screen w-full flex justify-center py-10 md:py-20 px-4 md:px-8">
+	<div class="w-full max-w-[1100px] flex flex-col md:flex-row gap-8 md:gap-16 lg:gap-24 items-center">
+		<!-- Left / Hero side -->
+		<section class="flex-1 flex flex-col justify-center min-h-[auto] md:min-h-[440px] w-full" aria-labelledby="account-title">
+			<a class="btn-plain scale-animation w-max mb-10 -ml-2 p-2 rounded-xl flex items-center gap-2 font-bold text-lg text-black/75 dark:text-white/75" href="/">
+				<Icon icon="material-symbols:arrow-back-rounded" class="text-[1.35rem]" />
+				<span>SilentFlare</span>
+			</a>
+			<div>
+				<p class="text-[var(--primary)] font-bold text-sm uppercase tracking-wider mb-4">Accounts center</p>
+				<h1 id="account-title" class="max-w-[10ch] sm:max-w-[11ch] md:max-w-none text-3xl sm:text-4xl md:text-5xl lg:text-[4rem] font-extrabold leading-[1.1] tracking-tight mb-6 text-black/90 dark:text-white/90">
+					Your SilentFlare identity
+				</h1>
+				<p class="text-black/50 dark:text-white/50 text-lg md:text-[1.1rem] leading-relaxed max-w-[420px]">
+					Manage sign-in, registration, avatar, and public profile details from the accounts subsite.
+				</p>
 			</div>
-		{:else if user}
-			<div class="panel-head">
-				<div class="identity">
-					<div class="avatar" style={avatarStyle}>
-						{#if !avatarUrl}
-							<Icon icon="material-symbols:person-rounded" />
-						{/if}
-					</div>
-					<div>
-						<p class="username">{displayName || user.username}</p>
-						<p class="muted">{user.email}</p>
-					</div>
+		</section>
+
+		<!-- Right / Panel side -->
+		<section class="card-base card-shadow relative w-full max-w-[440px] p-6 md:p-8 lg:p-9 border border-[var(--line-divider)]" aria-live="polite">
+			{#if loading}
+				<div class="flex flex-col gap-4">
+					<div class="h-14 w-full rounded-xl bg-black/5 dark:bg-white/5 animate-pulse"></div>
+					<div class="h-14 w-full rounded-xl bg-black/5 dark:bg-white/5 animate-pulse"></div>
+					<div class="h-14 w-full rounded-xl bg-black/5 dark:bg-white/5 animate-pulse"></div>
 				</div>
-				<button class="ghost-button" type="button" onclick={logout}>
-					<Icon icon="material-symbols:logout-rounded" />
-					<span>Logout</span>
-				</button>
-			</div>
+			{:else if user}
+				<div class="flex flex-col md:flex-row md:items-center justify-between gap-5 mb-8 pb-6 border-b border-[var(--line-divider)]">
+					<div class="flex items-center gap-4 min-w-0">
+						<div class="w-14 h-14 rounded-full bg-[var(--btn-regular-bg)] flex items-center justify-center text-[1.75rem] shrink-0 overflow-hidden bg-cover bg-center" style={avatarStyle}>
+							{#if !avatarUrl}
+								<Icon icon="material-symbols:person-rounded" class="text-[var(--primary)]" />
+							{/if}
+						</div>
+						<div class="min-w-0">
+							<p class="font-bold text-[1.05rem] text-black/90 dark:text-white/90 truncate mb-0.5">{displayName || user.username}</p>
+							<p class="text-black/50 dark:text-white/50 text-sm truncate">{user.email}</p>
+						</div>
+					</div>
+					<button class="btn-plain scale-animation p-2 px-3 rounded-lg flex items-center justify-center gap-2 font-bold shrink-0 text-[0.95rem] bg-black/5 dark:bg-white/5 w-full md:w-auto mt-2 md:mt-0" type="button" onclick={logout}>
+						<Icon icon="material-symbols:logout-rounded" class="text-lg" />
+						<span>Logout</span>
+					</button>
+				</div>
 
-			<form class="form-grid" onsubmit={(event) => { event.preventDefault(); void saveProfile(); }}>
-				<label>
-					<span>Display name</span>
-					<input bind:value={displayName} maxlength="80" autocomplete="name" />
-				</label>
-				<label>
-					<span>Avatar URL</span>
-					<input bind:value={avatarUrl} maxlength="500" autocomplete="photo" placeholder="https://..." />
-				</label>
-				<label class="wide">
-					<span>Bio</span>
-					<textarea bind:value={bio} maxlength="500" rows="5"></textarea>
-					<small>{bio.length}/500</small>
-				</label>
-				<button class="primary-button wide" type="submit" disabled={saving}>
-					<Icon icon="material-symbols:save-rounded" />
-					<span>{saving ? "Saving..." : "Save profile"}</span>
-				</button>
-			</form>
-		{:else}
-			<div class="mode-switch" role="tablist" aria-label="Account action">
-				<button
-					class:active={mode === "login"}
-					type="button"
-					role="tab"
-					aria-selected={mode === "login"}
-					onclick={() => { mode = "login"; error = ""; }}
-				>
-					Login
-				</button>
-				<button
-					class:active={mode === "register"}
-					type="button"
-					role="tab"
-					aria-selected={mode === "register"}
-					onclick={() => { mode = "register"; error = ""; }}
-				>
-					Register
-				</button>
-			</div>
-
-			{#if mode === "login"}
-				<form class="auth-form" onsubmit={(event) => { event.preventDefault(); void submitLogin(); }}>
-					<label>
-						<span>Email</span>
-						<input bind:value={loginEmail} type="email" autocomplete="email" required />
+				<form class="flex flex-col gap-5" onsubmit={(event) => { event.preventDefault(); void saveProfile(); }}>
+					<div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+						<label class="flex flex-col gap-2 font-bold text-[0.9rem] text-black/75 dark:text-white/75">
+							<span>Display name</span>
+							<input class="auth-input" bind:value={displayName} maxlength="80" autocomplete="name" />
+						</label>
+						<label class="flex flex-col gap-2 font-bold text-[0.9rem] text-black/75 dark:text-white/75">
+							<span>Avatar URL</span>
+							<input class="auth-input" bind:value={avatarUrl} maxlength="500" autocomplete="photo" placeholder="https://..." />
+						</label>
+					</div>
+					<label class="flex flex-col gap-2 font-bold text-[0.9rem] text-black/75 dark:text-white/75">
+						<div class="flex justify-between items-center">
+							<span>Bio</span>
+							<span class="text-[0.75rem] font-semibold text-black/40 dark:text-white/40">{bio.length}/500</span>
+						</div>
+						<textarea class="auth-input min-h-[110px] resize-y py-3" bind:value={bio} maxlength="500" rows="4"></textarea>
 					</label>
-					<label>
-						<span>Password</span>
-						<input bind:value={loginPassword} type="password" autocomplete="current-password" required />
-					</label>
-					<TurnstileWidget
-						action="login"
-						resetKey={loginResetKey}
-						onTokenChange={(token) => { loginTurnstileToken = token; }}
-					/>
-					<button class="primary-button" type="submit" disabled={submitting}>
-						<Icon icon="material-symbols:login-rounded" />
-						<span>{submitting ? "Signing in..." : "Login"}</span>
+					<button class="btn-regular py-3 rounded-xl font-bold text-[1rem] mt-3 disabled:opacity-70 disabled:cursor-wait" type="submit" disabled={saving}>
+						<Icon icon="material-symbols:save-rounded" class="text-[1.2rem] mr-2" />
+						<span>{saving ? "Saving..." : "Save profile"}</span>
 					</button>
 				</form>
 			{:else}
-				<form class="auth-form" onsubmit={(event) => { event.preventDefault(); void submitRegister(); }}>
-					<label>
-						<span>Email</span>
-						<input bind:value={registerEmail} type="email" autocomplete="email" required />
-					</label>
-					<label>
-						<span>Username</span>
-						<input bind:value={registerUsername} autocomplete="username" minlength="3" maxlength="24" required />
-					</label>
-					<label>
-						<span>Password</span>
-						<input bind:value={registerPassword} type="password" autocomplete="new-password" minlength="8" required />
-					</label>
-					<label>
-						<span>Confirm password</span>
-						<input bind:value={confirmPassword} type="password" autocomplete="new-password" minlength="8" required />
-					</label>
-					<TurnstileWidget
-						action="register"
-						resetKey={registerResetKey}
-						onTokenChange={(token) => { registerTurnstileToken = token; }}
-					/>
-					<button class="primary-button" type="submit" disabled={submitting}>
-						<Icon icon="material-symbols:person-add-rounded" />
-						<span>{submitting ? "Creating..." : "Create account"}</span>
+				<div class="flex p-1 bg-black/5 dark:bg-white/5 rounded-xl mb-7" role="tablist" aria-label="Account action">
+					<button
+						class="flex-1 transition auth-tab {mode === 'login' ? 'auth-tab-active' : 'hover:text-black/75 dark:hover:text-white/75'}"
+						type="button"
+						role="tab"
+						aria-selected={mode === "login"}
+						onclick={() => { mode = "login"; error = ""; }}
+					>
+						Login
 					</button>
-				</form>
+					<button
+						class="flex-1 transition auth-tab {mode === 'register' ? 'auth-tab-active' : 'hover:text-black/75 dark:hover:text-white/75'}"
+						type="button"
+						role="tab"
+						aria-selected={mode === "register"}
+						onclick={() => { mode = "register"; error = ""; }}
+					>
+						Register
+					</button>
+				</div>
+
+				{#if mode === "login"}
+					<form class="flex flex-col gap-5" onsubmit={(event) => { event.preventDefault(); void submitLogin(); }}>
+						<label class="flex flex-col gap-2 font-bold text-[0.9rem] text-black/75 dark:text-white/75">
+							<span>Email</span>
+							<input class="auth-input" bind:value={loginEmail} type="email" autocomplete="email" required />
+						</label>
+						<label class="flex flex-col gap-2 font-bold text-[0.9rem] text-black/75 dark:text-white/75">
+							<span>Password</span>
+							<input class="auth-input" bind:value={loginPassword} type="password" autocomplete="current-password" required />
+						</label>
+						<div class="pt-2">
+							<TurnstileWidget
+								action="login"
+								resetKey={loginResetKey}
+								onTokenChange={(token) => { loginTurnstileToken = token; }}
+							/>
+						</div>
+						<button class="btn-regular py-3.5 rounded-xl font-bold text-[1rem] mt-2 disabled:opacity-70 disabled:cursor-wait" type="submit" disabled={submitting}>
+							<Icon icon="material-symbols:login-rounded" class="text-[1.25rem] mr-2" />
+							<span>{submitting ? "Signing in..." : "Login"}</span>
+						</button>
+					</form>
+				{:else}
+					<form class="flex flex-col gap-5" onsubmit={(event) => { event.preventDefault(); void submitRegister(); }}>
+						<label class="flex flex-col gap-2 font-bold text-[0.9rem] text-black/75 dark:text-white/75">
+							<span>Email</span>
+							<input class="auth-input" bind:value={registerEmail} type="email" autocomplete="email" required />
+						</label>
+						<label class="flex flex-col gap-2 font-bold text-[0.9rem] text-black/75 dark:text-white/75">
+							<span>Username</span>
+							<input class="auth-input" bind:value={registerUsername} autocomplete="username" minlength="3" maxlength="24" required />
+						</label>
+						<div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+							<label class="flex flex-col gap-2 font-bold text-[0.9rem] text-black/75 dark:text-white/75">
+								<span>Password</span>
+								<input class="auth-input" bind:value={registerPassword} type="password" autocomplete="new-password" minlength="8" required />
+							</label>
+							<label class="flex flex-col gap-2 font-bold text-[0.9rem] text-black/75 dark:text-white/75">
+								<span>Confirm password</span>
+								<input class="auth-input" bind:value={confirmPassword} type="password" autocomplete="new-password" minlength="8" required />
+							</label>
+						</div>
+						<div class="pt-2">
+							<TurnstileWidget
+								action="register"
+								resetKey={registerResetKey}
+								onTokenChange={(token) => { registerTurnstileToken = token; }}
+							/>
+						</div>
+						<button class="btn-regular py-3.5 rounded-xl font-bold text-[1rem] mt-2 disabled:opacity-70 disabled:cursor-wait" type="submit" disabled={submitting}>
+							<Icon icon="material-symbols:person-add-rounded" class="text-[1.25rem] mr-2" />
+							<span>{submitting ? "Creating..." : "Create account"}</span>
+						</button>
+					</form>
+				{/if}
 			{/if}
-		{/if}
 
-		{#if error}
-			<p class="message error">{error}</p>
-		{/if}
-		{#if notice}
-			<p class="message success">{notice}</p>
-		{/if}
-	</section>
+			{#if error}
+				<div class="mt-6 p-4 rounded-xl bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 font-bold text-[0.95rem] flex items-start gap-3">
+					<Icon icon="material-symbols:error-outline-rounded" class="text-[1.3rem] shrink-0 mt-0.5" />
+					<p class="leading-snug">{error}</p>
+				</div>
+			{/if}
+			{#if notice}
+				<div class="mt-6 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold text-[0.95rem] flex items-start gap-3">
+					<Icon icon="material-symbols:check-circle-outline-rounded" class="text-[1.3rem] shrink-0 mt-0.5" />
+					<p class="leading-snug">{notice}</p>
+				</div>
+			{/if}
+		</section>
+	</div>
 </main>
-
-<style>
-:global(body) {
-	font-family: Roboto, system-ui, sans-serif;
-	color: #e5eefc;
-}
-
-.account-shell {
-	display: grid;
-	min-height: 100vh;
-	grid-template-columns: minmax(0, 0.92fr) minmax(22rem, 0.62fr);
-	gap: clamp(1.5rem, 4vw, 4rem);
-	align-items: center;
-	width: min(1120px, calc(100% - 2rem));
-	margin: 0 auto;
-	padding: clamp(1rem, 4vw, 3rem) 0;
-}
-
-.account-hero {
-	display: flex;
-	min-height: 34rem;
-	flex-direction: column;
-	justify-content: space-between;
-	border-left: 1px solid rgba(148, 163, 184, 0.28);
-	padding-left: clamp(1.25rem, 3vw, 2.5rem);
-}
-
-.brand-link,
-.ghost-button,
-.primary-button,
-.mode-switch button {
-	display: inline-flex;
-	min-height: 44px;
-	align-items: center;
-	justify-content: center;
-	gap: 0.5rem;
-	border: 0;
-	border-radius: 8px;
-	font-weight: 700;
-	text-decoration: none;
-	cursor: pointer;
-}
-
-.brand-link {
-	width: fit-content;
-	color: #b7c6db;
-}
-
-.brand-link:hover {
-	color: #ffffff;
-}
-
-.eyebrow {
-	margin: 0 0 0.75rem;
-	color: #8fb8ff;
-	font-size: 0.78rem;
-	font-weight: 800;
-	letter-spacing: 0;
-	text-transform: uppercase;
-}
-
-h1 {
-	max-width: 12ch;
-	margin: 0;
-	font-size: clamp(2.8rem, 8vw, 5.8rem);
-	line-height: 0.95;
-	letter-spacing: 0;
-}
-
-.hero-copy {
-	max-width: 34rem;
-	margin: 1.25rem 0 0;
-	color: #a9b8cf;
-	font-size: 1.05rem;
-	line-height: 1.7;
-}
-
-.account-panel {
-	border: 1px solid rgba(148, 163, 184, 0.22);
-	border-radius: 8px;
-	background: rgba(15, 23, 42, 0.82);
-	box-shadow: 0 24px 80px rgba(0, 0, 0, 0.26);
-	padding: clamp(1rem, 4vw, 1.5rem);
-}
-
-.mode-switch {
-	display: grid;
-	grid-template-columns: repeat(2, 1fr);
-	gap: 0.5rem;
-	margin-bottom: 1rem;
-	padding: 0.25rem;
-	border-radius: 8px;
-	background: rgba(148, 163, 184, 0.1);
-}
-
-.mode-switch button {
-	color: #a9b8cf;
-	background: transparent;
-}
-
-.mode-switch button.active {
-	color: #0b111c;
-	background: #e5eefc;
-}
-
-.auth-form,
-.form-grid {
-	display: grid;
-	gap: 1rem;
-}
-
-.form-grid {
-	grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.wide {
-	grid-column: 1 / -1;
-}
-
-label {
-	display: grid;
-	gap: 0.45rem;
-	color: #c9d6e8;
-	font-size: 0.9rem;
-	font-weight: 700;
-}
-
-input,
-textarea {
-	width: 100%;
-	box-sizing: border-box;
-	border: 1px solid rgba(148, 163, 184, 0.26);
-	border-radius: 8px;
-	background: rgba(2, 6, 23, 0.48);
-	color: #ffffff;
-	font: inherit;
-	padding: 0.8rem 0.9rem;
-	outline: none;
-}
-
-input:focus,
-textarea:focus {
-	border-color: #8fb8ff;
-	box-shadow: 0 0 0 3px rgba(143, 184, 255, 0.18);
-}
-
-textarea {
-	resize: vertical;
-}
-
-small,
-.muted {
-	color: #8c9bb0;
-}
-
-.primary-button {
-	width: 100%;
-	color: #06111f;
-	background: #8fb8ff;
-}
-
-.primary-button:disabled,
-.ghost-button:disabled {
-	cursor: wait;
-	opacity: 0.7;
-}
-
-.ghost-button {
-	color: #d7e3f5;
-	background: rgba(148, 163, 184, 0.12);
-	padding: 0 0.9rem;
-}
-
-.panel-head {
-	display: flex;
-	gap: 1rem;
-	align-items: center;
-	justify-content: space-between;
-	margin-bottom: 1.25rem;
-}
-
-.identity {
-	display: flex;
-	min-width: 0;
-	gap: 0.85rem;
-	align-items: center;
-}
-
-.avatar {
-	display: grid;
-	width: 3.5rem;
-	height: 3.5rem;
-	flex: 0 0 auto;
-	place-items: center;
-	border-radius: 50%;
-	background: #26344a center / cover;
-	color: #d7e3f5;
-	font-size: 1.75rem;
-}
-
-.username {
-	margin: 0 0 0.2rem;
-	overflow: hidden;
-	color: #ffffff;
-	font-size: 1.05rem;
-	font-weight: 800;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.message {
-	margin: 1rem 0 0;
-	border-radius: 8px;
-	padding: 0.8rem 0.9rem;
-	font-weight: 700;
-}
-
-.message.error {
-	color: #fecaca;
-	background: rgba(127, 29, 29, 0.38);
-}
-
-.message.success {
-	color: #bbf7d0;
-	background: rgba(20, 83, 45, 0.36);
-}
-
-.loading-stack {
-	display: grid;
-	gap: 1rem;
-}
-
-.loading-stack div {
-	height: 4rem;
-	border-radius: 8px;
-	background: rgba(148, 163, 184, 0.12);
-	animation: pulse 1.2s ease-in-out infinite;
-}
-
-@keyframes pulse {
-	50% {
-		opacity: 0.45;
-	}
-}
-
-@media (max-width: 820px) {
-	.account-shell {
-		grid-template-columns: 1fr;
-		align-items: stretch;
-	}
-
-	.account-hero {
-		min-height: auto;
-		gap: 3rem;
-	}
-
-	h1 {
-		max-width: 11ch;
-	}
-}
-
-@media (max-width: 560px) {
-	.account-shell {
-		width: min(100% - 1rem, 1120px);
-	}
-
-	.account-panel {
-		padding: 0.9rem;
-	}
-
-	.form-grid {
-		grid-template-columns: 1fr;
-	}
-
-	.panel-head {
-		align-items: flex-start;
-		flex-direction: column;
-	}
-
-	.ghost-button {
-		width: 100%;
-	}
-}
-</style>
