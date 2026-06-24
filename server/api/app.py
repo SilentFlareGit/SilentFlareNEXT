@@ -880,6 +880,23 @@ def verify_turnstile_token(token: str | None, remote_ip: str, expected_action: s
 		raise HTTPException(status_code=403, detail="Human verification failed")
 
 
+def require_account_turnstile(
+	token: str | None,
+	request: Request,
+	expected_action: str,
+) -> None:
+	try:
+		verify_turnstile_token(
+			token,
+			request.headers.get("cf-connecting-ip") or client_key(request),
+			expected_action,
+		)
+	except HTTPException as exc:
+		if exc.status_code == 403:
+			record_login_failure(request)
+		raise
+
+
 def normalize_email(email: str) -> str:
 	value = email.strip().lower()
 	if (
@@ -2090,11 +2107,7 @@ def account_register(
 	response: Response,
 ) -> dict[str, Any]:
 	check_login_rate_limit(request)
-	verify_turnstile_token(
-		payload.turnstileToken,
-		request.headers.get("cf-connecting-ip") or client_key(request),
-		"register",
-	)
+	require_account_turnstile(payload.turnstileToken, request, "register")
 	if not account_auth_configured():
 		raise HTTPException(status_code=503, detail="Account API is not configured")
 	email = normalize_email(payload.email)
@@ -2141,11 +2154,7 @@ def account_login(
 	response: Response,
 ) -> dict[str, Any]:
 	check_login_rate_limit(request)
-	verify_turnstile_token(
-		payload.turnstileToken,
-		request.headers.get("cf-connecting-ip") or client_key(request),
-		"login",
-	)
+	require_account_turnstile(payload.turnstileToken, request, "login")
 	if not account_auth_configured():
 		raise HTTPException(status_code=503, detail="Account API is not configured")
 	email = normalize_email(payload.email)

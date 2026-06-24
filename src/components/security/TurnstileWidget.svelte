@@ -47,7 +47,7 @@ function loadTurnstileScript() {
 
 async function renderWidget() {
 	if (!siteKey) {
-		error = "Human verification is not configured.";
+		error = "Cloudflare verification is not configured.";
 		return;
 	}
 
@@ -64,12 +64,12 @@ async function renderWidget() {
 			"expired-callback": () => onTokenChange(""),
 			"error-callback": () => {
 				onTokenChange("");
-				error = "Verification failed. Please try again.";
+				error = "Cloudflare verification failed. Please try again.";
 			},
 		});
 		loaded = true;
 	} catch {
-		error = "Verification could not load.";
+		error = "Cloudflare verification could not load.";
 	}
 }
 
