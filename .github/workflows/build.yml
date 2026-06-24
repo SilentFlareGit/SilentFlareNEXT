@@ -58,10 +58,19 @@ jobs:
     steps:
       - name: Trigger deployment webhook
         env:
+          DEPLOY_ORIGIN_HOST: blog.silentflare.com
+          DEPLOY_ORIGIN_IP: 167.233.129.17
           DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
         run: |
           if [ -z "$DEPLOY_WEBHOOK_URL" ]; then
             echo "::error::Missing DEPLOY_WEBHOOK_URL repository secret"
+            exit 1
+          fi
+
+          DEPLOY_TOKEN="${DEPLOY_WEBHOOK_URL#*token=}"
+          DEPLOY_TOKEN="${DEPLOY_TOKEN%%&*}"
+          if [ -z "$DEPLOY_TOKEN" ] || [ "$DEPLOY_TOKEN" = "$DEPLOY_WEBHOOK_URL" ]; then
+            echo "::error::DEPLOY_WEBHOOK_URL must contain a token query parameter"
             exit 1
           fi
 
@@ -70,7 +79,8 @@ jobs:
             --max-time 30 \
             --retry 2 \
             --retry-delay 5 \
+            --header "Host: $DEPLOY_ORIGIN_HOST" \
             --output /tmp/deploy-response.json \
-            "$DEPLOY_WEBHOOK_URL"
+            "http://$DEPLOY_ORIGIN_IP/hooks/rebuild?token=$DEPLOY_TOKEN"
 
           cat /tmp/deploy-response.json

@@ -476,7 +476,7 @@ Required repository secret:
 DEPLOY_WEBHOOK_URL
 ```
 
-This secret must contain the full origin webhook URL, including token. Do not write the real value to docs, logs, PRs, issues, or committed files.
+This secret must contain a deploy webhook URL whose query string still carries the current `token=...` value. GitHub Actions extracts that token and calls the raw origin IP `167.233.129.17` with `Host: blog.silentflare.com` plus the token query parameter so deploys do not depend on stale public/origin URL files or Cloudflare behavior. Do not write the real value to docs, logs, PRs, issues, or committed files.
 
 If GitHub Actions build fails:
 
@@ -485,7 +485,7 @@ If GitHub Actions build fails:
 3. If `Run Astro check` fails, run `corepack pnpm check` locally.
 4. If `Build site and search index` fails, run `corepack pnpm build`.
 5. If `Verify required build outputs` fails, inspect `scripts/check-built-routes.js` expectations.
-6. If `Deploy FNS1` fails after build succeeded, check `DEPLOY_WEBHOOK_URL`, webhook service health, and deploy logs.
+6. If `Deploy FNS1` fails after build succeeded, fetch the failed job log, confirm whether `DEPLOY_WEBHOOK_URL` still carries the live token, then check webhook service health and deploy logs.
 
 GitHub Actions API status check from Windows:
 
@@ -662,6 +662,7 @@ Current pattern:
 - webhook service listens on `127.0.0.1:9000`,
 - Nginx proxies `/hooks/rebuild`,
 - Ghost integration webhooks target origin IP URL with token,
+- GitHub Actions uses the raw origin IP `167.233.129.17` with `Host: blog.silentflare.com` and the token extracted from `DEPLOY_WEBHOOK_URL`,
 - webhook returns `202` for queued deploy.
 
 Trigger from FNS1 without printing token:

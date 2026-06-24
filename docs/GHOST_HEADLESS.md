@@ -112,7 +112,7 @@ git reset --hard origin/main
 
 It then installs dependencies, runs the strict Ghost build verification, publishes a timestamped release, and atomically moves the `current` symlink.
 
-GitHub Actions triggers the FNS1 deploy webhook after the `Build and Check` workflow passes on `main`. Configure the repository secret with the full origin webhook URL:
+GitHub Actions triggers the FNS1 deploy webhook after the `Build and Check` workflow passes on `main`. Configure the repository secret with any deploy webhook URL that still contains the live `token=` query parameter. The workflow extracts that token and calls the raw origin IP with `Host: blog.silentflare.com` and the same token query parameter:
 
 ```text
 DEPLOY_WEBHOOK_URL=http://<origin-ip>/hooks/rebuild?token=<deploy-token>
