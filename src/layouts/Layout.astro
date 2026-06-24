@@ -26,9 +26,17 @@ interface Props {
 	description?: string;
 	lang?: string;
 	setOGTypeArticle?: boolean;
+	disableBanner?: boolean;
 }
 
-let { title, banner, description, lang, setOGTypeArticle } = Astro.props;
+let {
+	title,
+	banner,
+	description,
+	lang,
+	setOGTypeArticle,
+	disableBanner = false,
+} = Astro.props;
 
 // apply a class to the body element to decide the height of the banner, only used for initial page load
 // Swup can update the body for each page visit, but it's after the page transition, causing a delay for banner height change
@@ -43,6 +51,7 @@ if (!banner || typeof banner !== "string" || banner.trim() === "") {
 }
 
 const enableBanner = siteConfig.banner.enable;
+const bannerClassesEnabled = enableBanner && !disableBanner;
 
 let pageTitle: string;
 if (title) {
@@ -146,7 +155,7 @@ const bannerOffset =
 		<link rel="alternate" type="application/rss+xml" title={profileConfig.name} href={`${Astro.site}rss.xml`}/>
 
 	</head>
-	<body class=" min-h-screen transition " class:list={[{"lg:is-home": isHomePage, "enable-banner": enableBanner}]}
+	<body class=" min-h-screen transition " class:list={[{"lg:is-home": isHomePage, "enable-banner": bannerClassesEnabled}]}
 		  data-overlayscrollbars-initialize
 	>
 		<ConfigCarrier></ConfigCarrier>
