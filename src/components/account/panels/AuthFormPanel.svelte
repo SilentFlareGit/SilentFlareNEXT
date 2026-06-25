@@ -33,16 +33,14 @@ let passwordMismatch = $derived(
 );
 </script>
 
-<section class="card-base px-6 py-6 md:px-10 md:py-8">
-	<div class="mb-6">
-		<div class="font-bold transition text-lg text-neutral-900 dark:text-neutral-100 relative ml-6 mb-3 before:w-1 before:h-4 before:rounded-md before:bg-[var(--primary)] before:absolute before:left-[-16px] before:top-[5px]">
-			Access
-		</div>
+<div class="mx-auto w-full max-w-[360px]">
+	<!-- Section heading -->
+	<div class="mb-7">
 		<h2 class="text-2xl font-extrabold text-black/90 dark:text-white/90">
-			{mode === "login" ? "Log in to your account" : "Create your account"}
+			{mode === "login" ? "Sign in" : "Create an account"}
 		</h2>
-		<p class="mt-2 max-w-[26ch] text-black/50 dark:text-white/50 sm:max-w-[52ch]">
-			Cloudflare verification is required before any login or registration request reaches the account API.
+		<p class="mt-1 text-sm text-black/45 dark:text-white/45">
+			to your SilentFlare account
 		</p>
 	</div>
 
@@ -77,11 +75,11 @@ let passwordMismatch = $derived(
 			event.preventDefault();
 			void submitLogin();
 		}}>
-			<label class="flex flex-col gap-2 font-bold text-[0.9rem] text-black/75 dark:text-white/75">
+			<label class="flex flex-col gap-2 font-bold text-[0.9rem] text-black/70 dark:text-white/70">
 				<span>Email</span>
 				<input class="auth-input" bind:value={loginEmail} type="email" autocomplete="email" required />
 			</label>
-			<label class="flex flex-col gap-2 font-bold text-[0.9rem] text-black/75 dark:text-white/75">
+			<label class="flex flex-col gap-2 font-bold text-[0.9rem] text-black/70 dark:text-white/70">
 				<span>Password</span>
 				<div class="relative">
 					<input
@@ -128,7 +126,7 @@ let passwordMismatch = $derived(
 				{:else}
 					<Icon icon="material-symbols:login-rounded" class="text-[1.25rem]" />
 				{/if}
-				<span>{submitting ? "Signing in..." : "Login"}</span>
+				<span>{submitting ? "Signing in..." : "Sign in"}</span>
 			</button>
 		</form>
 	{:else}
@@ -136,11 +134,11 @@ let passwordMismatch = $derived(
 			event.preventDefault();
 			void submitRegister();
 		}}>
-			<label class="flex flex-col gap-2 font-bold text-[0.9rem] text-black/75 dark:text-white/75">
+			<label class="flex flex-col gap-2 font-bold text-[0.9rem] text-black/70 dark:text-white/70">
 				<span>Email</span>
 				<input class="auth-input" bind:value={registerEmail} type="email" autocomplete="email" required />
 			</label>
-			<label class="flex flex-col gap-2 font-bold text-[0.9rem] text-black/75 dark:text-white/75">
+			<label class="flex flex-col gap-2 font-bold text-[0.9rem] text-black/70 dark:text-white/70">
 				<span>Username</span>
 				<input
 					class="auth-input"
@@ -151,8 +149,8 @@ let passwordMismatch = $derived(
 					required
 				/>
 			</label>
-			<div class="grid grid-cols-1 gap-5 md:grid-cols-2">
-				<label class="flex flex-col gap-2 font-bold text-[0.9rem] text-black/75 dark:text-white/75">
+			<div class="grid grid-cols-1 gap-5 sm:grid-cols-2">
+				<label class="flex flex-col gap-2 font-bold text-[0.9rem] text-black/70 dark:text-white/70">
 					<span>Password</span>
 					<div class="relative">
 						<input
@@ -177,11 +175,11 @@ let passwordMismatch = $derived(
 							/>
 						</button>
 					</div>
-					<p class="text-[0.75rem] font-normal text-black/40 dark:text-white/40">Minimum 8 characters</p>
+					<p class="text-[0.75rem] font-normal text-black/40 dark:text-white/40">Min 8 characters</p>
 				</label>
-				<label class="flex flex-col gap-2 font-bold text-[0.9rem] text-black/75 dark:text-white/75">
+				<label class="flex flex-col gap-2 font-bold text-[0.9rem] text-black/70 dark:text-white/70">
 					<div class="flex items-center justify-between">
-						<span>Confirm password</span>
+						<span>Confirm</span>
 						{#if passwordMatch}
 							<Icon icon="material-symbols:check-circle-outline-rounded" class="text-[1rem] text-emerald-500" />
 						{:else if passwordMismatch}
@@ -256,4 +254,4 @@ let passwordMismatch = $derived(
 			<p class="leading-snug">{notice}</p>
 		</div>
 	{/if}
-</section>
+</div>
