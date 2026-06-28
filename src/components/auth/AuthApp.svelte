@@ -134,7 +134,7 @@ onMount(() => void bootstrap());
 	.auth-register-link { min-height: 2.75rem; display: inline-flex; align-items: center; padding: 0 1rem; border-radius: .8rem; background: var(--btn-regular-bg); font-weight: 700; }
 	.auth-main { width: min(100% - 2rem, 64rem); margin: 0 auto; padding: clamp(2rem, 7vw, 5rem) 0 2rem; }
 	.auth-shell { display: grid; overflow: hidden; border: 1px solid var(--line-divider); border-radius: 1.5rem; background: var(--card-bg); box-shadow: 0 1.6rem 5rem rgba(20, 35, 55, .13); }
-	.auth-story { min-height: 16rem; padding: clamp(2rem, 7vw, 4rem); color: white; background: linear-gradient(145deg, color-mix(in srgb, var(--primary) 78%, #10233f), #10233f); position: relative; overflow: hidden; }
+	.auth-story { min-height: 16rem; padding: clamp(2rem, 7vw, 4rem); color: white; background: linear-gradient(145deg, #397fbd, #10233f); position: relative; overflow: hidden; }
 	.auth-kicker { margin: 0 0 1rem; font-size: .78rem; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; opacity: .72; }
 	.auth-story h1 { max-width: 12ch; margin: 0; font-size: clamp(2.25rem, 8vw, 4.4rem); line-height: .98; letter-spacing: -.045em; }
 	.auth-story > p:last-of-type { max-width: 38rem; margin: 1.5rem 0 0; line-height: 1.7; opacity: .78; }
