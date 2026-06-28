@@ -40,7 +40,7 @@ async function refresh() {
 }
 
 onMount(() => {
-	accountHref = `/accounts/?next=${encodeURIComponent(window.location.pathname)}`;
+	accountHref = `https://auth.silentflare.com/login?return_url=${encodeURIComponent(window.location.href)}`;
 	void refresh();
 	const refreshAuth = () => void loadUser();
 	document.addEventListener("silentflare-auth-change", refreshAuth);
@@ -77,9 +77,9 @@ onMount(() => {
 				<CommentForm {postSlug} onCreated={() => void loadComments()} />
 			{:else}
 				<div class="rounded-xl border border-dashed border-[var(--line-divider)] bg-black/[0.015] p-4 dark:bg-white/[0.02]">
-					<p class="mb-3 text-75">Sign in through the accounts subsite to publish a comment.</p>
+					<p class="mb-3 text-75">Sign in to join the discussion and publish comments.</p>
 					<a class="btn-regular min-h-11 rounded-lg px-4 font-bold active:scale-95" href={accountHref}>
-						Accounts login / register
+						Sign in to comment
 					</a>
 				</div>
 			{/if}

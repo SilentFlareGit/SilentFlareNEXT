@@ -8,6 +8,7 @@ const requiredFiles = [
 	"404.html",
 	"about/index.html",
 	"accounts/index.html",
+	"auth/index.html",
 	"archive/index.html",
 	"admin/index.html",
 	"bots/index.html",
@@ -86,7 +87,7 @@ const accountHtml = await readFile(
 const requiredAccountNeedles = [
 	"SilentFlare Accounts",
 	"SilentFlare accounts center",
-	"login register profile avatar bio",
+	"register email verification profile avatar region bio two factor security",
 ];
 const missingAccountNeedles = requiredAccountNeedles.filter(
 	(needle) => !accountHtml.includes(needle),
@@ -98,6 +99,15 @@ if (missingAccountNeedles.length > 0) {
 }
 
 console.log("Verified accounts center page content.");
+
+const authHtml = await readFile(path.join("dist", "auth", "index.html"), "utf8");
+for (const needle of ["Sign in", "SilentFlare unified login authentication"]) {
+	if (!authHtml.includes(needle)) {
+		throw new Error(`Unified auth page verification failed. Missing content: ${needle}`);
+	}
+}
+
+console.log("Verified unified auth page content.");
 
 if (requireContent) {
 	const contentRoutes = [

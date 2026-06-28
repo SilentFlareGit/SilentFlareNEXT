@@ -25,14 +25,18 @@ SilentFlareNEXT is an Astro/Fuwari front end for a Ghost Headless CMS. Treat thi
 - Public blog renderer: Astro static build.
 - Production CMS/admin domain: `cms.silentflare.com`.
 - Production public blog domain: `blog.silentflare.com`.
+- Production authentication domain: `auth.silentflare.com`.
 - Production account domain: `accounts.silentflare.com`.
 - Production custom admin domain: `admin.silentflare.com`.
 - Ghost owns content only: posts, tags, authors, cover images, SEO metadata, and media under `/content/`.
 - Astro owns public rendering, RSS, sitemap, layout, search index, and public route shape.
-- Public account UI route: `/accounts/`, also served from `accounts.silentflare.com`.
+- Public login UI route: `/auth/`, served from `auth.silentflare.com`.
+- Public account UI route: `/accounts/`, served from `accounts.silentflare.com` for registration, profile, and security settings only.
 - Custom admin UI route: `/admin/`, also served from `admin.silentflare.com`.
 - Custom management UI route: `/bots/`, also served from `tgbot.silentflare.com` and `tgbotmanagement.silentflare.com`.
 - Custom API domain: `api.silentflare.com`, backed by FastAPI on FNS1.
+- FastAPI is the only authority allowed to verify credentials, access the account database, issue sessions, refresh sessions, or destroy sessions. Frontends only call API routes.
+- Public users share one opaque API-issued session cookie across `.silentflare.com`; bot/admin Owner sessions remain separate and must not be merged with public account sessions.
 - The FNS1 local account database owns SilentFlare public users, sessions, comments, and account profile fields. Ghost does not own this data.
 - Second managed bot: `Telegram Chat Bot`, backed by the separate MessagesHelperBot service on the Telegram Chat VPS.
 - Ghost Admin API keys are forbidden in this repo. The front end may only use a Ghost Content API key.
@@ -116,15 +120,18 @@ Do not print values from `/opt/silentflare/api/api.env`. Reading variable names 
 
 ## Account And Admin Surfaces
 
-SilentFlare account and admin features are split by audience:
+SilentFlare authentication, account, and admin features are split by audience:
 
-- `accounts.silentflare.com`: public user accounts center for login, registration, logout, avatar URL, display name, and bio/profile updates.
+- `auth.silentflare.com`: the only public-user login frontend. It accepts a server-validated `return_url`, runs email-code/password/2FA login, and returns the browser to an allowed SilentFlare subdomain.
+- `accounts.silentflare.com`: public-user registration, email verification, password choice, 2FA enrollment, avatar, display name, display region, bio, and security settings. It must not contain a public login form.
 - `admin.silentflare.com`: owner/admin console for public user management and comment management only.
 - `api.silentflare.com`: FastAPI backend that supports both surfaces.
 - `blog.silentflare.com`: public blog renderer. Do not put account forms or admin data management directly into the blog layout.
 
 Front end sources:
 
+- Auth page: `src/pages/auth/index.astro`.
+- Auth app: `src/components/auth/AuthApp.svelte` and `src/components/auth/panels/`.
 - Accounts page: `src/pages/accounts/index.astro`.
 - Accounts app: `src/components/account/AccountApp.svelte`.
 - Admin page: `src/pages/admin/index.astro`.
@@ -134,12 +141,19 @@ Front end sources:
 
 Current account behavior:
 
-- The blog navbar shows an Accounts link, not an inline login/register modal.
-- Comment prompts link to `/accounts/?next=<current-path>` so account login/registration can return users to the article.
-- Account login and registration require Cloudflare Turnstile.
-- Account sessions use HttpOnly cookies. Do not store account tokens in `localStorage`.
-- Account passwords use PBKDF2-SHA256 and random salts. Do not add bcrypt, native SQLite, or Node-only password packages.
-- Account profile content is stored in local user columns: `display_name`, `avatar_url`, and `bio`.
+- The blog navbar queries `GET /auth/session`; unauthenticated users go to `auth.silentflare.com` with the current URL as `return_url`, while authenticated users go to Accounts.
+- Comment prompts use the same auth redirect. Comment writes require the all-site session, Turnstile, and `X-CSRF-Token`.
+- `return_url` must be HTTPS and its hostname must be exactly `silentflare.com` or end with `.silentflare.com`; credentials, explicit ports, lookalike suffixes, and external hosts fall back to Accounts.
+- Login supports email code, email/password, and username/password. Google, GitHub, and Telegram have reserved UI entries and API routes but are unavailable until provider credentials and callback handling are implemented.
+- Registration is email-first. A user may keep email-code-only login or set a password, may enable or skip 2FA, and must return to Auth to log in after registration.
+- Users with 2FA enter a database-backed pending login. The API signs the all-site session only after TOTP succeeds.
+- Account sessions use an opaque random token in an `HttpOnly`, `Secure`, `SameSite=Lax`, `Domain=.silentflare.com` cookie. The database stores only an HMAC digest. Do not store account tokens in web storage.
+- Session-backed writes require the derived CSRF token from `GET /auth/session`. Logout deletes the database session and clears the domain cookie.
+- Verification codes expire, are one-time, are stored only as keyed hashes, and have send cooldown, hourly limits, and verification-attempt limits. Never log or return a real code.
+- Passwords use PBKDF2-SHA256 with random salts and the iteration count embedded in the stored hash. TOTP secrets are encrypted and authenticated at rest with a key derived from `SESSION_SECRET`.
+- TOS acceptance is versioned and written to `tos_acceptances` with timestamp plus hashed request metadata.
+- `display_region` is profile display data only. It must never be used as an authentication, authorization, or risk signal.
+- Account profile content is stored in local user columns: `display_name`, `avatar_url`, `bio`, and `display_region`.
 
 Current admin behavior:
 
@@ -151,15 +165,22 @@ Current admin behavior:
 
 Important account FastAPI endpoints:
 
-- `POST /account/auth/register`: register a public user, verify Turnstile action `register`, create a local session, set HttpOnly account cookie.
-- `POST /account/auth/login`: verify Turnstile action `login`, validate password, create a local session, set HttpOnly account cookie.
-- `POST /account/auth/logout`: delete the local session hash when possible and clear the account cookie.
-- `GET /account/auth/me`: return `{ "user": null }` or the current user. If FNS1 account runtime config is incomplete, returns `configured:false`.
-- `GET /account/profile`: current authenticated user profile.
-- `POST /account/profile`: update `display_name`, `avatar_url`, and `bio`.
+- `GET /auth/session`: public-user session status, profile, CSRF token, runtime flags, and current TOS version.
+- `GET /auth/return-url?return_url=...`: server-side safe return URL normalization.
+- `POST /auth/login/password`: email-or-username password login with Turnstile; returns pending 2FA instead of a session when required.
+- `POST /auth/login/email/request` and `POST /auth/login/email/verify`: rate-limited email-code login.
+- `POST /auth/2fa/verify`: consume a pending login after TOTP and then issue the domain session.
+- `POST /auth/session/refresh`: rotate the opaque session and CSRF token.
+- `POST /auth/logout`: destroy either the public account session or the separate bot/admin session according to the presented cookie and CSRF token.
+- `GET /auth/oauth/{provider}/start` and `GET /auth/oauth/{provider}/callback`: reserved Google, GitHub, and Telegram routes. They must not issue sessions until a provider is implemented.
+- `POST /accounts/register/email/request`, `POST /accounts/register/email/verify`, and `POST /accounts/register/complete`: verified email-first registration with optional password and mandatory current TOS acceptance.
+- `POST /accounts/register/2fa/start`, `POST /accounts/register/2fa/verify`, and `POST /accounts/register/2fa/skip`: registration onboarding security choice; no session is issued.
+- `GET/PATCH /accounts/profile`: read/update authenticated profile. PATCH requires CSRF.
+- `POST /accounts/2fa/setup/start`, `POST /accounts/2fa/setup/verify`, and `POST /accounts/2fa/disable`: authenticated 2FA management with CSRF.
+- Legacy `POST /account/auth/register` and `POST /account/auth/login` return `410`; do not re-enable them because they bypass the unified flow.
 - `GET /comments?postSlug=...`: public comment list for a Ghost post slug.
-- `POST /comments/create`: authenticated public-user comment creation with Turnstile action `comment`.
-- `DELETE /comments/{comment_id}`: authenticated public-user soft delete for the author or a local `admin` role user.
+- `POST /comments/create`: authenticated public-user comment creation with Turnstile and CSRF.
+- `DELETE /comments/{comment_id}`: authenticated public-user soft delete with CSRF for the author or a local `admin` role user.
 
 Important admin FastAPI endpoints:
 
@@ -174,22 +195,25 @@ Important admin FastAPI endpoints:
 
 Production Nginx subsite routing on FNS1:
 
+- `auth.silentflare.com/` serves `/opt/silentflare/blog/current/auth/index.html`.
 - `accounts.silentflare.com/` serves `/opt/silentflare/blog/current/accounts/index.html`.
 - `admin.silentflare.com/` serves `/opt/silentflare/blog/current/admin/index.html`.
+- `auth.silentflare.com/auth-api/*` proxies to `http://127.0.0.1:9010/*`.
 - `accounts.silentflare.com/accounts-api/*` proxies to `http://127.0.0.1:9010/*`.
 - `admin.silentflare.com/admin-api/*` proxies to `http://127.0.0.1:9010/*`.
-- Both proxy locations should strip the prefix by using `proxy_pass http://127.0.0.1:9010/;`.
+- All proxy locations should strip their frontend prefix by using `proxy_pass http://127.0.0.1:9010/;`.
 
-The latest known account/admin deployment added:
+Unified-auth deployment additionally requires:
 
-- `migrations/0002_user_profile.sql`.
+- `migrations/0003_unified_auth.sql` as the schema reference; `ensure_account_db()` applies equivalent idempotent runtime schema changes.
+- `/etc/nginx/sites-available/silentflare-auth` with `/auth-api/` proxy.
 - `/etc/nginx/sites-available/silentflare-account`.
 - `/etc/nginx/sites-available/silentflare-admin` with `/admin-api/` proxy.
 
-Known current production caveat:
+Production readiness caveat:
 
-- If `GET https://accounts.silentflare.com/accounts-api/account/auth/me` returns `{"user":null,"configured":false}`, FNS1 is missing account runtime configuration in `/opt/silentflare/api/api.env`.
-- In that state, Accounts pages and proxies are live, and no-token Turnstile checks still return `403`, but real registration/login/profile persistence cannot work until Turnstile, session, cookie-domain, and hostname allowlist variables are configured.
+- `GET https://auth.silentflare.com/auth-api/auth/session` must return `configured:true`. `emailConfigured:false` means password/session flows can work but email-code login and registration cannot send mail.
+- Real email flows require `AUTH_EMAIL_API_KEY` and `AUTH_EMAIL_FROM` in `/opt/silentflare/api/api.env`. Never substitute log output or a response field for mail delivery.
 
 ## Environment Variables
 
@@ -230,7 +254,7 @@ WEB_LOGIN_WINDOW_SECONDS=900
 
 # Account/admin local database and Turnstile support for FNS1 FastAPI:
 TURNSTILE_SECRET_KEY=<turnstile-secret>
-TURNSTILE_EXPECTED_HOSTNAMES=accounts.silentflare.com,silentflare.com,www.silentflare.com
+TURNSTILE_EXPECTED_HOSTNAMES=auth.silentflare.com,accounts.silentflare.com,silentflare.com,www.silentflare.com
 # Backwards-compatible legacy name if TURNSTILE_EXPECTED_HOSTNAMES is unset:
 TURNSTILE_EXPECTED_HOSTNAME=accounts.silentflare.com
 SESSION_SECRET=<at-least-32-random-characters>
@@ -238,11 +262,20 @@ ACCOUNT_SESSION_COOKIE_NAME=sf_account_session
 ACCOUNT_COOKIE_DOMAIN=.silentflare.com
 ACCOUNT_SESSION_TTL=2592000
 ACCOUNT_DB_PATH=/opt/silentflare/api/account.db
+AUTH_EMAIL_API_KEY=<resend-compatible-server-key>
+AUTH_EMAIL_FROM=SilentFlare <auth@silentflare.com>
+AUTH_EMAIL_API_URL=https://api.resend.com/emails
+AUTH_TOS_VERSION=2026-06-28
+AUTH_EMAIL_CODE_TTL=600
+AUTH_EMAIL_SEND_COOLDOWN=60
+AUTH_EMAIL_SEND_LIMIT=5
+AUTH_CODE_ATTEMPT_LIMIT=5
+AUTH_FLOW_TTL=1200
 ```
 
 Legacy `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, and `TELEGRAM_WEBHOOK_SECRET` are DB Backup compatibility fallbacks only. New multi-bot work should use the explicit per-bot variables above.
 
-`CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_D1_DATABASE_ID`, and `CLOUDFLARE_API_TOKEN` are not required for production account persistence or admin user/comment management. Production accounts/comments use the FNS1 local account database. Do not print `TURNSTILE_SECRET_KEY`, `SESSION_SECRET`, raw cookies, or tokens. Status-only checks may print whether variable names are present.
+`CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_D1_DATABASE_ID`, and `CLOUDFLARE_API_TOKEN` are not required for production account persistence or admin user/comment management. Production accounts/comments use the FNS1 local account database. Do not print `TURNSTILE_SECRET_KEY`, `SESSION_SECRET`, `AUTH_EMAIL_API_KEY`, raw cookies, verification codes, TOTP secrets, or tokens. Status-only checks may print whether variable names are present.
 
 Telegram Chat Bot remote-control variables for FNS1 API:
 
@@ -539,41 +572,44 @@ curl.exe --ssl-no-revoke -L -sS -o NUL -w "PUBLIC_POST=%{http_code}\n" https://b
 
 Expected: both `200`.
 
-Verify account/admin origin:
+Verify auth/account/admin origin:
 
 ```powershell
 $key = Join-Path $env:USERPROFILE '.ssh\hetzner_cx23'
-ssh -i $key root@167.233.129.17 'set -Eeuo pipefail; test -f /opt/silentflare/blog/current/accounts/index.html && echo ACCOUNT_FILE=present; test -f /opt/silentflare/blog/current/admin/index.html && echo ADMIN_FILE=present; curl -sS -o /dev/null -w ACCOUNT=%{http_code} -H Host:accounts.silentflare.com http://127.0.0.1/; echo; curl -sS -o /dev/null -w ADMIN=%{http_code} -H Host:admin.silentflare.com http://127.0.0.1/; echo; curl -sS -o /tmp/account-me.txt -w ACCOUNT_ME=%{http_code} -H Host:accounts.silentflare.com http://127.0.0.1/accounts-api/account/auth/me; echo; cat /tmp/account-me.txt; echo; curl -sS -o /dev/null -w ADMIN_OPTIONS=%{http_code} -H Host:admin.silentflare.com http://127.0.0.1/admin-api/auth/options; echo'
+ssh -i $key root@167.233.129.17 'set -Eeuo pipefail; test -f /opt/silentflare/blog/current/auth/index.html && echo AUTH_FILE=present; test -f /opt/silentflare/blog/current/accounts/index.html && echo ACCOUNT_FILE=present; test -f /opt/silentflare/blog/current/admin/index.html && echo ADMIN_FILE=present; curl -sS -o /dev/null -w AUTH=%{http_code} -H Host:auth.silentflare.com http://127.0.0.1/; echo; curl -sS -o /dev/null -w ACCOUNT=%{http_code} -H Host:accounts.silentflare.com http://127.0.0.1/; echo; curl -sS -o /dev/null -w ADMIN=%{http_code} -H Host:admin.silentflare.com http://127.0.0.1/; echo; curl -sS -o /tmp/auth-session.txt -w AUTH_SESSION=%{http_code} -H Host:auth.silentflare.com http://127.0.0.1/auth-api/auth/session; echo; cat /tmp/auth-session.txt; echo; curl -sS -o /dev/null -w ADMIN_OPTIONS=%{http_code} -H Host:admin.silentflare.com http://127.0.0.1/admin-api/auth/options; echo'
 ```
 
 Expected:
 
+- `AUTH_FILE=present`.
 - `ACCOUNT_FILE=present`.
 - `ADMIN_FILE=present`.
+- `AUTH=200`.
 - `ACCOUNT=200`.
 - `ADMIN=200`.
-- `ACCOUNT_ME=200`.
+- `AUTH_SESSION=200`.
 - `ADMIN_OPTIONS=200`.
-- `ACCOUNT_ME` returns `configured:true` once FNS1 has Turnstile/session/cookie-domain/hostname variables; `configured:false` means the page/proxy is up but account runtime configuration is incomplete.
+- `AUTH_SESSION` returns `configured:true`; `emailConfigured:true` is additionally required for real email-code login and registration.
 
-Verify account/admin public edge:
+Verify auth/account/admin public edge:
 
 ```powershell
+curl.exe --ssl-no-revoke -L -sS -o NUL -w "AUTH_PUBLIC=%{http_code}\n" https://auth.silentflare.com/
 curl.exe --ssl-no-revoke -L -sS -o NUL -w "ACCOUNT_PUBLIC=%{http_code}\n" https://accounts.silentflare.com/
 curl.exe --ssl-no-revoke -L -sS -o NUL -w "ADMIN_PUBLIC=%{http_code}\n" https://admin.silentflare.com/
-curl.exe --ssl-no-revoke -L -sS -o NUL -w "ACCOUNT_ME_PUBLIC=%{http_code}\n" https://accounts.silentflare.com/accounts-api/account/auth/me
+curl.exe --ssl-no-revoke -L -sS -o NUL -w "AUTH_SESSION_PUBLIC=%{http_code}\n" https://auth.silentflare.com/auth-api/auth/session
 curl.exe --ssl-no-revoke -L -sS -o NUL -w "ADMIN_OPTIONS_PUBLIC=%{http_code}\n" https://admin.silentflare.com/admin-api/auth/options
 ```
 
 Expected: all `200`.
 
-Verify account Turnstile failure priority:
+Verify unified auth Turnstile failure priority:
 
 ```powershell
-Set-Content -Path D:\tmp\account-register-no-turnstile.json -Value '{"email":"a@example.com","username":"tester","password":"password123","turnstileToken":""}' -NoNewline
-Set-Content -Path D:\tmp\account-login-no-turnstile.json -Value '{"email":"a@example.com","password":"password123","turnstileToken":""}' -NoNewline
-curl.exe --ssl-no-revoke -sS -o NUL -w "ACCOUNT_REGISTER_NO_TURNSTILE=%{http_code}\n" -X POST "https://accounts.silentflare.com/accounts-api/account/auth/register" -H "content-type: application/json" --data-binary "@D:\tmp\account-register-no-turnstile.json"
-curl.exe --ssl-no-revoke -sS -o NUL -w "ACCOUNT_LOGIN_NO_TURNSTILE=%{http_code}\n" -X POST "https://accounts.silentflare.com/accounts-api/account/auth/login" -H "content-type: application/json" --data-binary "@D:\tmp\account-login-no-turnstile.json"
+Set-Content -Path D:\tmp\auth-email-no-turnstile.json -Value '{"email":"a@example.com","turnstile_token":""}' -NoNewline
+Set-Content -Path D:\tmp\auth-login-no-turnstile.json -Value '{"email_or_username":"tester","password":"password123","turnstile_token":"","return_url":"https://blog.silentflare.com/"}' -NoNewline
+curl.exe --ssl-no-revoke -sS -o NUL -w "REGISTER_EMAIL_NO_TURNSTILE=%{http_code}\n" -X POST "https://accounts.silentflare.com/accounts-api/accounts/register/email/request" -H "content-type: application/json" --data-binary "@D:\tmp\auth-email-no-turnstile.json"
+curl.exe --ssl-no-revoke -sS -o NUL -w "AUTH_LOGIN_NO_TURNSTILE=%{http_code}\n" -X POST "https://auth.silentflare.com/auth-api/auth/login/password" -H "content-type: application/json" --data-binary "@D:\tmp\auth-login-no-turnstile.json"
 ```
 
 Expected: both `403`, even if account runtime configuration is incomplete.
@@ -822,29 +858,28 @@ Useful scoped search:
 Get-ChildItem -Recurse -File src,scripts,.github,docs | Select-String -Pattern 'TODO|FIXME|HACK|XXX|console\.log|debugger|@ts-ignore|@ts-expect-error' -CaseSensitive:$false
 ```
 
-## Current Account/Admin Context
+## Current Unified Auth/Account/Admin Context
 
-Recent account/admin work intentionally made these changes:
+Current architecture intentionally makes these changes:
 
-- added the `/accounts/` standalone Svelte accounts center and `accounts.silentflare.com` routing;
-- moved blog navbar login/registration entry points to the Accounts link instead of the old inline auth modal;
-- changed comment unauthenticated prompts to link to `/accounts/?next=<current-path>`;
-- deleted the old `AuthModal.svelte`, `LoginForm.svelte`, and `RegisterForm.svelte` components;
-- added FNS1 FastAPI account endpoints under `/account/auth/*` and `/account/profile`;
+- adds `/auth/` as the only login frontend and keeps `/accounts/` for registration/profile/security;
+- routes blog navbar and comment login prompts to Auth with a safe `return_url`;
+- makes FastAPI the only session and credential authority and shares one public-user cookie across `.silentflare.com`;
+- persists verification, pending-login, onboarding, rate-limit, and TOS state in the FNS1 local database;
+- keeps public-user auth separate from bot/admin Owner auth;
 - narrowed `admin.silentflare.com` to user and comment management only;
-- added same-origin `accounts-api` and `admin-api` proxy expectations;
-- added `migrations/0002_user_profile.sql` for `display_name`, `avatar_url`, and `bio`.
+- requires same-origin `auth-api`, `accounts-api`, and `admin-api` proxies;
+- adds `migrations/0003_unified_auth.sql` for unified authentication metadata.
 
-Known live state after the last deployment:
+Do not copy the older June 22 deployment identifiers below as current evidence. For each deployment, replace them with fresh checks for:
 
-- GitHub Actions run `27933470944` completed successfully for `f4f9583`.
-- FNS1 static checkout was manually deployed to `f4f9583`.
-- Active release was `/opt/silentflare/blog/releases/20260622T061853Z`.
-- `accounts.silentflare.com`, `admin.silentflare.com`, `blog.silentflare.com`, and `api.silentflare.com/health` returned public `200`.
-- `accounts.silentflare.com/accounts-api/account/auth/me` returned `configured:false` because FNS1 still lacked account runtime variables in `/opt/silentflare/api/api.env`.
-- No-token account register/login checks returned `403`.
-
-If continuing this work, first add the missing Turnstile/session/cookie-domain/hostname variables to FNS1 without printing values. After that, retest real account registration, login, profile save, admin user listing, and admin comment listing.
+- pushed commit and successful GitHub Actions run;
+- FNS1 source HEAD and active static release;
+- active `silentflare-api.service` and direct `/health`;
+- Auth/Accounts/Admin origin and public HTTP 200;
+- `/auth/session` reports `configured:true`, and `emailConfigured:true` before claiming email login/registration is operational;
+- no-token registration and login requests return 403;
+- a real inbox delivery plus email verification can complete only when an authorized test address is available. Never expose the code while testing.
 
 ## Commit And Pull Request Guidelines
 

@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request as UrlRequest, urlopen
 from zoneinfo import ZoneInfo
 
@@ -89,11 +89,20 @@ ACCOUNT_DB_PATH = Path(os.getenv("ACCOUNT_DB_PATH", "/opt/silentflare/api/accoun
 LOGIN_CHALLENGE_TTL = 5 * 60
 PBKDF2_PREFIX = "pbkdf2_sha256"
 ACCOUNT_PBKDF2_PREFIX = "pbkdf2-sha256"
-ACCOUNT_PBKDF2_ITERATIONS = int(os.getenv("ACCOUNT_PBKDF2_ITERATIONS", "210000"))
+ACCOUNT_PBKDF2_ITERATIONS = int(os.getenv("ACCOUNT_PBKDF2_ITERATIONS", "600000"))
 ACCOUNT_SESSION_TTL = int(os.getenv("ACCOUNT_SESSION_TTL", "2592000"))
 TURNSTILE_SECRET_KEY = os.getenv("TURNSTILE_SECRET_KEY", "")
 TURNSTILE_EXPECTED_HOSTNAME = os.getenv("TURNSTILE_EXPECTED_HOSTNAME", "")
 TURNSTILE_EXPECTED_HOSTNAMES = os.getenv("TURNSTILE_EXPECTED_HOSTNAMES", "")
+AUTH_EMAIL_API_KEY = os.getenv("AUTH_EMAIL_API_KEY", "")
+AUTH_EMAIL_FROM = os.getenv("AUTH_EMAIL_FROM", "")
+AUTH_EMAIL_API_URL = os.getenv("AUTH_EMAIL_API_URL", "https://api.resend.com/emails")
+AUTH_TOS_VERSION = os.getenv("AUTH_TOS_VERSION", "2026-06-28")
+AUTH_EMAIL_CODE_TTL = int(os.getenv("AUTH_EMAIL_CODE_TTL", "600"))
+AUTH_EMAIL_SEND_COOLDOWN = int(os.getenv("AUTH_EMAIL_SEND_COOLDOWN", "60"))
+AUTH_EMAIL_SEND_LIMIT = int(os.getenv("AUTH_EMAIL_SEND_LIMIT", "5"))
+AUTH_CODE_ATTEMPT_LIMIT = int(os.getenv("AUTH_CODE_ATTEMPT_LIMIT", "5"))
+AUTH_FLOW_TTL = int(os.getenv("AUTH_FLOW_TTL", "1200"))
 
 app = FastAPI(title=APP_NAME)
 app.add_middleware(
@@ -109,9 +118,11 @@ app.add_middleware(
 		"http://accounts.silentflare.com",
 		"http://tgbot.silentflare.com",
 		"http://tgbotmanagement.silentflare.com",
+		"https://auth.silentflare.com",
+		"http://auth.silentflare.com",
 	],
 	allow_credentials=True,
-	allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+	allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
 	allow_headers=["Content-Type", "X-Admin-Token", "X-CSRF-Token"],
 )
 
@@ -222,6 +233,71 @@ class AccountProfilePayload(BaseModel):
 	display_name: str | None = None
 	avatar_url: str | None = None
 	bio: str | None = None
+
+
+class UnifiedLoginPasswordPayload(BaseModel):
+	email_or_username: str = ""
+	password: str = ""
+	turnstile_token: str = ""
+	return_url: str = ""
+
+
+class EmailCodeRequestPayload(BaseModel):
+	email: str = ""
+	turnstile_token: str = ""
+
+
+class EmailCodeVerifyPayload(BaseModel):
+	email: str = ""
+	code: str = ""
+	return_url: str = ""
+
+
+class TwoFAVerifyPayload(BaseModel):
+	pending_id: str = ""
+	code: str = ""
+
+
+class RegisterEmailRequestPayload(BaseModel):
+	email: str = ""
+	turnstile_token: str = ""
+
+
+class RegisterEmailVerifyPayload(BaseModel):
+	email: str = ""
+	code: str = ""
+
+
+class RegisterCompletePayload(BaseModel):
+	reg_token: str = ""
+	username: str = ""
+	password: str | None = None
+	tos_accepted: bool = False
+	tos_version: str = ""
+	display_name: str = ""
+	display_region: str = ""
+
+
+class TwoFASetupVerifyPayload(BaseModel):
+	code: str = ""
+	setup_token: str = ""
+
+
+class RegistrationTwoFAPayload(BaseModel):
+	onboarding_token: str = ""
+	code: str = ""
+	setup_token: str = ""
+
+
+class UnifiedProfilePayload(BaseModel):
+	display_name: str = ""
+	avatar_url: str = ""
+	bio: str = ""
+	display_region: str = ""
+
+
+class SessionRefreshPayload(BaseModel):
+	return_url: str = ""
 
 
 class CommentCreatePayload(BaseModel):
@@ -791,6 +867,83 @@ def ensure_account_db() -> None:
 			except sqlite3.OperationalError as exc:
 				if "duplicate column name" not in str(exc).lower():
 					raise
+		# Add email_verifications table for OTP login and registration
+		connection.executescript("""
+			CREATE TABLE IF NOT EXISTS email_verifications (
+				id TEXT PRIMARY KEY,
+				email TEXT NOT NULL,
+				code TEXT NOT NULL DEFAULT '',
+				code_hash TEXT,
+				purpose TEXT NOT NULL,
+				created_at TEXT,
+				expires_at TEXT NOT NULL,
+				used_at TEXT,
+				attempts INTEGER NOT NULL DEFAULT 0,
+				request_ip_hash TEXT
+			);
+			CREATE INDEX IF NOT EXISTS idx_ev_email ON email_verifications(email);
+			CREATE INDEX IF NOT EXISTS idx_ev_expires ON email_verifications(expires_at);
+
+			CREATE TABLE IF NOT EXISTS auth_flows (
+				id TEXT PRIMARY KEY,
+				token_hash TEXT UNIQUE NOT NULL,
+				flow_type TEXT NOT NULL,
+				user_id TEXT,
+				email TEXT,
+				return_url TEXT,
+				metadata_json TEXT NOT NULL DEFAULT '{}',
+				attempts INTEGER NOT NULL DEFAULT 0,
+				created_at TEXT NOT NULL,
+				expires_at TEXT NOT NULL,
+				consumed_at TEXT,
+				FOREIGN KEY(user_id) REFERENCES users(id)
+			);
+			CREATE INDEX IF NOT EXISTS idx_auth_flows_token ON auth_flows(token_hash);
+			CREATE INDEX IF NOT EXISTS idx_auth_flows_expires ON auth_flows(expires_at);
+
+			CREATE TABLE IF NOT EXISTS tos_acceptances (
+				id TEXT PRIMARY KEY,
+				user_id TEXT NOT NULL,
+				version TEXT NOT NULL,
+				accepted_at TEXT NOT NULL,
+				ip_hash TEXT,
+				user_agent TEXT,
+				FOREIGN KEY(user_id) REFERENCES users(id)
+			);
+
+			CREATE TABLE IF NOT EXISTS auth_rate_limits (
+				action TEXT NOT NULL,
+				key_hash TEXT NOT NULL,
+				window_started_at INTEGER NOT NULL,
+				count INTEGER NOT NULL,
+				PRIMARY KEY(action, key_hash)
+			);
+		""")
+		for column_name, column_type in (
+			("code_hash", "TEXT"),
+			("created_at", "TEXT"),
+			("attempts", "INTEGER NOT NULL DEFAULT 0"),
+			("request_ip_hash", "TEXT"),
+		):
+			try:
+				connection.execute(f"ALTER TABLE email_verifications ADD COLUMN {column_name} {column_type}")
+			except sqlite3.OperationalError as exc:
+				if "duplicate column name" not in str(exc).lower():
+					raise
+		# Add new user columns
+		for column_name, column_type in (
+			("email_verified_at", "TEXT"),
+			("totp_secret", "TEXT"),
+			("totp_enabled", "INTEGER"),
+			("display_region", "TEXT"),
+			("tos_version", "TEXT"),
+			("tos_accepted_at", "TEXT"),
+		):
+			try:
+				connection.execute(f"ALTER TABLE users ADD COLUMN {column_name} {column_type}")
+			except sqlite3.OperationalError as exc:
+				if "duplicate column name" not in str(exc).lower():
+					raise
 		connection.commit()
 
 
@@ -837,6 +990,262 @@ def utc_now() -> str:
 
 def account_auth_configured() -> bool:
 	return account_runtime_configured()
+
+
+def future_iso(seconds: int) -> str:
+	return datetime.fromtimestamp(time.time() + seconds, tz=timezone.utc).isoformat().replace(
+		"+00:00", "Z"
+	)
+
+
+def auth_secret_hash(value: str) -> str:
+	if len(ACCOUNT_SESSION_SECRET) < 32:
+		raise HTTPException(status_code=503, detail="Account session secret is not configured")
+	return base64.urlsafe_b64encode(
+		hmac.new(
+			ACCOUNT_SESSION_SECRET.encode("utf-8"), value.encode("utf-8"), hashlib.sha256
+		).digest()
+	).decode("ascii")
+
+
+def sanitize_return_url(value: str | None) -> str:
+	default = "https://accounts.silentflare.com/"
+	if not value:
+		return default
+	try:
+		parsed = urlparse(value.strip())
+	except ValueError:
+		return default
+	if parsed.scheme != "https" or parsed.username or parsed.password or parsed.port:
+		return default
+	hostname = (parsed.hostname or "").lower().rstrip(".")
+	if hostname != "silentflare.com" and not hostname.endswith(".silentflare.com"):
+		return default
+	return parsed.geturl()
+
+
+def enforce_auth_rate_limit(
+	action: str,
+	key: str,
+	limit: int,
+	window_seconds: int,
+) -> None:
+	now = int(time.time())
+	key_hash = auth_secret_hash(f"rate:{action}:{key}")
+	rows = d1_query(
+		"SELECT window_started_at, count FROM auth_rate_limits WHERE action = ? AND key_hash = ?",
+		[action, key_hash],
+	)
+	if not rows or now - int(rows[0]["window_started_at"]) >= window_seconds:
+		d1_query(
+			"INSERT OR REPLACE INTO auth_rate_limits (action, key_hash, window_started_at, count) VALUES (?, ?, ?, 1)",
+			[action, key_hash, now],
+		)
+		return
+	if int(rows[0]["count"]) >= limit:
+		raise HTTPException(status_code=429, detail="Too many attempts. Try again later.")
+	d1_query(
+		"UPDATE auth_rate_limits SET count = count + 1 WHERE action = ? AND key_hash = ?",
+		[action, key_hash],
+	)
+
+
+def send_email_code(email: str, code: str, purpose: str) -> None:
+	if not AUTH_EMAIL_API_KEY or not AUTH_EMAIL_FROM:
+		raise HTTPException(status_code=503, detail="Email delivery is not configured")
+	subject = "Your SilentFlare sign-in code" if purpose == "login" else "Verify your SilentFlare email"
+	payload = json.dumps(
+		{
+			"from": AUTH_EMAIL_FROM,
+			"to": [email],
+			"subject": subject,
+			"html": (
+				"<div style='font-family:ui-sans-serif,sans-serif;color:#172033'>"
+				f"<h2>{subject}</h2><p>Your verification code is "
+				f"<strong style='font-size:24px;letter-spacing:4px'>{code}</strong>.</p>"
+				f"<p>It expires in {AUTH_EMAIL_CODE_TTL // 60} minutes. If you did not request it, ignore this email.</p>"
+				"</div>"
+			),
+		}
+	).encode("utf-8")
+	request = UrlRequest(AUTH_EMAIL_API_URL, data=payload, method="POST")
+	request.add_header("Authorization", f"Bearer {AUTH_EMAIL_API_KEY}")
+	request.add_header("Content-Type", "application/json")
+	try:
+		with urlopen(request, timeout=15) as response:
+			if response.status >= 300:
+				raise HTTPException(status_code=503, detail="Email delivery failed")
+	except HTTPException:
+		raise
+	except Exception as exc:
+		raise HTTPException(status_code=503, detail="Email delivery failed") from exc
+
+
+def create_email_verification(email: str, purpose: str, request: Request) -> None:
+	clean_email = normalize_email(email)
+	enforce_auth_rate_limit("email-ip", client_key(request), AUTH_EMAIL_SEND_LIMIT * 2, 3600)
+	enforce_auth_rate_limit("email-address", clean_email, AUTH_EMAIL_SEND_LIMIT, 3600)
+	latest = d1_query(
+		"SELECT created_at FROM email_verifications WHERE email = ? AND purpose = ? ORDER BY created_at DESC LIMIT 1",
+		[clean_email, purpose],
+	)
+	if latest and latest[0].get("created_at"):
+		last_sent = datetime.fromisoformat(str(latest[0]["created_at"]).replace("Z", "+00:00")).timestamp()
+		if time.time() - last_sent < AUTH_EMAIL_SEND_COOLDOWN:
+			raise HTTPException(status_code=429, detail="Wait before requesting another code")
+	code = f"{secrets.randbelow(1000000):06d}"
+	now = utc_now()
+	d1_query(
+		"""
+		INSERT INTO email_verifications
+			(id, email, code, code_hash, purpose, created_at, expires_at, attempts, request_ip_hash)
+		VALUES (?, ?, '', ?, ?, ?, ?, 0, ?)
+		""",
+		[
+			str(uuid.uuid4()),
+			clean_email,
+			auth_secret_hash(f"code:{purpose}:{clean_email}:{code}"),
+			purpose,
+			now,
+			future_iso(AUTH_EMAIL_CODE_TTL),
+			auth_secret_hash(f"ip:{client_key(request)}"),
+		],
+	)
+	try:
+		send_email_code(clean_email, code, purpose)
+	except Exception:
+		d1_query(
+			"UPDATE email_verifications SET used_at = ? WHERE email = ? AND purpose = ? AND created_at = ?",
+			[utc_now(), clean_email, purpose, now],
+		)
+		raise
+
+
+def verify_email_code(email: str, code: str, purpose: str) -> bool:
+	clean_email = normalize_email(email)
+	rows = d1_query(
+		"""
+		SELECT id, code_hash, attempts FROM email_verifications
+		WHERE email = ? AND purpose = ? AND expires_at > ? AND used_at IS NULL
+		ORDER BY created_at DESC LIMIT 1
+		""",
+		[clean_email, purpose, utc_now()],
+	)
+	if not rows or int(rows[0].get("attempts") or 0) >= AUTH_CODE_ATTEMPT_LIMIT:
+		return False
+	expected = auth_secret_hash(f"code:{purpose}:{clean_email}:{(code or '').strip()}")
+	if not hmac.compare_digest(str(rows[0].get("code_hash") or ""), expected):
+		d1_query("UPDATE email_verifications SET attempts = attempts + 1 WHERE id = ?", [rows[0]["id"]])
+		return False
+	d1_query("UPDATE email_verifications SET used_at = ? WHERE id = ?", [utc_now(), rows[0]["id"]])
+	return True
+
+
+def create_auth_flow(
+	flow_type: str,
+	*,
+	user_id: str | None = None,
+	email: str | None = None,
+	return_url: str = "",
+	metadata: dict[str, Any] | None = None,
+) -> str:
+	token = secrets.token_urlsafe(32)
+	d1_query(
+		"""
+		INSERT INTO auth_flows
+			(id, token_hash, flow_type, user_id, email, return_url, metadata_json, created_at, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		""",
+		[
+			str(uuid.uuid4()),
+			auth_secret_hash(f"flow:{token}"),
+			flow_type,
+			user_id,
+			email,
+			sanitize_return_url(return_url),
+			json.dumps(metadata or {}, separators=(",", ":")),
+			utc_now(),
+			future_iso(AUTH_FLOW_TTL),
+		],
+	)
+	return token
+
+
+def get_auth_flow(token: str, flow_type: str) -> dict[str, Any]:
+	rows = d1_query(
+		"""
+		SELECT * FROM auth_flows
+		WHERE token_hash = ? AND flow_type = ? AND expires_at > ? AND consumed_at IS NULL
+		LIMIT 1
+		""",
+		[auth_secret_hash(f"flow:{token}"), flow_type, utc_now()],
+	)
+	if not rows:
+		raise HTTPException(status_code=401, detail="Authentication flow expired or invalid")
+	return rows[0]
+
+
+def consume_auth_flow(flow_id: str) -> None:
+	d1_query("UPDATE auth_flows SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL", [utc_now(), flow_id])
+
+
+def seal_totp_secret(secret: str) -> str:
+	nonce = secrets.token_bytes(16)
+	key = hashlib.sha256((ACCOUNT_SESSION_SECRET + ":totp").encode("utf-8")).digest()
+	stream = bytearray()
+	counter = 0
+	while len(stream) < len(secret.encode("utf-8")):
+		stream.extend(hmac.new(key, nonce + counter.to_bytes(4, "big"), hashlib.sha256).digest())
+		counter += 1
+	plain = secret.encode("utf-8")
+	cipher = bytes(value ^ stream[index] for index, value in enumerate(plain))
+	mac = hmac.new(key, nonce + cipher, hashlib.sha256).digest()
+	return "v1:" + ":".join(base64.urlsafe_b64encode(part).decode("ascii") for part in (nonce, cipher, mac))
+
+
+def open_totp_secret(value: str) -> str:
+	try:
+		version, nonce_raw, cipher_raw, mac_raw = value.split(":", 3)
+		nonce, cipher, supplied_mac = (base64.urlsafe_b64decode(part) for part in (nonce_raw, cipher_raw, mac_raw))
+		key = hashlib.sha256((ACCOUNT_SESSION_SECRET + ":totp").encode("utf-8")).digest()
+		expected_mac = hmac.new(key, nonce + cipher, hashlib.sha256).digest()
+		if version != "v1" or not hmac.compare_digest(supplied_mac, expected_mac):
+			raise ValueError("invalid encrypted secret")
+		stream = bytearray()
+		counter = 0
+		while len(stream) < len(cipher):
+			stream.extend(hmac.new(key, nonce + counter.to_bytes(4, "big"), hashlib.sha256).digest())
+			counter += 1
+		return bytes(value ^ stream[index] for index, value in enumerate(cipher)).decode("utf-8")
+	except Exception as exc:
+		raise HTTPException(status_code=500, detail="Stored 2FA secret is invalid") from exc
+
+
+def lookup_user_by_email_or_username(value: str) -> dict | None:
+	"""Find user row by email or username."""
+	clean = value.strip()
+	is_email = "@" in clean
+	if is_email:
+		rows = d1_query(
+			"""
+			SELECT id, email, username, password_hash, password_salt, role,
+				   display_name, avatar_url, bio, display_region, disabled_at,
+				   totp_secret, totp_enabled
+			FROM users WHERE email = ? LIMIT 1
+			""",
+			[normalize_email(clean)],
+		)
+	else:
+		rows = d1_query(
+			"""
+			SELECT id, email, username, password_hash, password_salt, role,
+				   display_name, avatar_url, bio, display_region, disabled_at,
+				   totp_secret, totp_enabled
+			FROM users WHERE username = ? LIMIT 1
+			""",
+			[normalize_username(clean)],
+		)
+	return rows[0] if rows else None
 
 
 def verify_turnstile_token(token: str | None, remote_ip: str, expected_action: str) -> None:
@@ -988,10 +1397,17 @@ def account_user_payload(row: dict[str, Any]) -> dict[str, Any]:
 		"displayName": row.get("display_name") or "",
 		"avatarUrl": row.get("avatar_url") or "",
 		"bio": row.get("bio") or "",
+		"displayRegion": row.get("display_region") or "",
+		"twoFactorEnabled": bool(row.get("totp_enabled")),
+		"hasPassword": bool(row.get("password_hash")),
 	}
 
 
-def create_account_session(response: Response, request: Request, user_id: str) -> None:
+def account_csrf_token(token: str) -> str:
+	return auth_secret_hash(f"csrf:{token}")
+
+
+def create_account_session(response: Response, request: Request, user_id: str) -> str:
 	if not account_auth_configured():
 		raise HTTPException(status_code=503, detail="Account API is not configured")
 	now = utc_now()
@@ -1021,18 +1437,19 @@ def create_account_session(response: Response, request: Request, user_id: str) -
 		token,
 		httponly=True,
 		secure=WEB_COOKIE_SECURE,
-		samesite="none" if WEB_COOKIE_SECURE else "lax",
+		samesite="lax",
 		max_age=ACCOUNT_SESSION_TTL,
 		path="/",
 		domain=ACCOUNT_COOKIE_DOMAIN or None,
 	)
+	return account_csrf_token(token)
 
 
 def clear_account_cookie(response: Response) -> None:
 	response.delete_cookie(
 		ACCOUNT_SESSION_COOKIE,
 		secure=WEB_COOKIE_SECURE,
-		samesite="none" if WEB_COOKIE_SECURE else "lax",
+		samesite="lax",
 		path="/",
 		domain=ACCOUNT_COOKIE_DOMAIN or None,
 	)
@@ -1053,6 +1470,9 @@ def get_account_user(request: Request) -> dict[str, Any] | None:
 			users.display_name,
 			users.avatar_url,
 			users.bio,
+			users.display_region,
+			users.totp_enabled,
+			users.password_hash,
 			users.disabled_at
 		FROM sessions
 		INNER JOIN users ON users.id = sessions.user_id
@@ -1072,6 +1492,16 @@ def require_account_user(request: Request) -> dict[str, Any]:
 	user = get_account_user(request)
 	if not user:
 		raise HTTPException(status_code=401, detail="Login required")
+	return user
+
+
+def require_account_csrf(request: Request, x_csrf_token: str | None) -> dict[str, Any]:
+	token = request.cookies.get(ACCOUNT_SESSION_COOKIE, "")
+	user = require_account_user(request)
+	if not token or not x_csrf_token or not hmac.compare_digest(
+		x_csrf_token, account_csrf_token(token)
+	):
+		raise HTTPException(status_code=403, detail="Invalid CSRF token")
 	return user
 
 
@@ -2095,8 +2525,16 @@ def auth_logout(
 	response: Response,
 	x_csrf_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
-	require_session(request, x_csrf_token=x_csrf_token, require_csrf=True)
-	destroy_session(request, response)
+	if request.cookies.get(SESSION_COOKIE):
+		require_session(request, x_csrf_token=x_csrf_token, require_csrf=True)
+		destroy_session(request, response)
+	elif request.cookies.get(ACCOUNT_SESSION_COOKIE):
+		require_account_csrf(request, x_csrf_token)
+		token = request.cookies.get(ACCOUNT_SESSION_COOKIE, "")
+		d1_query("DELETE FROM sessions WHERE session_hash = ?", [account_session_hash(token)])
+		clear_account_cookie(response)
+	else:
+		clear_account_cookie(response)
 	return {"ok": True}
 
 
@@ -2106,45 +2544,10 @@ def account_register(
 	request: Request,
 	response: Response,
 ) -> dict[str, Any]:
-	check_login_rate_limit(request)
-	require_account_turnstile(payload.turnstileToken, request, "register")
-	if not account_auth_configured():
-		raise HTTPException(status_code=503, detail="Account API is not configured")
-	email = normalize_email(payload.email)
-	username = normalize_username(payload.username)
-	password = validate_account_password(payload.password)
-	existing = d1_query(
-		"SELECT id FROM users WHERE email = ? OR username = ? LIMIT 1",
-		[email, username],
+	raise HTTPException(
+		status_code=410,
+		detail="Registration moved to the verified email flow on accounts.silentflare.com",
 	)
-	if existing:
-		record_login_failure(request)
-		raise HTTPException(status_code=409, detail="Email or username is already in use")
-	password_hash, salt = hash_account_password(password)
-	now = utc_now()
-	user_id = str(uuid.uuid4())
-	d1_query(
-		"""
-		INSERT INTO users
-			(id, email, username, password_hash, password_salt, role, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, 'user', ?, ?)
-		""",
-		[user_id, email, username, password_hash, salt, now, now],
-	)
-	create_account_session(response, request, user_id)
-	LOGIN_FAILURES.pop(client_key(request), None)
-	return {
-		"ok": True,
-		"user": {
-			"id": user_id,
-			"email": email,
-			"username": username,
-			"role": "user",
-			"displayName": "",
-			"avatarUrl": "",
-			"bio": "",
-		},
-	}
 
 
 @app.post("/account/auth/login")
@@ -2153,53 +2556,21 @@ def account_login(
 	request: Request,
 	response: Response,
 ) -> dict[str, Any]:
-	check_login_rate_limit(request)
-	require_account_turnstile(payload.turnstileToken, request, "login")
-	if not account_auth_configured():
-		raise HTTPException(status_code=503, detail="Account API is not configured")
-	email = normalize_email(payload.email)
-	rows = d1_query(
-		"""
-		SELECT
-			id,
-			email,
-			username,
-			password_hash,
-			password_salt,
-			role,
-			display_name,
-			avatar_url,
-			bio,
-			disabled_at
-		FROM users
-		WHERE email = ?
-		LIMIT 1
-		""",
-		[email],
+	raise HTTPException(
+		status_code=410,
+		detail="Login moved to auth.silentflare.com",
 	)
-	if (
-		not rows
-		or rows[0].get("disabled_at")
-		or not verify_account_password(
-			payload.password,
-			str(rows[0].get("password_hash") or ""),
-			str(rows[0].get("password_salt") or ""),
-		)
-	):
-		record_login_failure(request)
-		raise HTTPException(status_code=401, detail="Invalid email or password")
-	create_account_session(response, request, str(rows[0]["id"]))
-	LOGIN_FAILURES.pop(client_key(request), None)
-	return {"ok": True, "user": account_user_payload(rows[0])}
 
 
 @app.post("/account/auth/logout")
 def account_logout(
 	request: Request,
 	response: Response,
+	x_csrf_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
 	token = request.cookies.get(ACCOUNT_SESSION_COOKIE, "")
 	if token and account_auth_configured():
+		require_account_csrf(request, x_csrf_token)
 		d1_query("DELETE FROM sessions WHERE session_hash = ?", [account_session_hash(token)])
 	clear_account_cookie(response)
 	return {"ok": True}
@@ -2214,7 +2585,11 @@ def account_me(request: Request, response: Response) -> dict[str, Any]:
 	if not user:
 		clear_account_cookie(response)
 		return {"user": None, "configured": True}
-	return {"user": account_user_payload(user), "configured": True}
+	return {
+		"user": account_user_payload(user),
+		"configured": True,
+		"csrf": account_csrf_token(request.cookies.get(ACCOUNT_SESSION_COOKIE, "")),
+	}
 
 
 @app.get("/account/profile")
@@ -2228,25 +2603,7 @@ def account_profile_update(
 	payload: AccountProfilePayload,
 	request: Request,
 ) -> dict[str, Any]:
-	user = require_account_user(request)
-	profile = normalize_profile_payload(payload)
-	now = utc_now()
-	d1_query(
-		"""
-		UPDATE users
-		SET display_name = ?, avatar_url = ?, bio = ?, updated_at = ?
-		WHERE id = ?
-		""",
-		[
-			profile["display_name"],
-			profile["avatar_url"],
-			profile["bio"],
-			now,
-			user["id"],
-		],
-	)
-	updated = {**user, **profile}
-	return {"ok": True, "user": account_user_payload(updated)}
+	raise HTTPException(status_code=410, detail="Use PATCH /accounts/profile")
 
 
 @app.get("/comments")
@@ -2279,13 +2636,17 @@ def comments(postSlug: str) -> dict[str, Any]:
 
 
 @app.post("/comments/create")
-def comment_create(payload: CommentCreatePayload, request: Request) -> dict[str, Any]:
+def comment_create(
+	payload: CommentCreatePayload,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
 	verify_turnstile_token(
 		payload.turnstileToken,
 		request.headers.get("cf-connecting-ip") or client_key(request),
 		"comment",
 	)
-	user = require_account_user(request)
+	user = require_account_csrf(request, x_csrf_token)
 	post_slug = normalize_post_slug(payload.postSlug)
 	content = normalize_comment_content(payload.content)
 	now = utc_now()
@@ -2314,8 +2675,12 @@ def comment_create(payload: CommentCreatePayload, request: Request) -> dict[str,
 
 
 @app.delete("/comments/{comment_id}")
-def comment_delete(comment_id: str, request: Request) -> dict[str, Any]:
-	user = require_account_user(request)
+def comment_delete(
+	comment_id: str,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	user = require_account_csrf(request, x_csrf_token)
 	rows = d1_query(
 		"SELECT id, user_id FROM comments WHERE id = ? LIMIT 1",
 		[comment_id],
@@ -2918,6 +3283,514 @@ def backup_run(
 	}
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Unified auth session
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.get("/auth/session")
+def unified_auth_session(request: Request, response: Response) -> dict[str, Any]:
+	if not account_auth_configured():
+		return {
+			"authenticated": False,
+			"user": None,
+			"configured": False,
+			"emailConfigured": bool(AUTH_EMAIL_API_KEY and AUTH_EMAIL_FROM),
+			"tosVersion": AUTH_TOS_VERSION,
+		}
+	d1_query("DELETE FROM sessions WHERE expires_at <= ?", [utc_now()])
+	user = get_account_user(request)
+	if not user:
+		clear_account_cookie(response)
+		return {
+			"authenticated": False,
+			"user": None,
+			"configured": True,
+			"emailConfigured": bool(AUTH_EMAIL_API_KEY and AUTH_EMAIL_FROM),
+			"tosVersion": AUTH_TOS_VERSION,
+		}
+	token = request.cookies.get(ACCOUNT_SESSION_COOKIE, "")
+	return {
+		"authenticated": True,
+		"user": account_user_payload(user),
+		"configured": True,
+		"emailConfigured": bool(AUTH_EMAIL_API_KEY and AUTH_EMAIL_FROM),
+		"tosVersion": AUTH_TOS_VERSION,
+		"csrf": account_csrf_token(token),
+	}
+
+
+@app.get("/auth/return-url")
+def auth_return_url(return_url: str = "") -> dict[str, str]:
+	return {"return_url": sanitize_return_url(return_url)}
+
+
+@app.post("/auth/session/refresh")
+def unified_session_refresh(
+	payload: SessionRefreshPayload,
+	request: Request,
+	response: Response,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	user = require_account_csrf(request, x_csrf_token)
+	old_token = request.cookies.get(ACCOUNT_SESSION_COOKIE, "")
+	d1_query("DELETE FROM sessions WHERE session_hash = ?", [account_session_hash(old_token)])
+	csrf = create_account_session(response, request, str(user["id"]))
+	return {
+		"ok": True,
+		"csrf": csrf,
+		"return_url": sanitize_return_url(payload.return_url),
+	}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Unified auth — password login (email or username)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.post("/auth/login/password")
+def unified_login_password(
+	payload: UnifiedLoginPasswordPayload,
+	request: Request,
+	response: Response,
+) -> dict[str, Any]:
+	check_login_rate_limit(request)
+	enforce_auth_rate_limit("password-login", client_key(request), 10, 900)
+	require_account_turnstile(payload.turnstile_token, request, "login")
+	if not account_auth_configured():
+		raise HTTPException(status_code=503, detail="Account API is not configured")
+	row = lookup_user_by_email_or_username(payload.email_or_username)
+	if (
+		not row
+		or row.get("disabled_at")
+		or not verify_account_password(
+			payload.password,
+			str(row.get("password_hash") or ""),
+			str(row.get("password_salt") or ""),
+		)
+	):
+		record_login_failure(request)
+		raise HTTPException(status_code=401, detail="Invalid credentials")
+	LOGIN_FAILURES.pop(client_key(request), None)
+	# Check for 2FA
+	return_url = sanitize_return_url(payload.return_url)
+	if row.get("totp_enabled") and row.get("totp_secret"):
+		pending_id = create_auth_flow(
+			"pending-login", user_id=str(row["id"]), return_url=return_url
+		)
+		return {
+			"ok": True,
+			"requires_2fa": True,
+			"pending_id": pending_id,
+			"return_url": return_url,
+		}
+	csrf = create_account_session(response, request, str(row["id"]))
+	return {
+		"ok": True,
+		"requires_2fa": False,
+		"user": account_user_payload(row),
+		"csrf": csrf,
+		"return_url": return_url,
+	}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Unified auth — email OTP login
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.post("/auth/login/email/request")
+@app.post("/auth/login/email/request-code")
+def unified_login_email_request_code(
+	payload: EmailCodeRequestPayload,
+	request: Request,
+) -> dict[str, Any]:
+	check_login_rate_limit(request)
+	require_account_turnstile(payload.turnstile_token, request, "login")
+	if not account_auth_configured():
+		raise HTTPException(status_code=503, detail="Account API is not configured")
+	email = normalize_email(payload.email)
+	rows = d1_query("SELECT id FROM users WHERE email = ? AND disabled_at IS NULL LIMIT 1", [email])
+	if rows:
+		create_email_verification(email, "login", request)
+	return {"ok": True, "message": "If the account exists, a code has been sent."}
+
+
+@app.post("/auth/login/email/verify")
+@app.post("/auth/login/email/verify-code")
+def unified_login_email_verify_code(
+	payload: EmailCodeVerifyPayload,
+	request: Request,
+	response: Response,
+) -> dict[str, Any]:
+	if not account_auth_configured():
+		raise HTTPException(status_code=503, detail="Account API is not configured")
+	email = normalize_email(payload.email)
+	enforce_auth_rate_limit("email-code-verify", client_key(request), 20, 900)
+	if not verify_email_code(email, payload.code, "login"):
+		record_login_failure(request)
+		raise HTTPException(status_code=401, detail="Invalid or expired verification code")
+	rows = d1_query(
+		"""
+		SELECT id, email, username, role, display_name, avatar_url, bio,
+			   display_region, disabled_at, password_hash, totp_secret, totp_enabled
+		FROM users WHERE email = ? AND disabled_at IS NULL LIMIT 1
+		""",
+		[email],
+	)
+	if not rows:
+		raise HTTPException(status_code=404, detail="Account not found")
+	row = rows[0]
+	LOGIN_FAILURES.pop(client_key(request), None)
+	return_url = sanitize_return_url(payload.return_url)
+	if row.get("totp_enabled") and row.get("totp_secret"):
+		pending_id = create_auth_flow(
+			"pending-login", user_id=str(row["id"]), return_url=return_url
+		)
+		return {
+			"ok": True,
+			"requires_2fa": True,
+			"pending_id": pending_id,
+			"return_url": return_url,
+		}
+	csrf = create_account_session(response, request, str(row["id"]))
+	return {
+		"ok": True,
+		"requires_2fa": False,
+		"user": account_user_payload(row),
+		"csrf": csrf,
+		"return_url": return_url,
+	}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Unified auth — 2FA verification
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.post("/auth/2fa/verify")
+def unified_2fa_verify(
+	payload: TwoFAVerifyPayload,
+	request: Request,
+	response: Response,
+) -> dict[str, Any]:
+	if not account_auth_configured():
+		raise HTTPException(status_code=503, detail="Account API is not configured")
+	flow = get_auth_flow(payload.pending_id, "pending-login")
+	if int(flow.get("attempts") or 0) >= AUTH_CODE_ATTEMPT_LIMIT:
+		raise HTTPException(status_code=429, detail="Too many 2FA attempts")
+	user_id = str(flow.get("user_id") or "")
+	rows = d1_query(
+		"""
+		SELECT id, email, username, role, display_name, avatar_url, bio,
+			   display_region, disabled_at, password_hash, totp_secret, totp_enabled
+		FROM users WHERE id = ? AND disabled_at IS NULL LIMIT 1
+		""",
+		[user_id],
+	)
+	if not rows or not rows[0].get("totp_secret"):
+		raise HTTPException(status_code=401, detail="2FA not configured for this account")
+	if not verify_totp(open_totp_secret(str(rows[0]["totp_secret"])), payload.code):
+		d1_query("UPDATE auth_flows SET attempts = attempts + 1 WHERE id = ?", [flow["id"]])
+		raise HTTPException(status_code=401, detail="Invalid 2FA code")
+	consume_auth_flow(str(flow["id"]))
+	csrf = create_account_session(response, request, user_id)
+	return {
+		"ok": True,
+		"user": account_user_payload(rows[0]),
+		"csrf": csrf,
+		"return_url": sanitize_return_url(str(flow.get("return_url") or "")),
+	}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Unified auth — logout
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.post("/auth/session/logout")
+def unified_logout(
+	request: Request,
+	response: Response,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	token = request.cookies.get(ACCOUNT_SESSION_COOKIE, "")
+	if token and account_auth_configured():
+		require_account_csrf(request, x_csrf_token)
+		d1_query("DELETE FROM sessions WHERE session_hash = ?", [account_session_hash(token)])
+	clear_account_cookie(response)
+	return {"ok": True}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Registration — email-first flow
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.post("/accounts/register/email/request")
+@app.post("/accounts/register/email/request-code")
+def register_email_request_code(
+	payload: RegisterEmailRequestPayload,
+	request: Request,
+) -> dict[str, Any]:
+	check_login_rate_limit(request)
+	require_account_turnstile(payload.turnstile_token, request, "register")
+	if not account_auth_configured():
+		raise HTTPException(status_code=503, detail="Account API is not configured")
+	email = normalize_email(payload.email)
+	existing = d1_query("SELECT id FROM users WHERE email = ? LIMIT 1", [email])
+	if not existing:
+		create_email_verification(email, "register", request)
+	return {"ok": True, "message": "If the email is available, a code has been sent."}
+
+
+@app.post("/accounts/register/email/verify")
+@app.post("/accounts/register/email/verify-code")
+def register_email_verify_code(
+	payload: RegisterEmailVerifyPayload,
+	request: Request,
+) -> dict[str, Any]:
+	if not account_auth_configured():
+		raise HTTPException(status_code=503, detail="Account API is not configured")
+	email = normalize_email(payload.email)
+	enforce_auth_rate_limit("register-code-verify", client_key(request), 20, 900)
+	if not verify_email_code(email, payload.code, "register"):
+		record_login_failure(request)
+		raise HTTPException(status_code=401, detail="Invalid or expired verification code")
+	if d1_query("SELECT id FROM users WHERE email = ? LIMIT 1", [email]):
+		raise HTTPException(status_code=409, detail="An account with this email already exists")
+	reg_token = create_auth_flow("registration", email=email)
+	LOGIN_FAILURES.pop(client_key(request), None)
+	return {"ok": True, "reg_token": reg_token, "tos_version": AUTH_TOS_VERSION}
+
+
+@app.post("/accounts/register/complete")
+def register_complete(
+	payload: RegisterCompletePayload,
+	request: Request,
+) -> dict[str, Any]:
+	if not account_auth_configured():
+		raise HTTPException(status_code=503, detail="Account API is not configured")
+	flow = get_auth_flow(payload.reg_token, "registration")
+	email = str(flow.get("email") or "")
+	username = normalize_username(payload.username)
+	if not payload.tos_accepted or payload.tos_version != AUTH_TOS_VERSION:
+		raise HTTPException(status_code=400, detail="Current Terms of Service must be accepted")
+	password = validate_account_password(payload.password) if payload.password else ""
+	existing = d1_query(
+		"SELECT id FROM users WHERE email = ? OR username = ? LIMIT 1",
+		[email, username],
+	)
+	if existing:
+		raise HTTPException(status_code=409, detail="Email or username is already in use")
+	password_hash, salt = hash_account_password(password) if password else ("", "")
+	now = utc_now()
+	user_id = str(uuid.uuid4())
+	display_name = payload.display_name.strip()[:80]
+	display_region = payload.display_region.strip()[:100]
+	try:
+		ensure_account_db()
+		with sqlite3.connect(ACCOUNT_DB_PATH) as connection:
+			connection.execute("PRAGMA foreign_keys = ON")
+			connection.execute(
+				"""
+				INSERT INTO users
+					(id, email, username, password_hash, password_salt, role,
+					 email_verified_at, display_name, display_region, tos_version,
+					 tos_accepted_at, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, 'user', ?, ?, ?, ?, ?, ?, ?)
+				""",
+				[
+					user_id, email, username, password_hash, salt, now, display_name,
+					display_region, AUTH_TOS_VERSION, now, now, now,
+				],
+			)
+			connection.execute(
+				"""
+				INSERT INTO tos_acceptances
+					(id, user_id, version, accepted_at, ip_hash, user_agent)
+				VALUES (?, ?, ?, ?, ?, ?)
+				""",
+				[
+					str(uuid.uuid4()), user_id, AUTH_TOS_VERSION, now,
+					auth_secret_hash(f"ip:{client_key(request)}"),
+					(request.headers.get("user-agent") or "")[:500],
+				],
+			)
+	except sqlite3.IntegrityError as exc:
+		raise HTTPException(status_code=409, detail="Email or username is already in use") from exc
+	consume_auth_flow(str(flow["id"]))
+	onboarding_token = create_auth_flow("registration-onboarding", user_id=user_id, email=email)
+	return {
+		"ok": True,
+		"onboarding_token": onboarding_token,
+		"has_password": bool(password),
+		"message": "Account created. Configure or skip 2FA, then sign in.",
+	}
+
+
+@app.post("/accounts/register/2fa/start")
+def registration_2fa_start(payload: RegistrationTwoFAPayload) -> dict[str, Any]:
+	flow = get_auth_flow(payload.onboarding_token, "registration-onboarding")
+	secret = generate_totp_secret()
+	setup_token = create_auth_flow(
+		"registration-2fa-setup",
+		user_id=str(flow.get("user_id") or ""),
+		email=str(flow.get("email") or ""),
+		metadata={"secret": seal_totp_secret(secret), "onboarding_flow_id": flow["id"]},
+	)
+	label = quote(f"SilentFlare:{flow.get('email') or 'account'}")
+	uri = f"otpauth://totp/{label}?secret={secret}&issuer=SilentFlare&algorithm=SHA1&digits=6&period=30"
+	return {"ok": True, "setup_token": setup_token, "secret": secret, "uri": uri}
+
+
+@app.post("/accounts/register/2fa/verify")
+def registration_2fa_verify(payload: RegistrationTwoFAPayload) -> dict[str, Any]:
+	flow = get_auth_flow(payload.setup_token, "registration-2fa-setup")
+	metadata = json.loads(str(flow.get("metadata_json") or "{}"))
+	secret_encrypted = str(metadata.get("secret") or "")
+	if not verify_totp(open_totp_secret(secret_encrypted), payload.code):
+		d1_query("UPDATE auth_flows SET attempts = attempts + 1 WHERE id = ?", [flow["id"]])
+		raise HTTPException(status_code=401, detail="Invalid 2FA code")
+	d1_query(
+		"UPDATE users SET totp_secret = ?, totp_enabled = 1, updated_at = ? WHERE id = ?",
+		[secret_encrypted, utc_now(), flow["user_id"]],
+	)
+	consume_auth_flow(str(flow["id"]))
+	consume_auth_flow(str(metadata.get("onboarding_flow_id") or ""))
+	return {"ok": True, "login_url": "https://auth.silentflare.com/"}
+
+
+@app.post("/accounts/register/2fa/skip")
+def registration_2fa_skip(payload: RegistrationTwoFAPayload) -> dict[str, Any]:
+	flow = get_auth_flow(payload.onboarding_token, "registration-onboarding")
+	consume_auth_flow(str(flow["id"]))
+	return {"ok": True, "login_url": "https://auth.silentflare.com/"}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 2FA setup (requires account session)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.post("/accounts/2fa/setup/start")
+def accounts_2fa_setup_start(
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	user = require_account_csrf(request, x_csrf_token)
+	secret = generate_totp_secret()
+	email = str(user.get("email", ""))
+	setup_token = create_auth_flow(
+		"account-2fa-setup",
+		user_id=str(user["id"]),
+		email=email,
+		metadata={"secret": seal_totp_secret(secret)},
+	)
+	uri = f"otpauth://totp/SilentFlare:{quote(email)}?secret={secret}&issuer=SilentFlare&algorithm=SHA1&digits=6&period=30"
+	return {"ok": True, "setup_token": setup_token, "secret": secret, "uri": uri}
+
+
+@app.post("/accounts/2fa/setup/verify")
+def accounts_2fa_setup_verify(
+	payload: TwoFASetupVerifyPayload,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	user = require_account_csrf(request, x_csrf_token)
+	flow = get_auth_flow(payload.setup_token, "account-2fa-setup")
+	if str(flow.get("user_id") or "") != str(user["id"]):
+		raise HTTPException(status_code=403, detail="2FA setup is not authorized")
+	metadata = json.loads(str(flow.get("metadata_json") or "{}"))
+	secret_encrypted = str(metadata.get("secret") or "")
+	if not verify_totp(open_totp_secret(secret_encrypted), payload.code):
+		raise HTTPException(status_code=401, detail="Invalid 2FA code")
+	now = utc_now()
+	d1_query(
+		"UPDATE users SET totp_secret = ?, totp_enabled = 1, updated_at = ? WHERE id = ?",
+		[secret_encrypted, now, str(user["id"])],
+	)
+	consume_auth_flow(str(flow["id"]))
+	return {"ok": True}
+
+
+@app.post("/accounts/2fa/disable")
+def accounts_2fa_disable(
+	payload: TwoFASetupVerifyPayload,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	user = require_account_csrf(request, x_csrf_token)
+	rows = d1_query("SELECT totp_secret FROM users WHERE id = ? LIMIT 1", [user["id"]])
+	if not rows or not rows[0].get("totp_secret") or not verify_totp(
+		open_totp_secret(str(rows[0]["totp_secret"])), payload.code
+	):
+		raise HTTPException(status_code=401, detail="Invalid 2FA code")
+	now = utc_now()
+	d1_query(
+		"UPDATE users SET totp_secret = NULL, totp_enabled = 0, updated_at = ? WHERE id = ?",
+		[now, str(user["id"])],
+	)
+	return {"ok": True}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Accounts profile (new unified routes)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.get("/accounts/profile")
+def accounts_profile_get(request: Request) -> dict[str, Any]:
+	user = require_account_user(request)
+	return {"ok": True, "user": account_user_payload(user)}
+
+
+@app.patch("/accounts/profile")
+def accounts_profile_patch(
+	payload: UnifiedProfilePayload,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	user = require_account_csrf(request, x_csrf_token)
+	profile = normalize_profile_payload(
+		AccountProfilePayload(
+			display_name=payload.display_name,
+			avatar_url=payload.avatar_url,
+			bio=payload.bio,
+		)
+	)
+	display_name = profile["display_name"]
+	avatar_url = profile["avatar_url"]
+	bio = profile["bio"]
+	display_region = (payload.display_region or "").strip()
+	if len(display_region) > 100:
+		raise HTTPException(status_code=400, detail="Display region is too long")
+	now = utc_now()
+	d1_query(
+		"""
+		UPDATE users
+		SET display_name = ?, avatar_url = ?, bio = ?, display_region = ?, updated_at = ?
+		WHERE id = ?
+		""",
+		[display_name, avatar_url, bio, display_region, now, str(user["id"])],
+	)
+	updated = {**user, "display_name": display_name, "avatar_url": avatar_url, "bio": bio, "display_region": display_region}
+	return {"ok": True, "user": account_user_payload(updated)}
+
+
+@app.get("/auth/oauth/{provider}/start")
+def oauth_start(provider: str, return_url: str = "") -> dict[str, Any]:
+	if provider not in {"google", "github", "telegram"}:
+		raise HTTPException(status_code=404, detail="OAuth provider not found")
+	return {
+		"ok": False,
+		"provider": provider,
+		"available": False,
+		"return_url": sanitize_return_url(return_url),
+		"detail": "OAuth provider is reserved but not configured",
+	}
+
+
+@app.get("/auth/oauth/{provider}/callback")
+def oauth_callback(provider: str) -> dict[str, Any]:
+	if provider not in {"google", "github", "telegram"}:
+		raise HTTPException(status_code=404, detail="OAuth provider not found")
+	raise HTTPException(status_code=501, detail="OAuth provider is not configured")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 @app.post("/bots/{bot_id}/telegram/test")
 def telegram_test(
 	bot_id: str,

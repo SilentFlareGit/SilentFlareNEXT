@@ -53,17 +53,21 @@ export async function getComments(postSlug: string) {
 }
 
 export async function createComment(payload: CreateCommentPayload) {
+	const session = await fetchJson<{ csrf?: string }>(apiUrl("/auth/session"));
 	return fetchJson<{ comment: CommentRecord }>(apiUrl("/comments/create"), {
 		method: "POST",
+		headers: session.csrf ? { "X-CSRF-Token": session.csrf } : {},
 		body: JSON.stringify(payload),
 	});
 }
 
 export async function deleteComment(id: string) {
+	const session = await fetchJson<{ csrf?: string }>(apiUrl("/auth/session"));
 	return fetchJson<{ ok: true }>(
 		apiUrl(`/comments/${encodeURIComponent(id)}`),
 		{
 			method: "DELETE",
+			headers: session.csrf ? { "X-CSRF-Token": session.csrf } : {},
 		},
 	);
 }

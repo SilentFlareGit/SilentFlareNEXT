@@ -1,0 +1,29 @@
+---
+import AuthApp from "../../components/auth/AuthApp.svelte";
+import "@fontsource/roboto/400.css";
+import "@fontsource/roboto/500.css";
+import "@fontsource/roboto/700.css";
+import "../../styles/variables.styl";
+import "../../styles/main.css";
+
+const apiBase = "/auth-api";
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Sign in - SilentFlare</title>
+		<meta name="description" content="Sign in to your SilentFlare account" />
+		<script is:inline>
+			if (typeof localStorage !== "undefined" && localStorage.theme === "dark") {
+				document.documentElement.classList.add("dark");
+			}
+		</script>
+	</head>
+	<body class="m-0 min-h-screen antialiased">
+		<div class="sr-only" aria-hidden="true">SilentFlare unified login authentication sign in</div>
+		<AuthApp client:only="svelte" {apiBase} />
+	</body>
+</html>
