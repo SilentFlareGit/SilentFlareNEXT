@@ -1193,6 +1193,7 @@ def send_email_code(email: str, code: str, purpose: str) -> None:
 	request = UrlRequest(AUTH_EMAIL_API_URL, data=payload, method="POST")
 	request.add_header("Authorization", f"Bearer {AUTH_EMAIL_API_KEY}")
 	request.add_header("Content-Type", "application/json")
+	request.add_header("User-Agent", "SilentFlare-Auth/1.0")
 	try:
 		with urlopen(request, timeout=15) as response:
 			if response.status >= 300:

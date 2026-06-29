@@ -223,6 +223,7 @@ Production readiness caveat:
 
 - `GET https://auth.silentflare.com/auth-api/auth/session` must return `configured:true`. `emailConfigured:false` means password/session flows can work but email-code login and registration cannot send mail.
 - Real email flows require `AUTH_EMAIL_API_KEY` and `AUTH_EMAIL_FROM` in `/opt/silentflare/api/api.env`. Never substitute log output or a response field for mail delivery.
+- A custom Resend sender such as `verify@auth.silentflare.com` also requires the exact sending domain to be verified in Resend with its SPF and DKIM DNS records. `emailConfigured:true` only proves that the API variables are present; verify a real delivery before declaring email ready.
 
 ## Environment Variables
 
@@ -277,7 +278,7 @@ ACCOUNT_AVATAR_MAX_BYTES=2097152
 IP_GEOLOCATION_URL_TEMPLATE=https://ipwho.is/{ip}
 IP_GEO_CACHE_TTL=86400
 AUTH_EMAIL_API_KEY=<resend-compatible-server-key>
-AUTH_EMAIL_FROM=SilentFlare <auth@silentflare.com>
+AUTH_EMAIL_FROM=verify@auth.silentflare.com
 AUTH_EMAIL_API_URL=https://api.resend.com/emails
 AUTH_TOS_VERSION=2026-06-28
 AUTH_EMAIL_CODE_TTL=600
