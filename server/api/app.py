@@ -5,6 +5,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import ipaddress
 import os
 import secrets
 import sqlite3
@@ -16,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
-from urllib.parse import quote, urlencode, urlparse
+from urllib.parse import quote, unquote, urlencode, urlparse
 from urllib.request import Request as UrlRequest, urlopen
 from zoneinfo import ZoneInfo
 
@@ -86,6 +87,17 @@ ACCOUNT_SESSION_COOKIE = os.getenv("ACCOUNT_SESSION_COOKIE_NAME", "sf_account_se
 ACCOUNT_SESSION_SECRET = os.getenv("SESSION_SECRET") or os.getenv("ACCOUNT_SESSION_SECRET", "")
 ACCOUNT_COOKIE_DOMAIN = os.getenv("ACCOUNT_COOKIE_DOMAIN", "")
 ACCOUNT_DB_PATH = Path(os.getenv("ACCOUNT_DB_PATH", "/opt/silentflare/api/account.db"))
+ACCOUNT_AVATAR_DIR = Path(
+	os.getenv("ACCOUNT_AVATAR_DIR", "/opt/silentflare/api/uploads/avatars")
+)
+ACCOUNT_AVATAR_PUBLIC_BASE = os.getenv(
+	"ACCOUNT_AVATAR_PUBLIC_BASE", "https://api.silentflare.com/account-avatars"
+).rstrip("/")
+ACCOUNT_AVATAR_MAX_BYTES = int(os.getenv("ACCOUNT_AVATAR_MAX_BYTES", str(2 * 1024 * 1024)))
+IP_GEOLOCATION_URL_TEMPLATE = os.getenv(
+	"IP_GEOLOCATION_URL_TEMPLATE", "https://ipwho.is/{ip}"
+)
+IP_GEO_CACHE_TTL = int(os.getenv("IP_GEO_CACHE_TTL", "86400"))
 LOGIN_CHALLENGE_TTL = 5 * 60
 PBKDF2_PREFIX = "pbkdf2_sha256"
 ACCOUNT_PBKDF2_PREFIX = "pbkdf2-sha256"
@@ -103,6 +115,7 @@ AUTH_EMAIL_SEND_COOLDOWN = int(os.getenv("AUTH_EMAIL_SEND_COOLDOWN", "60"))
 AUTH_EMAIL_SEND_LIMIT = int(os.getenv("AUTH_EMAIL_SEND_LIMIT", "5"))
 AUTH_CODE_ATTEMPT_LIMIT = int(os.getenv("AUTH_CODE_ATTEMPT_LIMIT", "5"))
 AUTH_FLOW_TTL = int(os.getenv("AUTH_FLOW_TTL", "1200"))
+IP_GEO_CACHE: dict[str, dict[str, Any]] = {}
 
 app = FastAPI(title=APP_NAME)
 app.add_middleware(
@@ -936,6 +949,8 @@ def ensure_account_db() -> None:
 			("totp_secret", "TEXT"),
 			("totp_enabled", "INTEGER"),
 			("display_region", "TEXT"),
+			("display_region_code", "TEXT"),
+			("display_region_updated_at", "TEXT"),
 			("tos_version", "TEXT"),
 			("tos_accepted_at", "TEXT"),
 		):
@@ -1006,6 +1021,113 @@ def auth_secret_hash(value: str) -> str:
 			ACCOUNT_SESSION_SECRET.encode("utf-8"), value.encode("utf-8"), hashlib.sha256
 		).digest()
 	).decode("ascii")
+
+
+def request_public_ip(request: Request) -> str:
+	raw_ip = (request.headers.get("cf-connecting-ip") or "").strip()
+	if not raw_ip and request.client:
+		raw_ip = str(request.client.host or "").strip()
+	try:
+		address = ipaddress.ip_address(raw_ip)
+	except ValueError:
+		return ""
+	if address.is_private or address.is_loopback or address.is_reserved:
+		return ""
+	return str(address)
+
+
+def clean_geo_value(value: Any, limit: int = 100) -> str:
+	return unquote(str(value or "")).strip()[:limit]
+
+
+def lookup_ip_region(request: Request) -> dict[str, str]:
+	country_code = clean_geo_value(request.headers.get("cf-ipcountry"), 2).upper()
+	city = clean_geo_value(request.headers.get("cf-ipcity"))
+	region = clean_geo_value(request.headers.get("cf-region"))
+	country = clean_geo_value(request.headers.get("cf-country"))
+	if country_code and city and country:
+		return {
+			"country_code": country_code,
+			"country": country,
+			"region": region,
+			"city": city,
+		}
+	public_ip = request_public_ip(request)
+	if not public_ip:
+		return {
+			"country_code": country_code,
+			"country": country,
+			"region": region,
+			"city": city,
+		}
+	cache_key = auth_secret_hash(f"geo:{public_ip}")
+	cached = IP_GEO_CACHE.get(cache_key)
+	if cached and float(cached.get("expires_at", 0)) > time.time():
+		return dict(cached["value"])
+	try:
+		url = IP_GEOLOCATION_URL_TEMPLATE.format(ip=quote(public_ip, safe=""))
+		geo_request = UrlRequest(url, headers={"User-Agent": "SilentFlareAccountAPI/1.0"})
+		with urlopen(geo_request, timeout=5) as response:
+			payload = json.loads(response.read().decode("utf-8"))
+		if payload.get("success") is False:
+			raise ValueError("geolocation lookup rejected")
+		value = {
+			"country_code": clean_geo_value(
+				payload.get("country_code") or payload.get("countryCode") or country_code,
+				2,
+			).upper(),
+			"country": clean_geo_value(payload.get("country") or country),
+			"region": clean_geo_value(payload.get("region") or payload.get("regionName") or region),
+			"city": clean_geo_value(payload.get("city") or city),
+		}
+		IP_GEO_CACHE[cache_key] = {
+			"value": value,
+			"expires_at": time.time() + IP_GEO_CACHE_TTL,
+		}
+		return value
+	except Exception:
+		return {
+			"country_code": country_code,
+			"country": country,
+			"region": region,
+			"city": city,
+		}
+
+
+def display_region_value(region: dict[str, str]) -> str:
+	parts: list[str] = []
+	for value in (region.get("city", ""), region.get("region", ""), region.get("country", "")):
+		if value and value.casefold() not in {part.casefold() for part in parts}:
+			parts.append(value)
+	return ", ".join(parts)[:200]
+
+
+def refresh_account_region(user: dict[str, Any], request: Request) -> dict[str, Any]:
+	region = lookup_ip_region(request)
+	display_region = display_region_value(region)
+	country_code = region.get("country_code", "")[:2].upper()
+	if not display_region and not country_code:
+		return user
+	if (
+		display_region == str(user.get("display_region") or "")
+		and country_code == str(user.get("display_region_code") or "")
+	):
+		return user
+	now = utc_now()
+	d1_query(
+		"""
+		UPDATE users
+		SET display_region = ?, display_region_code = ?, display_region_updated_at = ?, updated_at = ?
+		WHERE id = ?
+		""",
+		[display_region, country_code, now, now, str(user["id"])],
+	)
+	return {
+		**user,
+		"display_region": display_region,
+		"display_region_code": country_code,
+		"display_region_updated_at": now,
+	}
 
 
 def sanitize_return_url(value: str | None) -> str:
@@ -1398,6 +1520,7 @@ def account_user_payload(row: dict[str, Any]) -> dict[str, Any]:
 		"avatarUrl": row.get("avatar_url") or "",
 		"bio": row.get("bio") or "",
 		"displayRegion": row.get("display_region") or "",
+		"displayRegionCode": row.get("display_region_code") or "",
 		"twoFactorEnabled": bool(row.get("totp_enabled")),
 		"hasPassword": bool(row.get("password_hash")),
 	}
@@ -1471,6 +1594,8 @@ def get_account_user(request: Request) -> dict[str, Any] | None:
 			users.avatar_url,
 			users.bio,
 			users.display_region,
+			users.display_region_code,
+			users.display_region_updated_at,
 			users.totp_enabled,
 			users.password_hash,
 			users.disabled_at
@@ -1518,6 +1643,37 @@ def normalize_profile_payload(payload: AccountProfilePayload) -> dict[str, str]:
 	if len(bio) > 500:
 		raise HTTPException(status_code=400, detail="Bio is too long")
 	return {"display_name": display_name, "avatar_url": avatar_url, "bio": bio}
+
+
+def avatar_media_type(data: bytes, supplied_type: str) -> tuple[str, str]:
+	if data.startswith(b"\x89PNG\r\n\x1a\n"):
+		return "png", "image/png"
+	if data.startswith(b"\xff\xd8\xff"):
+		return "jpg", "image/jpeg"
+	if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+		return "webp", "image/webp"
+	raise HTTPException(
+		status_code=415,
+		detail=f"Unsupported avatar image type: {supplied_type or 'unknown'}",
+	)
+
+
+def managed_avatar_path(avatar_url: str) -> Path | None:
+	if not avatar_url.startswith(f"{ACCOUNT_AVATAR_PUBLIC_BASE}/"):
+		return None
+	filename = avatar_url.rsplit("/", 1)[-1]
+	if not filename or Path(filename).name != filename:
+		return None
+	return ACCOUNT_AVATAR_DIR / filename
+
+
+def delete_managed_avatar(avatar_url: str) -> None:
+	path = managed_avatar_path(avatar_url)
+	if path and path.is_file():
+		try:
+			path.unlink()
+		except OSError:
+			pass
 
 
 def normalize_comment_content(content: str) -> str:
@@ -3581,7 +3737,9 @@ def register_complete(
 	now = utc_now()
 	user_id = str(uuid.uuid4())
 	display_name = payload.display_name.strip()[:80]
-	display_region = payload.display_region.strip()[:100]
+	region = lookup_ip_region(request)
+	display_region = display_region_value(region)
+	display_region_code = region.get("country_code", "")[:2].upper()
 	try:
 		ensure_account_db()
 		with sqlite3.connect(ACCOUNT_DB_PATH) as connection:
@@ -3590,13 +3748,13 @@ def register_complete(
 				"""
 				INSERT INTO users
 					(id, email, username, password_hash, password_salt, role,
-					 email_verified_at, display_name, display_region, tos_version,
-					 tos_accepted_at, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, 'user', ?, ?, ?, ?, ?, ?, ?)
+					 email_verified_at, display_name, display_region, display_region_code,
+					 display_region_updated_at, tos_version, tos_accepted_at, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, 'user', ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				""",
 				[
 					user_id, email, username, password_hash, salt, now, display_name,
-					display_region, AUTH_TOS_VERSION, now, now, now,
+					display_region, display_region_code, now, AUTH_TOS_VERSION, now, now, now,
 				],
 			)
 			connection.execute(
@@ -3733,7 +3891,7 @@ def accounts_2fa_disable(
 
 @app.get("/accounts/profile")
 def accounts_profile_get(request: Request) -> dict[str, Any]:
-	user = require_account_user(request)
+	user = refresh_account_region(require_account_user(request), request)
 	return {"ok": True, "user": account_user_payload(user)}
 
 
@@ -3743,31 +3901,104 @@ def accounts_profile_patch(
 	request: Request,
 	x_csrf_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
-	user = require_account_csrf(request, x_csrf_token)
+	user = refresh_account_region(require_account_csrf(request, x_csrf_token), request)
 	profile = normalize_profile_payload(
 		AccountProfilePayload(
 			display_name=payload.display_name,
-			avatar_url=payload.avatar_url,
+			avatar_url=str(user.get("avatar_url") or ""),
 			bio=payload.bio,
 		)
 	)
 	display_name = profile["display_name"]
 	avatar_url = profile["avatar_url"]
 	bio = profile["bio"]
-	display_region = (payload.display_region or "").strip()
-	if len(display_region) > 100:
-		raise HTTPException(status_code=400, detail="Display region is too long")
 	now = utc_now()
 	d1_query(
 		"""
 		UPDATE users
-		SET display_name = ?, avatar_url = ?, bio = ?, display_region = ?, updated_at = ?
+		SET display_name = ?, avatar_url = ?, bio = ?, updated_at = ?
 		WHERE id = ?
 		""",
-		[display_name, avatar_url, bio, display_region, now, str(user["id"])],
+		[display_name, avatar_url, bio, now, str(user["id"])],
 	)
-	updated = {**user, "display_name": display_name, "avatar_url": avatar_url, "bio": bio, "display_region": display_region}
+	updated = {**user, "display_name": display_name, "avatar_url": avatar_url, "bio": bio}
 	return {"ok": True, "user": account_user_payload(updated)}
+
+
+@app.post("/accounts/profile/avatar")
+async def accounts_profile_avatar_upload(
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	user = require_account_csrf(request, x_csrf_token)
+	content_length = request.headers.get("content-length", "")
+	if content_length.isdigit() and int(content_length) > ACCOUNT_AVATAR_MAX_BYTES:
+		raise HTTPException(status_code=413, detail="Avatar image must be 2 MB or smaller")
+	data = await request.body()
+	if not data:
+		raise HTTPException(status_code=400, detail="Avatar image is required")
+	if len(data) > ACCOUNT_AVATAR_MAX_BYTES:
+		raise HTTPException(status_code=413, detail="Avatar image must be 2 MB or smaller")
+	extension, media_type = avatar_media_type(data, request.headers.get("content-type", ""))
+	ACCOUNT_AVATAR_DIR.mkdir(parents=True, exist_ok=True)
+	filename = f"{secrets.token_urlsafe(24)}.{extension}"
+	path = ACCOUNT_AVATAR_DIR / filename
+	path.write_bytes(data)
+	avatar_url = f"{ACCOUNT_AVATAR_PUBLIC_BASE}/{filename}"
+	old_avatar_url = str(user.get("avatar_url") or "")
+	try:
+		d1_query(
+			"UPDATE users SET avatar_url = ?, updated_at = ? WHERE id = ?",
+			[avatar_url, utc_now(), str(user["id"])],
+		)
+	except Exception:
+		try:
+			path.unlink()
+		except OSError:
+			pass
+		raise
+	delete_managed_avatar(old_avatar_url)
+	updated = {**user, "avatar_url": avatar_url}
+	return {
+		"ok": True,
+		"mediaType": media_type,
+		"user": account_user_payload(updated),
+	}
+
+
+@app.delete("/accounts/profile/avatar")
+def accounts_profile_avatar_delete(
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	user = require_account_csrf(request, x_csrf_token)
+	old_avatar_url = str(user.get("avatar_url") or "")
+	d1_query(
+		"UPDATE users SET avatar_url = '', updated_at = ? WHERE id = ?",
+		[utc_now(), str(user["id"])],
+	)
+	delete_managed_avatar(old_avatar_url)
+	return {"ok": True, "user": account_user_payload({**user, "avatar_url": ""})}
+
+
+@app.get("/account-avatars/{filename}")
+def account_avatar_file(filename: str) -> Response:
+	if Path(filename).name != filename or not filename.endswith((".png", ".jpg", ".webp")):
+		raise HTTPException(status_code=404, detail="Avatar not found")
+	path = ACCOUNT_AVATAR_DIR / filename
+	if not path.is_file():
+		raise HTTPException(status_code=404, detail="Avatar not found")
+	data = path.read_bytes()
+	media_type = {
+		".png": "image/png",
+		".jpg": "image/jpeg",
+		".webp": "image/webp",
+	}[path.suffix]
+	return Response(
+		content=data,
+		media_type=media_type,
+		headers={"Cache-Control": "public, max-age=31536000, immutable"},
+	)
 
 
 @app.get("/auth/oauth/{provider}/start")

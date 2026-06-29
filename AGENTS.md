@@ -134,6 +134,7 @@ Front end sources:
 - Auth app: `src/components/auth/AuthApp.svelte` and `src/components/auth/panels/`.
 - Accounts page: `src/pages/accounts/index.astro`.
 - Accounts app: `src/components/account/AccountApp.svelte`.
+- Accounts is a standalone account workspace. Do not restore the public blog navbar/banner above it; navigation back to the blog should remain a compact in-workspace wordmark.
 - Admin page: `src/pages/admin/index.astro`.
 - Admin app: `src/components/admin/AdminApp.svelte`.
 - Blog navbar account entry: `src/components/auth/UserMenu.svelte`.
@@ -152,8 +153,12 @@ Current account behavior:
 - Verification codes expire, are one-time, are stored only as keyed hashes, and have send cooldown, hourly limits, and verification-attempt limits. Never log or return a real code.
 - Passwords use PBKDF2-SHA256 with random salts and the iteration count embedded in the stored hash. TOTP secrets are encrypted and authenticated at rest with a key derived from `SESSION_SECRET`.
 - TOS acceptance is versioned and written to `tos_acceptances` with timestamp plus hashed request metadata.
-- `display_region` is profile display data only. It must never be used as an authentication, authorization, or risk signal.
-- Account profile content is stored in local user columns: `display_name`, `avatar_url`, `bio`, and `display_region`.
+- The Accounts profile avatar is uploaded directly to FastAPI as PNG, JPEG, or WebP, limited to 2 MB. The browser must not create a data URL session or write a filesystem/database path itself.
+- Managed avatars live under `ACCOUNT_AVATAR_DIR`; the database stores the public API URL. Replacing or deleting a managed avatar removes the previous managed file.
+- `display_region`, `display_region_code`, and `display_region_updated_at` are API-owned profile display data. The UI must render them read-only with the country flag and city/country label.
+- Region is refreshed from the current request IP when Accounts loads. Prefer Cloudflare location headers; when city/country names are absent, the API may use the configured HTTPS geolocation endpoint. Never accept a user-entered region value.
+- IP-derived region must never be used as an authentication, authorization, 2FA, or risk decision.
+- Account profile content is stored in local user columns: `display_name`, `avatar_url`, `bio`, `display_region`, and `display_region_code`.
 
 Current admin behavior:
 
@@ -176,6 +181,9 @@ Important account FastAPI endpoints:
 - `POST /accounts/register/email/request`, `POST /accounts/register/email/verify`, and `POST /accounts/register/complete`: verified email-first registration with optional password and mandatory current TOS acceptance.
 - `POST /accounts/register/2fa/start`, `POST /accounts/register/2fa/verify`, and `POST /accounts/register/2fa/skip`: registration onboarding security choice; no session is issued.
 - `GET/PATCH /accounts/profile`: read/update authenticated profile. PATCH requires CSRF.
+- `POST /accounts/profile/avatar`: upload a CSRF-protected raw PNG/JPEG/WebP avatar, maximum 2 MB.
+- `DELETE /accounts/profile/avatar`: clear the profile avatar and remove the previous managed file when applicable.
+- `GET /account-avatars/{filename}`: immutable public delivery for managed avatar files.
 - `POST /accounts/2fa/setup/start`, `POST /accounts/2fa/setup/verify`, and `POST /accounts/2fa/disable`: authenticated 2FA management with CSRF.
 - Legacy `POST /account/auth/register` and `POST /account/auth/login` return `410`; do not re-enable them because they bypass the unified flow.
 - `GET /comments?postSlug=...`: public comment list for a Ghost post slug.
@@ -206,6 +214,7 @@ Production Nginx subsite routing on FNS1:
 Unified-auth deployment additionally requires:
 
 - `migrations/0003_unified_auth.sql` as the schema reference; `ensure_account_db()` applies equivalent idempotent runtime schema changes.
+- `migrations/0004_account_avatar_region.sql` for IP-derived region metadata; avatar files stay outside SQLite.
 - `/etc/nginx/sites-available/silentflare-auth` with `/auth-api/` proxy.
 - `/etc/nginx/sites-available/silentflare-account`.
 - `/etc/nginx/sites-available/silentflare-admin` with `/admin-api/` proxy.
@@ -262,6 +271,11 @@ ACCOUNT_SESSION_COOKIE_NAME=sf_account_session
 ACCOUNT_COOKIE_DOMAIN=.silentflare.com
 ACCOUNT_SESSION_TTL=2592000
 ACCOUNT_DB_PATH=/opt/silentflare/api/account.db
+ACCOUNT_AVATAR_DIR=/opt/silentflare/api/uploads/avatars
+ACCOUNT_AVATAR_PUBLIC_BASE=https://api.silentflare.com/account-avatars
+ACCOUNT_AVATAR_MAX_BYTES=2097152
+IP_GEOLOCATION_URL_TEMPLATE=https://ipwho.is/{ip}
+IP_GEO_CACHE_TTL=86400
 AUTH_EMAIL_API_KEY=<resend-compatible-server-key>
 AUTH_EMAIL_FROM=SilentFlare <auth@silentflare.com>
 AUTH_EMAIL_API_URL=https://api.resend.com/emails
@@ -869,7 +883,7 @@ Current architecture intentionally makes these changes:
 - keeps public-user auth separate from bot/admin Owner auth;
 - narrowed `admin.silentflare.com` to user and comment management only;
 - requires same-origin `auth-api`, `accounts-api`, and `admin-api` proxies;
-- adds `migrations/0003_unified_auth.sql` for unified authentication metadata.
+- adds `migrations/0003_unified_auth.sql` for unified authentication metadata and `migrations/0004_account_avatar_region.sql` for API-owned profile location metadata;
 
 Do not copy the older June 22 deployment identifiers below as current evidence. For each deployment, replace them with fresh checks for:
 

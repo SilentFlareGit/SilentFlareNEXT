@@ -1,6 +1,5 @@
 ---
 import AccountApp from "../../components/account/AccountApp.svelte";
-import AccountSubsiteLayout from "../../layouts/AccountSubsiteLayout.astro";
 import "@fontsource/roboto/400.css";
 import "@fontsource/roboto/500.css";
 import "@fontsource/roboto/700.css";
@@ -10,15 +9,26 @@ import "../../styles/main.css";
 const apiBase = "/accounts-api";
 ---
 
-<AccountSubsiteLayout
-	title="SilentFlare Accounts"
-	description="SilentFlare registration, profile, and account security center"
->
-	<div
-		style="position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0);"
-		aria-hidden="true"
-	>
-		SilentFlare accounts center register email verification profile avatar region bio two factor security
-	</div>
-	<AccountApp client:only="svelte" {apiBase} />
-</AccountSubsiteLayout>
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>SilentFlare Accounts</title>
+		<meta
+			name="description"
+			content="SilentFlare registration, profile, avatar, region, and account security center"
+		/>
+		<script is:inline>
+			if (typeof localStorage !== "undefined" && localStorage.theme === "dark") {
+				document.documentElement.classList.add("dark");
+			}
+		</script>
+	</head>
+	<body class="m-0 min-h-screen antialiased">
+		<div class="sr-only" aria-hidden="true">
+			SilentFlare accounts center register email verification profile avatar upload IP region country city two factor security
+		</div>
+		<AccountApp client:only="svelte" {apiBase} />
+	</body>
+</html>

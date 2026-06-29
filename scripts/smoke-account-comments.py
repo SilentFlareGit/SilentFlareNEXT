@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import asyncio
 import importlib.util
 import json
 import os
@@ -66,10 +67,19 @@ class StubClient:
 
 
 class StubRequest:
-	def __init__(self, cookies: dict[str, str] | None = None) -> None:
-		self.headers = {"user-agent": "silentflare-smoke"}
+	def __init__(
+		self,
+		cookies: dict[str, str] | None = None,
+		headers: dict[str, str] | None = None,
+		body: bytes = b"",
+	) -> None:
+		self.headers = {"user-agent": "silentflare-smoke", **(headers or {})}
 		self.cookies = cookies or {}
 		self.client = StubClient()
+		self._body = body
+
+	async def body(self) -> bytes:
+		return self._body
 
 
 class StubResponse:
@@ -103,6 +113,8 @@ def load_api_module(db_path: Path):
 	os.environ.update(
 		{
 			"ACCOUNT_DB_PATH": str(db_path),
+			"ACCOUNT_AVATAR_DIR": str(db_path.parent / "avatars"),
+			"ACCOUNT_AVATAR_PUBLIC_BASE": "https://api.silentflare.com/account-avatars",
 			"TURNSTILE_SECRET_KEY": "test-turnstile-secret",
 			"TURNSTILE_EXPECTED_HOSTNAMES": "auth.silentflare.com,accounts.silentflare.com",
 			"SESSION_SECRET": "x" * 32,
@@ -125,6 +137,16 @@ def install_network_mock(module) -> None:
 	token_actions = {"register-ok": "register", "login-ok": "login", "comment-ok": "comment"}
 
 	def mock_urlopen(request, timeout=15):
+		if "ipwho.is" in request.full_url:
+			return MockResponse(
+				{
+					"success": True,
+					"country_code": "CN",
+					"country": "China",
+					"region": "Shanghai",
+					"city": "Shanghai",
+				}
+			)
 		if "turnstile" not in request.full_url:
 			return MockResponse(status=200)
 		data = parse_qs((request.data or b"").decode("utf-8"))
@@ -199,6 +221,46 @@ def main() -> None:
 		)
 		if not session["authenticated"] or not session.get("csrf"):
 			raise AssertionError("unified session status did not expose authenticated state and CSRF")
+
+		profile_request = StubRequest(
+			{module.ACCOUNT_SESSION_COOKIE: cookie},
+			{"cf-connecting-ip": "8.8.8.8", "cf-ipcountry": "CN"},
+		)
+		profile = module.accounts_profile_get(profile_request)
+		if profile["user"].get("displayRegion") != "Shanghai, China":
+			raise AssertionError("IP-derived city and country were not forced into the profile")
+		if profile["user"].get("displayRegionCode") != "CN":
+			raise AssertionError("IP-derived country code was not persisted")
+
+		avatar_request = StubRequest(
+			{module.ACCOUNT_SESSION_COOKIE: cookie},
+			{"content-type": "image/png"},
+			b"\x89PNG\r\n\x1a\n" + b"avatar-smoke",
+		)
+		avatar = asyncio.run(
+			module.accounts_profile_avatar_upload(
+				avatar_request,
+				session["csrf"],
+			)
+		)
+		if not avatar["user"]["avatarUrl"].endswith(".png"):
+			raise AssertionError("avatar upload did not persist a managed image URL")
+		if len(list((db_path.parent / "avatars").glob("*.png"))) != 1:
+			raise AssertionError("avatar upload did not create exactly one managed file")
+		patched_profile = module.accounts_profile_patch(
+			module.UnifiedProfilePayload(
+				display_name="Updated Smoke User",
+				avatar_url="https://attacker.example/avatar.png",
+				bio="Updated bio",
+				display_region="Forged Region",
+			),
+			StubRequest({module.ACCOUNT_SESSION_COOKIE: cookie}),
+			session["csrf"],
+		)
+		if patched_profile["user"]["avatarUrl"] != avatar["user"]["avatarUrl"]:
+			raise AssertionError("profile PATCH bypassed managed avatar upload")
+		if patched_profile["user"]["displayRegion"] != "Shanghai, China":
+			raise AssertionError("profile PATCH bypassed IP-derived region")
 
 		module.comment_create(
 			module.CommentCreatePayload(postSlug="smoke-post", content="Smoke comment", turnstileToken="comment-ok"),
