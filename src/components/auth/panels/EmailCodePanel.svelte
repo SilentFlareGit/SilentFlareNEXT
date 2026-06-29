@@ -47,6 +47,7 @@ async function requestCode() {
 		await post("/auth/login/email/request", {
 			email,
 			turnstile_token: turnstileToken,
+			return_url: returnUrl,
 		});
 		phase = "code";
 	} catch (reason) {
@@ -83,7 +84,7 @@ async function verifyCode() {
 <div class="mx-auto w-full max-w-[24rem]">
 	<button type="button" class="mb-6 min-h-11 text-sm text-50 hover:text-[var(--primary)]" onclick={onBack}>← All sign-in methods</button>
 	<h2 class="mb-2 text-3xl font-extrabold text-90">Email code</h2>
-	<p class="mb-7 leading-6 text-50">{phase === "email" ? "We’ll send a short-lived code. No password is required." : `Enter the six-digit code sent to ${email}.`}</p>
+	<p class="mb-7 leading-6 text-50">{phase === "email" ? "We’ll send a short-lived code and a secure verification link. No password is required." : `Enter the six-digit code sent to ${email}, or use the link in that email.`}</p>
 	{#if phase === "email"}
 		<form class="flex flex-col gap-5" onsubmit={(event) => { event.preventDefault(); void requestCode(); }}>
 			<label class="flex flex-col gap-2 font-bold text-75">Email address<input class="auth-input min-h-11" type="email" autocomplete="email" bind:value={email} required /></label>

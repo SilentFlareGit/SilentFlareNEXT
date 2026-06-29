@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import asyncio
+import html
 import importlib.util
 import json
 import os
@@ -10,7 +11,7 @@ import sys
 import tempfile
 import types
 from pathlib import Path
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -135,6 +136,7 @@ def load_api_module(db_path: Path):
 
 def install_network_mock(module) -> None:
 	token_actions = {"register-ok": "register", "login-ok": "login", "comment-ok": "comment"}
+	email_payloads: list[dict[str, object]] = []
 
 	def mock_urlopen(request, timeout=15):
 		if "ipwho.is" in request.full_url:
@@ -147,6 +149,9 @@ def install_network_mock(module) -> None:
 					"city": "Shanghai",
 				}
 			)
+		if "api.resend.com" in request.full_url:
+			email_payloads.append(json.loads((request.data or b"{}").decode("utf-8")))
+			return MockResponse({"id": "smoke-email-id"}, status=200)
 		if "turnstile" not in request.full_url:
 			return MockResponse(status=200)
 		data = parse_qs((request.data or b"").decode("utf-8"))
@@ -154,6 +159,14 @@ def install_network_mock(module) -> None:
 		return MockResponse({"success": bool(action), "hostname": "accounts.silentflare.com", "action": action})
 
 	module.urlopen = mock_urlopen
+	module._smoke_email_payloads = email_payloads
+
+
+def email_link_token(payload: dict[str, object]) -> str:
+	text = html.unescape(str(payload.get("text") or ""))
+	line = next((item for item in text.splitlines() if item.startswith("Verify securely: ")), "")
+	query = parse_qs(urlparse(line.removeprefix("Verify securely: ")).query)
+	return query.get("verify_token", [""])[0]
 
 
 def assert_http_exception(exc: Exception, expected: int, label: str) -> None:
@@ -181,10 +194,26 @@ def main() -> None:
 			module.RegisterEmailRequestPayload(email="smoke@example.com", turnstile_token="register-ok"),
 			StubRequest(),
 		)
+		registration_email = module._smoke_email_payloads[-1]
+		registration_link_token = email_link_token(registration_email)
+		if (
+			"123456" not in str(registration_email.get("html") or "")
+			or "Verify securely" not in str(registration_email.get("html") or "")
+			or not registration_link_token
+		):
+			raise AssertionError("verification email did not include the code and secure link template")
 		verified = module.register_email_verify_code(
 			module.RegisterEmailVerifyPayload(email="smoke@example.com", code="123456"),
 			StubRequest(),
 		)
+		try:
+			module.register_email_verify_link(
+				module.EmailLinkVerifyPayload(token=registration_link_token),
+				StubRequest(),
+			)
+			raise AssertionError("verification link remained valid after code consumption")
+		except Exception as exc:
+			assert_http_exception(exc, 401, "registration link after code consumption")
 		completed = module.register_complete(
 			module.RegisterCompletePayload(
 				reg_token=verified["reg_token"],
@@ -215,6 +244,29 @@ def main() -> None:
 		cookie = login_response.cookies.get(module.ACCOUNT_SESSION_COOKIE)
 		if not cookie or login["return_url"] != "https://accounts.silentflare.com/":
 			raise AssertionError("session cookie or safe return URL validation failed")
+
+		module.unified_login_email_request_code(
+			module.EmailCodeRequestPayload(
+				email="smoke@example.com",
+				turnstile_token="login-ok",
+				return_url="https://blog.silentflare.com/posts/smoke-post/",
+			),
+			StubRequest(),
+		)
+		login_link_token = email_link_token(module._smoke_email_payloads[-1])
+		link_response = StubResponse()
+		link_login = module.unified_login_email_verify_link(
+			module.EmailLinkVerifyPayload(token=login_link_token),
+			StubRequest(),
+			link_response,
+		)
+		if (
+			module.ACCOUNT_SESSION_COOKIE not in link_response.cookies
+			or link_login["return_url"] != "https://blog.silentflare.com/posts/smoke-post/"
+		):
+			raise AssertionError("email verification link did not issue the expected session")
+		if module.verify_email_code("smoke@example.com", "123456", "login"):
+			raise AssertionError("email code remained valid after link consumption")
 
 		session = module.unified_auth_session(
 			StubRequest({module.ACCOUNT_SESSION_COOKIE: cookie}), StubResponse()

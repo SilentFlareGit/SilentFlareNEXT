@@ -109,6 +109,10 @@ TURNSTILE_EXPECTED_HOSTNAMES = os.getenv("TURNSTILE_EXPECTED_HOSTNAMES", "")
 AUTH_EMAIL_API_KEY = os.getenv("AUTH_EMAIL_API_KEY", "")
 AUTH_EMAIL_FROM = os.getenv("AUTH_EMAIL_FROM", "")
 AUTH_EMAIL_API_URL = os.getenv("AUTH_EMAIL_API_URL", "https://api.resend.com/emails")
+AUTH_LOGIN_VERIFY_URL = os.getenv("AUTH_LOGIN_VERIFY_URL", "https://auth.silentflare.com/")
+AUTH_REGISTER_VERIFY_URL = os.getenv(
+	"AUTH_REGISTER_VERIFY_URL", "https://accounts.silentflare.com/"
+)
 AUTH_TOS_VERSION = os.getenv("AUTH_TOS_VERSION", "2026-06-28")
 AUTH_EMAIL_CODE_TTL = int(os.getenv("AUTH_EMAIL_CODE_TTL", "600"))
 AUTH_EMAIL_SEND_COOLDOWN = int(os.getenv("AUTH_EMAIL_SEND_COOLDOWN", "60"))
@@ -258,6 +262,7 @@ class UnifiedLoginPasswordPayload(BaseModel):
 class EmailCodeRequestPayload(BaseModel):
 	email: str = ""
 	turnstile_token: str = ""
+	return_url: str = ""
 
 
 class EmailCodeVerifyPayload(BaseModel):
@@ -279,6 +284,10 @@ class RegisterEmailRequestPayload(BaseModel):
 class RegisterEmailVerifyPayload(BaseModel):
 	email: str = ""
 	code: str = ""
+
+
+class EmailLinkVerifyPayload(BaseModel):
+	token: str = ""
 
 
 class RegisterCompletePayload(BaseModel):
@@ -1172,21 +1181,55 @@ def enforce_auth_rate_limit(
 	)
 
 
-def send_email_code(email: str, code: str, purpose: str) -> None:
+def email_verification_html(subject: str, code: str, verify_url: str) -> str:
+	expires_minutes = max(1, AUTH_EMAIL_CODE_TTL // 60)
+	return f"""<!doctype html>
+<html lang="en">
+<body style="margin:0;background:#edf3f8;color:#182230;font-family:Arial,sans-serif">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#edf3f8;padding:32px 16px">
+<tr><td align="center">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border:1px solid #dbe6ef;border-radius:8px;overflow:hidden">
+<tr><td style="padding:28px 32px 20px;border-bottom:1px solid #e4edf4">
+<table role="presentation" cellpadding="0" cellspacing="0"><tr>
+<td style="width:36px;height:36px;background:#4b9fe8;color:#ffffff;text-align:center;font-weight:800;border-radius:8px">S</td>
+<td style="padding-left:12px;font-size:18px;font-weight:800">SilentFlare</td>
+</tr></table>
+</td></tr>
+<tr><td style="padding:36px 32px 32px">
+<p style="margin:0 0 10px;color:#428ed1;font-size:12px;font-weight:800;text-transform:uppercase">Secure verification</p>
+<h1 style="margin:0 0 14px;font-size:28px;line-height:1.2;font-weight:800">{subject}</h1>
+<p style="margin:0 0 24px;color:#607184;font-size:15px;line-height:1.7">Use either the six-digit code or the secure verification link below. Both are one-time and expire in {expires_minutes} minutes.</p>
+<div style="margin:0 0 24px;padding:18px;text-align:center;background:#f3f8fc;border:1px solid #d9e7f2;border-radius:8px">
+<p style="margin:0 0 8px;color:#74869a;font-size:11px;font-weight:800;text-transform:uppercase">Verification code</p>
+<p style="margin:0;font-family:'Courier New',monospace;font-size:32px;font-weight:800;color:#176db8">{code}</p>
+</div>
+<table role="presentation" cellpadding="0" cellspacing="0" width="100%"><tr><td align="center">
+<a href="{verify_url}" style="display:inline-block;padding:14px 22px;background:#176db8;color:#ffffff;text-decoration:none;font-size:15px;font-weight:800;border-radius:8px">Verify securely</a>
+</td></tr></table>
+<p style="margin:26px 0 0;padding-top:22px;border-top:1px solid #e4edf4;color:#74869a;font-size:13px;line-height:1.6">If you did not request this email, you can safely ignore it. Never share this code or forward this email.</p>
+</td></tr>
+</table>
+<p style="margin:18px 0 0;color:#8291a1;font-size:12px">SilentFlare Identity · auth.silentflare.com</p>
+</td></tr></table>
+</body>
+</html>"""
+
+
+def send_email_code(email: str, code: str, purpose: str, verify_url: str) -> None:
 	if not AUTH_EMAIL_API_KEY or not AUTH_EMAIL_FROM:
 		raise HTTPException(status_code=503, detail="Email delivery is not configured")
 	subject = "Your SilentFlare sign-in code" if purpose == "login" else "Verify your SilentFlare email"
+	expires_minutes = max(1, AUTH_EMAIL_CODE_TTL // 60)
 	payload = json.dumps(
 		{
 			"from": AUTH_EMAIL_FROM,
 			"to": [email],
 			"subject": subject,
-			"html": (
-				"<div style='font-family:ui-sans-serif,sans-serif;color:#172033'>"
-				f"<h2>{subject}</h2><p>Your verification code is "
-				f"<strong style='font-size:24px;letter-spacing:4px'>{code}</strong>.</p>"
-				f"<p>It expires in {AUTH_EMAIL_CODE_TTL // 60} minutes. If you did not request it, ignore this email.</p>"
-				"</div>"
+			"html": email_verification_html(subject, code, verify_url),
+			"text": (
+				f"{subject}\n\nVerification code: {code}\n\n"
+				f"Verify securely: {verify_url}\n\n"
+				f"This code and link expire in {expires_minutes} minutes."
 			),
 		}
 	).encode("utf-8")
@@ -1204,7 +1247,14 @@ def send_email_code(email: str, code: str, purpose: str) -> None:
 		raise HTTPException(status_code=503, detail="Email delivery failed") from exc
 
 
-def create_email_verification(email: str, purpose: str, request: Request) -> None:
+def create_email_verification(
+	email: str,
+	purpose: str,
+	request: Request,
+	*,
+	user_id: str | None = None,
+	return_url: str = "",
+) -> None:
 	clean_email = normalize_email(email)
 	enforce_auth_rate_limit("email-ip", client_key(request), AUTH_EMAIL_SEND_LIMIT * 2, 3600)
 	enforce_auth_rate_limit("email-address", clean_email, AUTH_EMAIL_SEND_LIMIT, 3600)
@@ -1218,6 +1268,18 @@ def create_email_verification(email: str, purpose: str, request: Request) -> Non
 			raise HTTPException(status_code=429, detail="Wait before requesting another code")
 	code = f"{secrets.randbelow(1000000):06d}"
 	now = utc_now()
+	verification_id = str(uuid.uuid4())
+	link_token = create_auth_flow(
+		f"email-link-{purpose}",
+		user_id=user_id,
+		email=clean_email,
+		return_url=return_url,
+		metadata={"verification_id": verification_id},
+		ttl_seconds=AUTH_EMAIL_CODE_TTL,
+	)
+	verify_base = AUTH_LOGIN_VERIFY_URL if purpose == "login" else AUTH_REGISTER_VERIFY_URL
+	separator = "&" if "?" in verify_base else "?"
+	verify_url = f"{verify_base}{separator}{urlencode({'verify_token': link_token})}"
 	d1_query(
 		"""
 		INSERT INTO email_verifications
@@ -1225,7 +1287,7 @@ def create_email_verification(email: str, purpose: str, request: Request) -> Non
 		VALUES (?, ?, '', ?, ?, ?, ?, 0, ?)
 		""",
 		[
-			str(uuid.uuid4()),
+			verification_id,
 			clean_email,
 			auth_secret_hash(f"code:{purpose}:{clean_email}:{code}"),
 			purpose,
@@ -1235,11 +1297,15 @@ def create_email_verification(email: str, purpose: str, request: Request) -> Non
 		],
 	)
 	try:
-		send_email_code(clean_email, code, purpose)
+		send_email_code(clean_email, code, purpose, verify_url)
 	except Exception:
 		d1_query(
 			"UPDATE email_verifications SET used_at = ? WHERE email = ? AND purpose = ? AND created_at = ?",
 			[utc_now(), clean_email, purpose, now],
+		)
+		d1_query(
+			"UPDATE auth_flows SET consumed_at = ? WHERE token_hash = ?",
+			[utc_now(), auth_secret_hash(f"flow:{link_token}")],
 		)
 		raise
 
@@ -1271,6 +1337,7 @@ def create_auth_flow(
 	email: str | None = None,
 	return_url: str = "",
 	metadata: dict[str, Any] | None = None,
+	ttl_seconds: int = AUTH_FLOW_TTL,
 ) -> str:
 	token = secrets.token_urlsafe(32)
 	d1_query(
@@ -1288,7 +1355,7 @@ def create_auth_flow(
 			sanitize_return_url(return_url),
 			json.dumps(metadata or {}, separators=(",", ":")),
 			utc_now(),
-			future_iso(AUTH_FLOW_TTL),
+			future_iso(ttl_seconds),
 		],
 	)
 	return token
@@ -1310,6 +1377,54 @@ def get_auth_flow(token: str, flow_type: str) -> dict[str, Any]:
 
 def consume_auth_flow(flow_id: str) -> None:
 	d1_query("UPDATE auth_flows SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL", [utc_now(), flow_id])
+
+
+def consume_email_link(token: str, purpose: str) -> dict[str, Any]:
+	if not token or len(token) > 256:
+		raise HTTPException(status_code=401, detail="Verification link expired or invalid")
+	ensure_account_db()
+	now = utc_now()
+	with sqlite3.connect(ACCOUNT_DB_PATH) as connection:
+		connection.row_factory = sqlite3.Row
+		connection.execute("PRAGMA foreign_keys = ON")
+		connection.execute("BEGIN IMMEDIATE")
+		flow = connection.execute(
+			"""
+			SELECT * FROM auth_flows
+			WHERE token_hash = ? AND flow_type = ? AND expires_at > ? AND consumed_at IS NULL
+			LIMIT 1
+			""",
+			[auth_secret_hash(f"flow:{token}"), f"email-link-{purpose}", now],
+		).fetchone()
+		if not flow:
+			raise HTTPException(status_code=401, detail="Verification link expired or invalid")
+		try:
+			metadata = json.loads(str(flow["metadata_json"] or "{}"))
+		except json.JSONDecodeError as exc:
+			raise HTTPException(status_code=401, detail="Verification link expired or invalid") from exc
+		verification_id = str(metadata.get("verification_id") or "")
+		verification = connection.execute(
+			"""
+			SELECT id FROM email_verifications
+			WHERE id = ? AND email = ? AND purpose = ? AND expires_at > ? AND used_at IS NULL
+			LIMIT 1
+			""",
+			[verification_id, str(flow["email"] or ""), purpose, now],
+		).fetchone()
+		if not verification:
+			raise HTTPException(status_code=401, detail="Verification link expired or invalid")
+		verification_update = connection.execute(
+			"UPDATE email_verifications SET used_at = ? WHERE id = ? AND used_at IS NULL",
+			[now, verification_id],
+		)
+		flow_update = connection.execute(
+			"UPDATE auth_flows SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL",
+			[now, str(flow["id"])],
+		)
+		if verification_update.rowcount != 1 or flow_update.rowcount != 1:
+			raise HTTPException(status_code=401, detail="Verification link expired or invalid")
+		connection.commit()
+		return dict(flow)
 
 
 def seal_totp_secret(secret: str) -> str:
@@ -3566,7 +3681,13 @@ def unified_login_email_request_code(
 	email = normalize_email(payload.email)
 	rows = d1_query("SELECT id FROM users WHERE email = ? AND disabled_at IS NULL LIMIT 1", [email])
 	if rows:
-		create_email_verification(email, "login", request)
+		create_email_verification(
+			email,
+			"login",
+			request,
+			user_id=str(rows[0]["id"]),
+			return_url=getattr(payload, "return_url", ""),
+		)
 	return {"ok": True, "message": "If the account exists, a code has been sent."}
 
 
@@ -3608,6 +3729,42 @@ def unified_login_email_verify_code(
 			"return_url": return_url,
 		}
 	csrf = create_account_session(response, request, str(row["id"]))
+	return {
+		"ok": True,
+		"requires_2fa": False,
+		"user": account_user_payload(row),
+		"csrf": csrf,
+		"return_url": return_url,
+	}
+
+
+@app.post("/auth/login/email/verify-link")
+def unified_login_email_verify_link(
+	payload: EmailLinkVerifyPayload,
+	request: Request,
+	response: Response,
+) -> dict[str, Any]:
+	if not account_auth_configured():
+		raise HTTPException(status_code=503, detail="Account API is not configured")
+	enforce_auth_rate_limit("email-link-verify", client_key(request), 20, 900)
+	flow = consume_email_link(payload.token, "login")
+	user_id = str(flow.get("user_id") or "")
+	row = lookup_user_by_email_or_username(str(flow.get("email") or ""))
+	if not row or str(row.get("id") or "") != user_id or row.get("disabled_at"):
+		raise HTTPException(status_code=404, detail="Account not found")
+	LOGIN_FAILURES.pop(client_key(request), None)
+	return_url = sanitize_return_url(str(flow.get("return_url") or ""))
+	if row.get("totp_enabled") and row.get("totp_secret"):
+		pending_id = create_auth_flow(
+			"pending-login", user_id=user_id, return_url=return_url
+		)
+		return {
+			"ok": True,
+			"requires_2fa": True,
+			"pending_id": pending_id,
+			"return_url": return_url,
+		}
+	csrf = create_account_session(response, request, user_id)
 	return {
 		"ok": True,
 		"requires_2fa": False,
@@ -3713,6 +3870,28 @@ def register_email_verify_code(
 	reg_token = create_auth_flow("registration", email=email)
 	LOGIN_FAILURES.pop(client_key(request), None)
 	return {"ok": True, "reg_token": reg_token, "tos_version": AUTH_TOS_VERSION}
+
+
+@app.post("/accounts/register/email/verify-link")
+def register_email_verify_link(
+	payload: EmailLinkVerifyPayload,
+	request: Request,
+) -> dict[str, Any]:
+	if not account_auth_configured():
+		raise HTTPException(status_code=503, detail="Account API is not configured")
+	enforce_auth_rate_limit("register-link-verify", client_key(request), 20, 900)
+	flow = consume_email_link(payload.token, "register")
+	email = normalize_email(str(flow.get("email") or ""))
+	if d1_query("SELECT id FROM users WHERE email = ? LIMIT 1", [email]):
+		raise HTTPException(status_code=409, detail="An account with this email already exists")
+	reg_token = create_auth_flow("registration", email=email)
+	LOGIN_FAILURES.pop(client_key(request), None)
+	return {
+		"ok": True,
+		"email": email,
+		"reg_token": reg_token,
+		"tos_version": AUTH_TOS_VERSION,
+	}
 
 
 @app.post("/accounts/register/complete")

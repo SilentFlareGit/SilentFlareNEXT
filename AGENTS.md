@@ -150,7 +150,7 @@ Current account behavior:
 - Users with 2FA enter a database-backed pending login. The API signs the all-site session only after TOTP succeeds.
 - Account sessions use an opaque random token in an `HttpOnly`, `Secure`, `SameSite=Lax`, `Domain=.silentflare.com` cookie. The database stores only an HMAC digest. Do not store account tokens in web storage.
 - Session-backed writes require the derived CSRF token from `GET /auth/session`. Logout deletes the database session and clears the domain cookie.
-- Verification codes expire, are one-time, are stored only as keyed hashes, and have send cooldown, hourly limits, and verification-attempt limits. Never log or return a real code.
+- Verification emails contain both a six-digit code and an opaque one-time verification link. Both consume the same verification record, expire together, and cannot be reused. Codes and link tokens are stored only as keyed hashes; never log or return either secret.
 - Passwords use PBKDF2-SHA256 with random salts and the iteration count embedded in the stored hash. TOTP secrets are encrypted and authenticated at rest with a key derived from `SESSION_SECRET`.
 - TOS acceptance is versioned and written to `tos_acceptances` with timestamp plus hashed request metadata.
 - The Accounts profile avatar is uploaded directly to FastAPI as PNG, JPEG, or WebP, limited to 2 MB. The browser must not create a data URL session or write a filesystem/database path itself.
@@ -173,12 +173,12 @@ Important account FastAPI endpoints:
 - `GET /auth/session`: public-user session status, profile, CSRF token, runtime flags, and current TOS version.
 - `GET /auth/return-url?return_url=...`: server-side safe return URL normalization.
 - `POST /auth/login/password`: email-or-username password login with Turnstile; returns pending 2FA instead of a session when required.
-- `POST /auth/login/email/request` and `POST /auth/login/email/verify`: rate-limited email-code login.
+- `POST /auth/login/email/request`, `POST /auth/login/email/verify`, and `POST /auth/login/email/verify-link`: rate-limited email login by code or opaque one-time link.
 - `POST /auth/2fa/verify`: consume a pending login after TOTP and then issue the domain session.
 - `POST /auth/session/refresh`: rotate the opaque session and CSRF token.
 - `POST /auth/logout`: destroy either the public account session or the separate bot/admin session according to the presented cookie and CSRF token.
 - `GET /auth/oauth/{provider}/start` and `GET /auth/oauth/{provider}/callback`: reserved Google, GitHub, and Telegram routes. They must not issue sessions until a provider is implemented.
-- `POST /accounts/register/email/request`, `POST /accounts/register/email/verify`, and `POST /accounts/register/complete`: verified email-first registration with optional password and mandatory current TOS acceptance.
+- `POST /accounts/register/email/request`, `POST /accounts/register/email/verify`, `POST /accounts/register/email/verify-link`, and `POST /accounts/register/complete`: verified email-first registration by code or opaque one-time link, with optional password and mandatory current TOS acceptance.
 - `POST /accounts/register/2fa/start`, `POST /accounts/register/2fa/verify`, and `POST /accounts/register/2fa/skip`: registration onboarding security choice; no session is issued.
 - `GET/PATCH /accounts/profile`: read/update authenticated profile. PATCH requires CSRF.
 - `POST /accounts/profile/avatar`: upload a CSRF-protected raw PNG/JPEG/WebP avatar, maximum 2 MB.
@@ -280,6 +280,8 @@ IP_GEO_CACHE_TTL=86400
 AUTH_EMAIL_API_KEY=<resend-compatible-server-key>
 AUTH_EMAIL_FROM=verify@auth.silentflare.com
 AUTH_EMAIL_API_URL=https://api.resend.com/emails
+AUTH_LOGIN_VERIFY_URL=https://auth.silentflare.com/
+AUTH_REGISTER_VERIFY_URL=https://accounts.silentflare.com/
 AUTH_TOS_VERSION=2026-06-28
 AUTH_EMAIL_CODE_TTL=600
 AUTH_EMAIL_SEND_COOLDOWN=60

@@ -51,6 +51,39 @@ function finishLogin(user: AuthUser, destination?: string) {
 async function bootstrap() {
 	const params = new URLSearchParams(window.location.search);
 	await resolveReturnUrl(params.get("return_url") ?? "");
+	const verifyToken = params.get("verify_token") ?? "";
+	if (verifyToken) {
+		try {
+			const result = await apiFetch<{
+				requires_2fa?: boolean;
+				pending_id?: string;
+				user?: AuthUser;
+				return_url?: string;
+			}>("/auth/login/email/verify-link", {
+				method: "POST",
+				body: JSON.stringify({ token: verifyToken }),
+			});
+			window.history.replaceState({}, "", window.location.pathname);
+			if (result.requires_2fa && result.pending_id) {
+				pendingId = result.pending_id;
+				step = "2fa";
+				return;
+			}
+			if (result.user) {
+				finishLogin(result.user, result.return_url);
+				return;
+			}
+			throw new Error("Verification link could not be completed");
+		} catch (reason) {
+			window.history.replaceState({}, "", window.location.pathname);
+			error =
+				reason instanceof Error
+					? reason.message
+					: "Verification link could not be completed";
+			step = "method";
+			return;
+		}
+	}
 	try {
 		const session = await apiFetch<{ authenticated: boolean }>("/auth/session");
 		if (session.authenticated) {

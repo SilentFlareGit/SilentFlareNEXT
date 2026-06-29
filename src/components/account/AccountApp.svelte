@@ -87,6 +87,8 @@ function clearMessages() {
 }
 
 async function loadSession() {
+	const params = new URLSearchParams(window.location.search);
+	const verifyToken = params.get("verify_token") ?? "";
 	try {
 		const result = await apiFetch<{
 			authenticated: boolean;
@@ -103,6 +105,20 @@ async function loadSession() {
 				"/accounts/profile",
 			);
 			applyUser(profile.user);
+		} else if (verifyToken) {
+			const verified = await apiFetch<{
+				email: string;
+				reg_token: string;
+				tos_version: string;
+			}>("/accounts/register/email/verify-link", {
+				method: "POST",
+				body: JSON.stringify({ token: verifyToken }),
+			});
+			email = verified.email;
+			regToken = verified.reg_token;
+			tosVersion = verified.tos_version;
+			step = "details";
+			notice = "Email verified. Complete your account details.";
 		}
 	} catch (reason) {
 		error =
@@ -110,6 +126,8 @@ async function loadSession() {
 				? reason.message
 				: "Account service is unavailable";
 	} finally {
+		if (verifyToken)
+			window.history.replaceState({}, "", window.location.pathname);
 		loading = false;
 	}
 }
@@ -485,7 +503,7 @@ onMount(() => void loadSession());
 					{#if !emailConfigured}<p class="message error"><Icon icon="material-symbols:mail-lock-outline-rounded" />Email delivery is not configured on the API yet.</p>{/if}
 					<form class="form-stack" onsubmit={(event) => { event.preventDefault(); void requestCode(); }}><label>Email address<input class="auth-input" type="email" autocomplete="email" bind:value={email} required /></label><TurnstileWidget action="register" resetKey={turnstileReset} onTokenChange={(token) => (turnstileToken = token)} /><button class="command primary" disabled={submitting || !emailConfigured}><Icon icon="material-symbols:send-outline-rounded" />{submitting ? "Sending…" : "Send verification code"}</button></form>
 				{:else if step === "code"}
-					<p class="eyebrow">Step 1 · Verify email</p><h2>Check your inbox</h2><p class="muted">The code is short-lived and can only be used once.</p>
+					<p class="eyebrow">Step 1 · Verify email</p><h2>Check your inbox</h2><p class="muted">Enter the one-time code below, or click the secure verification link in the email.</p>
 					<form class="form-stack" onsubmit={(event) => { event.preventDefault(); void verifyEmail(); }}><label>Six-digit code<input class="auth-input code-input" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" bind:value={code} required /></label><button class="command primary" disabled={submitting}><Icon icon="material-symbols:mark-email-read-outline-rounded" />Verify email</button></form>
 				{:else if step === "details"}
 					<p class="eyebrow">Step 2 · Account details</p><h2>Choose your identity</h2>
@@ -504,6 +522,7 @@ onMount(() => void loadSession());
 					<p class="eyebrow">Step 3 · Authenticator</p><h2>Connect your app</h2><div class="totp-box"><p>Authenticator secret</p><code>{totpSecret}</code><a href={totpUri}><Icon icon="material-symbols:open-in-new-rounded" />Open authenticator app</a><input class="auth-input code-input" inputmode="numeric" maxlength="6" bind:value={totpCode} placeholder="000000" /><button class="command primary" onclick={() => void verifyRegistration2FA()} disabled={submitting}><Icon icon="material-symbols:verified-user-outline-rounded" />Verify and finish</button></div>
 				{/if}
 				{#if error}<p class="message error"><Icon icon="material-symbols:error-outline-rounded" />{error}</p>{/if}
+				{#if notice}<p class="message notice"><Icon icon="material-symbols:check-circle-outline-rounded" />{notice}</p>{/if}
 			</section>
 		</main>
 	{/if}
