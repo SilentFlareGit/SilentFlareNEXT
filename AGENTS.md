@@ -173,6 +173,7 @@ Current admin behavior:
 - Admin user records include profile, security-state flags, registration/last-seen timestamps, admin-only registration and last-seen IP audit values, active-session counts, and comment counts. Historical rows show unavailable values until a new login or comment supplies them.
 - Raw audit IP values are restricted to the owner-only Admin API. Public account/session/comment responses must never expose them, and Admin responses must never include password hashes, salts, TOTP secrets, session hashes, cookies, or verification secrets.
 - `SilentFlare Admin` may intentionally share the DB Backup Telegram bot credentials. Webhook approval must compare the credential set rather than reject a challenge merely because its logical `bot_id` differs.
+- Telegram approval polling must be serialized. Once an approved response is received, stop the interval before loading Admin data so an overlapping request cannot consume the already-finished challenge and replace a successful login with `Login request expired`.
 
 Important account FastAPI endpoints:
 

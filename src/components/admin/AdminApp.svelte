@@ -68,6 +68,7 @@ let challengeExpiresAt = $state<Date | null>(null);
 let pollTimer: number | null = null;
 let countdownTimer: number | null = null;
 let sendingTelegram = $state(false);
+let checkingTelegram = false;
 let loggingIn = $state(false);
 let status = $state<AdminStatus | null>(null);
 let activeTab = $state<"users" | "comments">("users");
@@ -219,16 +220,22 @@ async function startTelegramLogin() {
 	}
 }
 async function checkTelegramLogin() {
-	if (!challengeId) return;
+	if (!challengeId || checkingTelegram) return;
+	checkingTelegram = true;
 	try {
 		const result = await api<{ status: string; csrf?: string }>(
 			`/auth/telegram/status/${challengeId}?bot_id=${encodeURIComponent(ADMIN_BOT_ID)}`,
 		);
-		if (result.status === "approved") await enterAdmin(result.csrf ?? "");
+		if (result.status === "approved") {
+			stopPolling();
+			await enterAdmin(result.csrf ?? "");
+		}
 	} catch (error) {
 		stopPolling();
 		loginMessage = error instanceof Error ? error.message : "Approval failed.";
 		loginTone = "error";
+	} finally {
+		checkingTelegram = false;
 	}
 }
 async function loginWithTotp() {
@@ -377,10 +384,17 @@ onDestroy(stopPolling);
 	<section class="login-wrap">
 		<div class="login-panel">
 			<a class="wordmark" href="https://blog.silentflare.com/"><span>S</span> SilentFlare</a>
-			<div class="login-copy"><p class="eyebrow">OWNER CONSOLE</p><h1>Admin access</h1><p>Manage public accounts and conversations. Content publishing remains in Ghost.</p></div>
+			<div class="login-copy">
+				<div><p class="eyebrow">OWNER CONSOLE</p><h1>Keep the community in focus.</h1><p>Review members, understand account activity, and moderate every public conversation from one private workspace.</p></div>
+				<div class="login-features">
+					<div><Icon icon="material-symbols:manage-accounts-outline-rounded"/><span><strong>Account directory</strong><small>Profiles, security, sessions and network audit</small></span></div>
+					<div><Icon icon="material-symbols:forum-outline-rounded"/><span><strong>Comment moderation</strong><small>Review context and act without leaving the console</small></span></div>
+				</div>
+			</div>
 			<div class="login-form">
 				<div class="mode-tabs"><button class:active={loginMode === "telegram"} onclick={() => loginMode = "telegram"}>Telegram</button><button class:active={loginMode === "totp"} disabled={!totpAvailable} onclick={() => loginMode = "totp"}>Authenticator</button></div>
-				{#if loginMode === "telegram"}<Icon icon="material-symbols:verified-user-outline-rounded" class="login-icon"/><h2>Approve with SilentflareBot</h2><p>Only the configured Owner account can approve this request.</p><button class="primary" disabled={!telegramAvailable || sendingTelegram} onclick={startTelegramLogin}><Icon icon="material-symbols:send-rounded"/>{sendingTelegram ? "Waiting for approval" : "Send approval request"}</button>
+				<p class="eyebrow">SECURE SIGN IN</p>
+				{#if loginMode === "telegram"}<div class="login-icon-wrap"><Icon icon="material-symbols:verified-user-outline-rounded" class="login-icon"/></div><h2>Approve with Telegram</h2><p>We will send a one-time approval request to the configured SilentFlare Owner account.</p><button class="primary" disabled={!telegramAvailable || sendingTelegram} onclick={startTelegramLogin}><Icon icon="material-symbols:send-rounded"/>{sendingTelegram ? "Waiting for approval" : "Send approval request"}</button>
 				{:else}<Icon icon="material-symbols:password-rounded" class="login-icon"/><h2>Authenticator code</h2><p>Enter the six-digit fallback code.</p><input class="field" inputmode="numeric" maxlength="6" bind:value={loginCode} placeholder="000000"/><button class="primary" disabled={!totpAvailable || loggingIn} onclick={loginWithTotp}>Verify code</button>{/if}
 				<div class:error={loginTone === "error"} class:warning={loginTone === "warning"} class="notice">{loginMessage}</div>
 			</div>
@@ -409,6 +423,25 @@ onDestroy(stopPolling);
 <style>
 :global(body){margin:0;background:#edf3f8;color:#182230}.admin-shell{min-height:100vh;font-family:Roboto,Arial,sans-serif}.wordmark{display:flex;align-items:center;gap:.6rem;color:#182230;font-weight:700;text-decoration:none}.wordmark span{display:grid;width:2rem;height:2rem;place-items:center;border-radius:6px;background:#55a7ed;color:white}.wordmark b{color:#718096;font-weight:500}.login-wrap{display:grid;min-height:100vh;place-items:center;padding:1.5rem}.login-panel{display:grid;width:min(58rem,100%);overflow:hidden;border:1px solid #dce5ed;border-radius:8px;background:white;box-shadow:0 18px 50px rgba(33,56,79,.12);grid-template-columns:1fr 24rem}.login-panel>.wordmark{grid-column:1/-1;padding:1.5rem 2rem;border-bottom:1px solid #e5ebf0}.login-copy{padding:4rem 3rem;background:#f7fafc}.login-copy h1,.page-head h1{margin:.35rem 0;font-size:2rem;letter-spacing:0}.login-copy p{color:#607080;line-height:1.7}.eyebrow{margin:0;color:#438fd0;font-size:.72rem;font-weight:800;letter-spacing:0}.login-form{padding:3rem 2rem}.login-icon{font-size:2rem;color:#4b9fe8}.login-form h2{margin:.8rem 0 .4rem;font-size:1.25rem}.login-form>p{color:#607080;line-height:1.6}.mode-tabs{display:grid;grid-template-columns:1fr 1fr;margin-bottom:2rem;padding:3px;border-radius:7px;background:#edf3f8}.mode-tabs button{min-height:2.5rem;border:0;border-radius:5px;background:transparent}.mode-tabs button.active{background:white;box-shadow:0 1px 4px #ccd7e0}.primary,.secondary,.danger-button{display:inline-flex;min-height:2.7rem;align-items:center;justify-content:center;gap:.5rem;border:1px solid transparent;border-radius:6px;padding:0 1rem;font-weight:700;cursor:pointer}.primary{width:100%;margin-top:1rem;background:#4b9fe8;color:white}.secondary{border-color:#cfdbe5;background:white;color:#304356}.danger-button{background:#fff1f1;color:#b63b3b;border-color:#f1caca}.field{box-sizing:border-box;width:100%;min-height:2.75rem;border:1px solid #cfdbe5;border-radius:6px;padding:0 .8rem;background:white}.notice{margin-top:1rem;padding:.75rem;border:1px solid #d8e2ea;border-radius:6px;background:#f7fafc;color:#526575;font-size:.88rem}.notice.error{border-color:#f0caca;background:#fff1f1;color:#a73333}.notice.warning{border-color:#eed9a8;background:#fff9e9;color:#855d13}.notice.success{border-color:#bde3cf;background:#effaf4;color:#237047}header{display:flex;height:4.25rem;align-items:center;justify-content:space-between;border-bottom:1px solid #dce5ed;background:white;padding:0 2rem}.header-actions{display:flex;gap:.5rem}.icon-button{display:inline-grid;width:2.5rem;height:2.5rem;place-items:center;border:1px solid #d6e0e8;border-radius:6px;background:white;color:#526575;font-size:1.25rem;cursor:pointer}.workspace{display:grid;min-height:calc(100vh - 4.25rem);grid-template-columns:14rem 1fr}aside{border-right:1px solid #dce5ed;background:#f7fafc;padding:1.5rem 1rem}.nav-label{padding:0 .75rem;color:#8391a0;font-size:.7rem;font-weight:800;text-transform:uppercase}.workspace aside button{display:flex;width:100%;min-height:2.8rem;align-items:center;gap:.65rem;border:0;border-radius:6px;padding:0 .75rem;background:transparent;color:#526575;font-weight:700;cursor:pointer}.workspace aside button.active{background:#e5f2fd;color:#287dbf}.workspace aside button span{margin-left:auto;font-size:.78rem}.storage{display:flex;gap:.65rem;margin-top:2rem;padding:1rem .75rem;border-top:1px solid #dce5ed}.storage i{width:.55rem;height:.55rem;margin-top:.25rem;border-radius:50%;background:#d95c5c}.storage i.ok{background:#40a66b}.storage strong,.storage small{display:block}.storage strong{font-size:.8rem}.storage small{margin-top:.25rem;color:#8391a0;font-size:.72rem}.content{min-width:0;padding:2rem}.page-head{display:flex;align-items:end;justify-content:space-between;gap:1rem;margin-bottom:1.5rem}.search{display:flex;width:min(22rem,100%);height:2.75rem;align-items:center;gap:.5rem;border:1px solid #d4dfe8;border-radius:6px;background:white;padding:0 .8rem;color:#8391a0}.search input{width:100%;border:0;outline:0}.metrics{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid #dce5ed;border-radius:8px;background:white;margin-bottom:1rem}.metrics div{padding:1rem 1.25rem;border-right:1px solid #e3eaf0}.metrics div:last-child{border:0}.metrics span,.metrics strong{display:block}.metrics span{color:#718096;font-size:.78rem}.metrics strong{margin-top:.35rem;font-size:1.45rem}.table-wrap{overflow:auto;border:1px solid #dce5ed;border-radius:8px;background:white}table{width:100%;border-collapse:collapse;white-space:nowrap}th,td{padding:.9rem 1rem;border-bottom:1px solid #e7edf2;text-align:left;font-size:.82rem}th{background:#f8fafc;color:#718096;font-size:.7rem;text-transform:uppercase}td>small,td>strong{display:block}td>small{margin-top:.25rem;color:#7a8997}.user-cell{display:flex;align-items:center;gap:.7rem;border:0;background:transparent;text-align:left;cursor:pointer}.user-cell>span,.user-cell img{width:2.3rem;height:2.3rem;border-radius:50%;object-fit:cover}.user-cell>span{display:grid;place-items:center;background:#dcedfb;color:#287dbf;font-weight:800}.user-cell strong,.user-cell small{display:block}.user-cell small{margin-top:.15rem;color:#718096}.badges{display:flex;gap:.3rem}.badges i{border-radius:4px;background:#e9f4fd;color:#287dbf;padding:.2rem .4rem;font-size:.66rem;font-style:normal}.badges i.danger{background:#fff0f0;color:#b53b3b}.filter{display:flex;max-width:34rem;gap:.6rem;margin-bottom:1rem}.comment-list{display:grid;gap:.75rem}.comment-list article{border:1px solid #dce5ed;border-radius:8px;background:white;padding:1.15rem}.comment-meta{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem}.comment-meta span,.comment-meta time{color:#718096;font-size:.78rem}.comment-meta i{border-radius:4px;background:#edf5fb;color:#287dbf;padding:.2rem .4rem;font-size:.7rem;font-style:normal}.comment-list article>p{line-height:1.65;white-space:pre-wrap}.comment-list footer{display:flex;align-items:center;gap:1rem;border-top:1px solid #e7edf2;padding-top:.8rem;color:#718096;font-size:.78rem}.comment-list footer span{display:flex;align-items:center;gap:.3rem}.comment-list footer button{margin-left:auto}.drawer-backdrop{position:fixed;inset:0;background:rgba(25,36,48,.35)}.drawer{position:fixed;z-index:2;top:0;right:0;box-sizing:border-box;width:min(34rem,100%);height:100vh;overflow:auto;border:0;border-left:1px solid #dce5ed;background:white;padding:0}.drawer-head{position:sticky;top:0;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #e1e8ee;background:white;padding:1.25rem 1.5rem}.drawer-head h2{margin:.3rem 0 0}.drawer-body{display:grid;gap:1.5rem;padding:1.5rem}.drawer-body section{border-bottom:1px solid #e5ebf0;padding-bottom:1.2rem}.drawer-body h3{font-size:.9rem}dl{margin:0}dl div{display:grid;grid-template-columns:8rem 1fr;gap:1rem;padding:.55rem 0}dt{color:#718096;font-size:.78rem}dd{margin:0;font-size:.82rem}.break{overflow-wrap:anywhere}.mini-comment{margin-top:.7rem;border-left:3px solid #b7d9f5;padding:.2rem 0 .2rem .8rem}.mini-comment p{margin:.3rem 0;font-size:.82rem}.mini-comment small{color:#718096}.drawer-actions{position:sticky;bottom:0;display:flex;justify-content:flex-end;gap:.6rem;border-top:1px solid #e1e8ee;background:white;padding:1rem 1.5rem}
 @media(max-width:800px){.login-panel{grid-template-columns:1fr}.login-panel>.wordmark{padding:1.2rem}.login-copy{padding:2rem 1.5rem}.login-form{padding:2rem 1.5rem}.workspace{grid-template-columns:1fr}.workspace>aside{display:flex;position:sticky;top:0;z-index:1;border-right:0;border-bottom:1px solid #dce5ed;padding:.5rem}.workspace>aside .nav-label,.storage{display:none}.workspace>aside button{justify-content:center}.content{padding:1rem}.page-head{align-items:stretch;flex-direction:column}.metrics{grid-template-columns:1fr 1fr}.metrics div:last-child{grid-column:1/-1;border-top:1px solid #e3eaf0}.comment-list footer{align-items:flex-start;flex-direction:column}.comment-list footer button{margin-left:0;width:100%}header{padding:0 1rem}}
+.admin-shell,.login-wrap{background:#edf3f8;color:#182230}
+.login-wrap{box-sizing:border-box;padding:clamp(1rem,4vw,4rem)}
+.login-panel{width:min(70rem,100%);min-height:min(44rem,calc(100vh - 8rem));grid-template-columns:minmax(0,1.08fr) minmax(25rem,.92fr);box-shadow:0 24px 70px rgba(47,72,96,.14)}
+.login-panel>.wordmark{padding:1.25rem 2.25rem}
+.login-copy{display:flex;flex-direction:column;justify-content:space-between;padding:clamp(2.5rem,5vw,5.5rem);background:#e8f3fc}
+.login-copy h1{max-width:30rem;margin:.7rem 0 1.1rem;font-size:clamp(2.35rem,4vw,4.2rem);line-height:1.05}
+.login-copy>div>p:last-child{max-width:32rem;color:#536b7f;font-size:1rem;line-height:1.75}
+.login-features{display:grid;gap:1rem;margin-top:3rem}
+.login-features>div{display:flex;align-items:center;gap:.9rem;border-top:1px solid #c8deef;padding-top:1rem;color:#347fb8}
+.login-features svg{flex:0 0 auto;font-size:1.55rem}
+.login-features span,.login-features strong,.login-features small{display:block}
+.login-features strong{color:#263c4e;font-size:.86rem}
+.login-features small{margin-top:.25rem;color:#667c8e;font-size:.76rem}
+.login-form{display:flex;flex-direction:column;justify-content:center;padding:clamp(2rem,4vw,4rem)}
+.login-form .mode-tabs{order:-1;margin-bottom:2.5rem}
+.login-icon-wrap{display:grid;width:3.25rem;height:3.25rem;margin-top:1rem;place-items:center;border-radius:8px;background:#e7f3fd}
+.login-icon{font-size:1.7rem}
+.login-form h2{font-size:1.45rem}
+.login-form .primary{min-height:3rem}
 .workspace,.content{background:#edf3f8}
-@media(max-width:800px){.workspace>aside button{flex:1;width:auto;min-height:3.5rem}}
+@media(max-width:800px){.login-wrap{align-items:start;padding:0}.login-panel{min-height:100vh;border:0;border-radius:0;grid-template-columns:1fr}.login-panel>.wordmark{padding:1rem 1.25rem}.login-copy{padding:2.25rem 1.5rem}.login-copy h1{font-size:2.35rem}.login-copy>div>p:last-child{font-size:.9rem}.login-features{display:none}.login-form{padding:2rem 1.5rem 3rem}.workspace>aside button{flex:1;width:auto;min-height:3.5rem}}
 </style>
