@@ -501,6 +501,16 @@ def telegram_config_from_webhook_token(token: str) -> dict[str, Any] | None:
 	return None
 
 
+def telegram_configs_share_credentials(
+	left: dict[str, Any], right: dict[str, Any]
+) -> bool:
+	"""Allow multiple auth surfaces to share one Telegram approval bot safely."""
+	return all(
+		hmac.compare_digest(str(left.get(key) or ""), str(right.get(key) or ""))
+		for key in ("token", "webhook_secret", "owner_id")
+	)
+
+
 def ensure_telegram_auth_bot(bot: dict[str, str]) -> None:
 	if bot["auth_method"] != "telegram":
 		raise HTTPException(status_code=400, detail="This bot does not use Telegram authorization")
@@ -962,12 +972,21 @@ def ensure_account_db() -> None:
 			("display_region_updated_at", "TEXT"),
 			("tos_version", "TEXT"),
 			("tos_accepted_at", "TEXT"),
+			("registration_ip", "TEXT"),
+			("last_seen_ip", "TEXT"),
+			("last_seen_at", "TEXT"),
+			("last_user_agent", "TEXT"),
 		):
 			try:
 				connection.execute(f"ALTER TABLE users ADD COLUMN {column_name} {column_type}")
 			except sqlite3.OperationalError as exc:
 				if "duplicate column name" not in str(exc).lower():
 					raise
+		try:
+			connection.execute("ALTER TABLE comments ADD COLUMN created_ip TEXT")
+		except sqlite3.OperationalError as exc:
+			if "duplicate column name" not in str(exc).lower():
+				raise
 		connection.commit()
 
 
@@ -1669,6 +1688,15 @@ def create_account_session(response: Response, request: Request, user_id: str) -
 			expires_at,
 			(request.headers.get("user-agent") or "")[:500],
 			hashlib.sha256(client_key(request).encode("utf-8")).hexdigest(),
+		],
+	)
+	d1_query(
+		"UPDATE users SET last_seen_ip = ?, last_seen_at = ?, last_user_agent = ? WHERE id = ?",
+		[
+			request_public_ip(request),
+			now,
+			(request.headers.get("user-agent") or "")[:500],
+			user_id,
 		],
 	)
 	response.set_cookie(
@@ -2926,10 +2954,10 @@ def comment_create(
 	d1_query(
 		"""
 		INSERT INTO comments
-			(id, post_slug, user_id, parent_id, content, status, created_at, updated_at)
-		VALUES (?, ?, ?, NULL, ?, 'published', ?, ?)
+			(id, post_slug, user_id, parent_id, content, status, created_at, updated_at, created_ip)
+		VALUES (?, ?, ?, NULL, ?, 'published', ?, ?, ?)
 		""",
-		[comment_id, post_slug, user["id"], content, now, now],
+		[comment_id, post_slug, user["id"], content, now, now, request_public_ip(request)],
 	)
 	return {
 		"ok": True,
@@ -2985,13 +3013,51 @@ def admin_users(request: Request) -> dict[str, Any]:
 	require_admin_console_session(request)
 	users = d1_query(
 		"""
-		SELECT id, email, username, role, created_at, updated_at, disabled_at
+		SELECT users.id, users.email, users.username, users.role, users.display_name,
+			users.avatar_url, users.bio, users.display_region, users.display_region_code,
+			users.email_verified_at, users.totp_enabled, users.tos_version,
+			users.tos_accepted_at, users.registration_ip, users.last_seen_ip,
+			users.last_seen_at, users.last_user_agent, users.created_at, users.updated_at,
+			users.disabled_at, CASE WHEN users.password_hash != '' THEN 1 ELSE 0 END AS has_password,
+			COUNT(DISTINCT comments.id) AS comment_count,
+			COUNT(DISTINCT sessions.id) AS active_session_count,
+			MAX(comments.created_at) AS latest_comment_at
 		FROM users
-		ORDER BY created_at DESC
+		LEFT JOIN comments ON comments.user_id = users.id
+		LEFT JOIN sessions ON sessions.user_id = users.id AND sessions.expires_at > ?
+		GROUP BY users.id
+		ORDER BY users.created_at DESC
 		LIMIT 200
-		"""
+		""",
+		[utc_now()],
 	)
 	return {"ok": True, "users": users, **admin_data_status()}
+
+
+@app.get("/admin/users/{user_id}")
+def admin_user_detail(user_id: str, request: Request) -> dict[str, Any]:
+	require_admin_console_session(request)
+	rows = d1_query(
+		"""
+		SELECT id, email, username, role, display_name, avatar_url, bio,
+			display_region, display_region_code, email_verified_at, totp_enabled,
+			tos_version, tos_accepted_at, registration_ip, last_seen_ip,
+			last_seen_at, last_user_agent, created_at, updated_at, disabled_at,
+			CASE WHEN password_hash != '' THEN 1 ELSE 0 END AS has_password
+		FROM users WHERE id = ? LIMIT 1
+		""",
+		[user_id],
+	)
+	if not rows:
+		raise HTTPException(status_code=404, detail="User not found")
+	comments = d1_query(
+		"""
+		SELECT id, post_slug, content, status, created_at, updated_at, deleted_at, created_ip
+		FROM comments WHERE user_id = ? ORDER BY created_at DESC LIMIT 100
+		""",
+		[user_id],
+	)
+	return {"ok": True, "user": rows[0], "comments": comments}
 
 
 @app.post("/admin/users/{user_id}/disable")
@@ -3055,11 +3121,14 @@ def admin_comments(request: Request, post_slug: str | None = None) -> dict[str, 
 			comments.post_slug,
 			comments.user_id,
 			users.username,
+			users.email,
+			users.display_name,
 			comments.content,
 			comments.status,
 			comments.created_at,
 			comments.updated_at,
-			comments.deleted_at
+			comments.deleted_at,
+			comments.created_ip
 		FROM comments
 		INNER JOIN users ON users.id = comments.user_id
 		{where}
@@ -3117,7 +3186,7 @@ async def telegram_update(request: Request, token: str = "") -> dict[str, Any]:
 	callback_id = callback.get("id") or ""
 	challenge = LOGIN_CHALLENGES.get(challenge_id, {"id": challenge_id})
 	challenge_config = telegram_auth_config(str(challenge.get("bot_id", webhook_config["bot_id"])))
-	if challenge_config["bot_id"] != webhook_config["bot_id"]:
+	if not telegram_configs_share_credentials(challenge_config, webhook_config):
 		approved = False
 	else:
 		approved = approve_login_challenge(challenge_id, user_id)
@@ -3929,12 +3998,15 @@ def register_complete(
 				INSERT INTO users
 					(id, email, username, password_hash, password_salt, role,
 					 email_verified_at, display_name, display_region, display_region_code,
-					 display_region_updated_at, tos_version, tos_accepted_at, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, 'user', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+					 display_region_updated_at, tos_version, tos_accepted_at, created_at, updated_at,
+					 registration_ip, last_seen_ip, last_seen_at, last_user_agent)
+				VALUES (?, ?, ?, ?, ?, 'user', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				""",
 				[
 					user_id, email, username, password_hash, salt, now, display_name,
-					display_region, display_region_code, now, AUTH_TOS_VERSION, now, now, now,
+					 display_region, display_region_code, now, AUTH_TOS_VERSION, now, now, now,
+					 request_public_ip(request), request_public_ip(request), now,
+					 (request.headers.get("user-agent") or "")[:500],
 				],
 			)
 			connection.execute(

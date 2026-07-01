@@ -82,6 +82,9 @@ class StubRequest:
 	async def body(self) -> bytes:
 		return self._body
 
+	async def json(self) -> dict[str, object]:
+		return json.loads(self._body.decode("utf-8"))
+
 
 class StubResponse:
 	def __init__(self) -> None:
@@ -124,6 +127,9 @@ def load_api_module(db_path: Path):
 			"AUTH_EMAIL_API_KEY": "test-email-key",
 			"AUTH_EMAIL_FROM": "SilentFlare <auth@example.com>",
 			"AUTH_TOS_VERSION": "test-v1",
+			"SILENTFLARE_DB_BACKUP_TELEGRAM_BOT_TOKEN": "test-telegram-token",
+			"SILENTFLARE_DB_BACKUP_TELEGRAM_WEBHOOK_SECRET": "test-webhook-secret",
+			"SILENTFLARE_DB_BACKUP_TELEGRAM_OWNER_ID": "8737100423",
 		},
 	)
 	spec = importlib.util.spec_from_file_location("silentflare_api_smoke", ROOT / "server/api/app.py")
@@ -192,7 +198,7 @@ def main() -> None:
 
 		module.register_email_request_code(
 			module.RegisterEmailRequestPayload(email="smoke@example.com", turnstile_token="register-ok"),
-			StubRequest(),
+			StubRequest(headers={"cf-connecting-ip": "8.8.8.8"}),
 		)
 		registration_email = module._smoke_email_payloads[-1]
 		registration_link_token = email_link_token(registration_email)
@@ -204,7 +210,7 @@ def main() -> None:
 			raise AssertionError("verification email did not include the code and secure link template")
 		verified = module.register_email_verify_code(
 			module.RegisterEmailVerifyPayload(email="smoke@example.com", code="123456"),
-			StubRequest(),
+			StubRequest(headers={"cf-connecting-ip": "8.8.8.8"}),
 		)
 		try:
 			module.register_email_verify_link(
@@ -224,7 +230,7 @@ def main() -> None:
 				display_name="Smoke User",
 				display_region="Test Region",
 			),
-			StubRequest(),
+			StubRequest(headers={"cf-connecting-ip": "8.8.8.8"}),
 		)
 		module.registration_2fa_skip(
 			module.RegistrationTwoFAPayload(onboarding_token=completed["onboarding_token"])
@@ -316,9 +322,33 @@ def main() -> None:
 
 		module.comment_create(
 			module.CommentCreatePayload(postSlug="smoke-post", content="Smoke comment", turnstileToken="comment-ok"),
-			StubRequest({module.ACCOUNT_SESSION_COOKIE: cookie}),
+			StubRequest({module.ACCOUNT_SESSION_COOKIE: cookie}, {"cf-connecting-ip": "8.8.4.4"}),
 			session["csrf"],
 		)
+
+		module.require_admin_console_session = lambda *_args, **_kwargs: {"bot_id": module.ADMIN_AUTH_ID}
+		admin_users = module.admin_users(StubRequest())["users"]
+		if admin_users[0].get("registration_ip") != "8.8.8.8":
+			raise AssertionError("admin user audit did not expose the registration IP")
+		detail = module.admin_user_detail(admin_users[0]["id"], StubRequest())
+		if detail["comments"][0].get("created_ip") != "8.8.4.4":
+			raise AssertionError("admin user detail did not include comment IP audit")
+		if "password_hash" in detail["user"] or "totp_secret" in detail["user"]:
+			raise AssertionError("admin detail exposed authentication secrets")
+
+		challenge = module.create_login_challenge(module.ADMIN_AUTH_ID, "smoke-client")
+		module.edit_login_approval_message = lambda *_args, **_kwargs: None
+		module.answer_callback = lambda *_args, **_kwargs: None
+		telegram_result = asyncio.run(module.telegram_update(
+			StubRequest(body=json.dumps({"callback_query": {
+				"id": "callback-smoke",
+				"data": f"sf_login:{challenge['id']}",
+				"from": {"id": 8737100423},
+			}}).encode("utf-8")),
+			"test-webhook-secret",
+		))
+		if not telegram_result.get("approved"):
+			raise AssertionError("shared Telegram bot could not approve the admin challenge")
 
 		secret = module.generate_totp_secret()
 		module.d1_query(

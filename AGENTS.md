@@ -170,6 +170,9 @@ Current admin behavior:
 - If 2FA is not configured, the UI should show it as unavailable instead of presenting a usable 2FA form.
 - Admin must not show bot backup, chat, health-dashboard, or unrelated operational controls.
 - Admin data actions require the admin session plus `X-CSRF-Token`.
+- Admin user records include profile, security-state flags, registration/last-seen timestamps, admin-only registration and last-seen IP audit values, active-session counts, and comment counts. Historical rows show unavailable values until a new login or comment supplies them.
+- Raw audit IP values are restricted to the owner-only Admin API. Public account/session/comment responses must never expose them, and Admin responses must never include password hashes, salts, TOTP secrets, session hashes, cookies, or verification secrets.
+- `SilentFlare Admin` may intentionally share the DB Backup Telegram bot credentials. Webhook approval must compare the credential set rather than reject a challenge merely because its logical `bot_id` differs.
 
 Important account FastAPI endpoints:
 
@@ -197,6 +200,7 @@ Important admin FastAPI endpoints:
 
 - `GET /admin/status`: admin session and local account/comment database status.
 - `GET /admin/users`: list public users without password hashes or salts.
+- `GET /admin/users/{user_id}`: return an owner-only user record plus up to 100 recent comments, including available audit IP metadata but excluding all authentication secrets.
 - `POST /admin/users/{user_id}/disable`: soft-disable a user.
 - `POST /admin/users/{user_id}/enable`: re-enable a user.
 - `POST /admin/users/{user_id}/role`: set `user` or `admin`.
