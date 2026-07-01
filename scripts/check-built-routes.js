@@ -87,7 +87,7 @@ const accountHtml = await readFile(
 const requiredAccountNeedles = [
 	"SilentFlare Accounts",
 	"SilentFlare accounts center",
-	"register email verification profile avatar upload IP region country city two factor security",
+	"unified login register email verification profile avatar upload IP region country city two factor security",
 ];
 const missingAccountNeedles = requiredAccountNeedles.filter(
 	(needle) => !accountHtml.includes(needle),

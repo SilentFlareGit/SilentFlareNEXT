@@ -15,7 +15,7 @@ const apiBase = "/auth-api";
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<title>Sign in - SilentFlare</title>
-		<meta name="description" content="Sign in to your SilentFlare account" />
+		<meta name="description" content="Sign in to or create your SilentFlare account" />
 		<script is:inline>
 			if (typeof localStorage !== "undefined" && localStorage.theme === "dark") {
 				document.documentElement.classList.add("dark");
@@ -23,7 +23,7 @@ const apiBase = "/auth-api";
 		</script>
 	</head>
 	<body class="m-0 min-h-screen antialiased">
-		<div class="sr-only" aria-hidden="true">SilentFlare unified login authentication sign in</div>
+		<div class="sr-only" aria-hidden="true">SilentFlare unified login authentication sign in register</div>
 		<AuthApp client:only="svelte" {apiBase} />
 	</body>
 </html>

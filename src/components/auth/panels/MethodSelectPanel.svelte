@@ -4,23 +4,21 @@ import Icon from "@iconify/svelte";
 let {
 	onSelectEmailCode,
 	onSelectPassword,
+	onRegister,
+	notice = "",
 	error = "",
 }: {
 	onSelectEmailCode: () => void;
 	onSelectPassword: () => void;
+	onRegister: () => void;
+	notice?: string;
 	error?: string;
 } = $props();
 </script>
 
 <div class="mx-auto w-full max-w-[360px]">
-	<!-- Mobile wordmark -->
-	<div class="mb-8 flex items-center gap-2 lg:hidden">
-		<span class="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--btn-regular-bg)] font-bold text-[var(--primary)]">S</span>
-		<span class="text-sm font-bold text-black/70 dark:text-white/70">SilentFlare</span>
-	</div>
-
 	<h2 class="mb-1 text-2xl font-extrabold text-black/90 dark:text-white/90">Sign in</h2>
-	<p class="mb-8 text-sm text-black/45 dark:text-white/45">Choose how to sign in to your account</p>
+	<p class="mb-8 text-sm leading-6 text-black/45 dark:text-white/45">One account for the blog and every SilentFlare subsite.</p>
 
 	<div class="flex flex-col gap-3">
 		<button
@@ -85,6 +83,20 @@ let {
 		</div>
 		<p class="text-center text-xs text-black/30 dark:text-white/30">OAuth coming soon</p>
 	</div>
+
+	<div class="mt-7 border-t border-[var(--line-divider)] pt-6 text-center">
+		<p class="mb-3 text-sm text-black/50 dark:text-white/50">New to SilentFlare?</p>
+		<button type="button" class="min-h-11 w-full rounded-lg border border-[var(--line-divider)] px-4 font-bold text-[var(--primary)] transition-colors hover:bg-[var(--btn-regular-bg)]" onclick={onRegister}>
+			Create an account
+		</button>
+	</div>
+
+	{#if notice}
+		<div class="mt-5 flex items-start gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-4 text-[0.9rem] font-bold text-emerald-700 dark:text-emerald-400">
+			<Icon icon="material-symbols:check-circle-outline-rounded" class="mt-0.5 shrink-0 text-[1.2rem]" />
+			<p class="leading-snug">{notice}</p>
+		</div>
+	{/if}
 
 	{#if error}
 		<div class="mt-5 flex items-start gap-3 rounded-xl border border-red-500/20 bg-red-500/10 p-4 text-[0.9rem] font-bold text-red-600 dark:text-red-400">

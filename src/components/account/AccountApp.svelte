@@ -1,7 +1,7 @@
 <script lang="ts">
 import Icon from "@iconify/svelte";
 import { onMount } from "svelte";
-import TurnstileWidget from "../security/TurnstileWidget.svelte";
+import AuthApp from "../auth/AuthApp.svelte";
 
 type AccountUser = {
 	id: string;
@@ -20,23 +20,10 @@ let { apiBase = "/accounts-api" } = $props<{ apiBase?: string }>();
 let loading = $state(true);
 let user = $state<AccountUser | null>(null);
 let csrf = $state("");
-let tosVersion = $state("");
-let emailConfigured = $state(true);
-let step = $state<"email" | "code" | "details" | "security" | "totp">("email");
 let submitting = $state(false);
 let avatarUploading = $state(false);
 let error = $state("");
 let notice = $state("");
-let turnstileToken = $state("");
-let turnstileReset = $state(0);
-let email = $state("");
-let code = $state("");
-let regToken = $state("");
-let onboardingToken = $state("");
-let username = $state("");
-let password = $state("");
-let usePassword = $state(true);
-let tosAccepted = $state(false);
 let displayName = $state("");
 let avatarUrl = $state("");
 let bio = $state("");
@@ -87,38 +74,18 @@ function clearMessages() {
 }
 
 async function loadSession() {
-	const params = new URLSearchParams(window.location.search);
-	const verifyToken = params.get("verify_token") ?? "";
 	try {
 		const result = await apiFetch<{
 			authenticated: boolean;
 			user: AccountUser | null;
 			csrf?: string;
-			tosVersion: string;
-			emailConfigured: boolean;
 		}>("/auth/session");
-		tosVersion = result.tosVersion;
-		emailConfigured = result.emailConfigured;
 		csrf = result.csrf ?? "";
 		if (result.authenticated && result.user) {
 			const profile = await apiFetch<{ user: AccountUser }>(
 				"/accounts/profile",
 			);
 			applyUser(profile.user);
-		} else if (verifyToken) {
-			const verified = await apiFetch<{
-				email: string;
-				reg_token: string;
-				tos_version: string;
-			}>("/accounts/register/email/verify-link", {
-				method: "POST",
-				body: JSON.stringify({ token: verifyToken }),
-			});
-			email = verified.email;
-			regToken = verified.reg_token;
-			tosVersion = verified.tos_version;
-			step = "details";
-			notice = "Email verified. Complete your account details.";
 		}
 	} catch (reason) {
 		error =
@@ -126,146 +93,7 @@ async function loadSession() {
 				? reason.message
 				: "Account service is unavailable";
 	} finally {
-		if (verifyToken)
-			window.history.replaceState({}, "", window.location.pathname);
 		loading = false;
-	}
-}
-
-async function requestCode() {
-	if (!turnstileToken) {
-		error = "Complete the security check first.";
-		return;
-	}
-	submitting = true;
-	clearMessages();
-	try {
-		await apiFetch("/accounts/register/email/request", {
-			method: "POST",
-			body: JSON.stringify({ email, turnstile_token: turnstileToken }),
-		});
-		step = "code";
-	} catch (reason) {
-		error = reason instanceof Error ? reason.message : "Could not send code";
-		turnstileToken = "";
-		turnstileReset += 1;
-	} finally {
-		submitting = false;
-	}
-}
-
-async function verifyEmail() {
-	submitting = true;
-	clearMessages();
-	try {
-		const result = await apiFetch<{ reg_token: string; tos_version: string }>(
-			"/accounts/register/email/verify",
-			{ method: "POST", body: JSON.stringify({ email, code }) },
-		);
-		regToken = result.reg_token;
-		tosVersion = result.tos_version;
-		step = "details";
-	} catch (reason) {
-		error = reason instanceof Error ? reason.message : "Verification failed";
-		code = "";
-	} finally {
-		submitting = false;
-	}
-}
-
-async function completeRegistration() {
-	if (!tosAccepted) {
-		error = "Accept the current Terms of Service to continue.";
-		return;
-	}
-	submitting = true;
-	clearMessages();
-	try {
-		const result = await apiFetch<{ onboarding_token: string }>(
-			"/accounts/register/complete",
-			{
-				method: "POST",
-				body: JSON.stringify({
-					reg_token: regToken,
-					username,
-					password: usePassword ? password : null,
-					tos_accepted: tosAccepted,
-					tos_version: tosVersion,
-					display_name: displayName,
-					display_region: "",
-				}),
-			},
-		);
-		onboardingToken = result.onboarding_token;
-		step = "security";
-	} catch (reason) {
-		error =
-			reason instanceof Error ? reason.message : "Could not create account";
-	} finally {
-		submitting = false;
-	}
-}
-
-async function startRegistration2FA() {
-	submitting = true;
-	clearMessages();
-	try {
-		const result = await apiFetch<{
-			setup_token: string;
-			secret: string;
-			uri: string;
-		}>("/accounts/register/2fa/start", {
-			method: "POST",
-			body: JSON.stringify({ onboarding_token: onboardingToken }),
-		});
-		setupToken = result.setup_token;
-		totpSecret = result.secret;
-		totpUri = result.uri;
-		step = "totp";
-	} catch (reason) {
-		error =
-			reason instanceof Error ? reason.message : "Could not start 2FA setup";
-	} finally {
-		submitting = false;
-	}
-}
-
-function finishRegistration() {
-	window.location.assign("https://auth.silentflare.com/?registration=complete");
-}
-
-async function skipRegistration2FA() {
-	submitting = true;
-	clearMessages();
-	try {
-		await apiFetch("/accounts/register/2fa/skip", {
-			method: "POST",
-			body: JSON.stringify({ onboarding_token: onboardingToken }),
-		});
-		finishRegistration();
-	} catch (reason) {
-		error =
-			reason instanceof Error
-				? reason.message
-				: "Could not finish registration";
-		submitting = false;
-	}
-}
-
-async function verifyRegistration2FA() {
-	submitting = true;
-	clearMessages();
-	try {
-		await apiFetch("/accounts/register/2fa/verify", {
-			method: "POST",
-			body: JSON.stringify({ setup_token: setupToken, code: totpCode }),
-		});
-		finishRegistration();
-	} catch (reason) {
-		error =
-			reason instanceof Error ? reason.message : "Invalid authenticator code";
-		totpCode = "";
-		submitting = false;
 	}
 }
 
@@ -407,10 +235,12 @@ async function logout() {
 onMount(() => void loadSession());
 </script>
 
-<div class="accounts-stage">
 	{#if loading}
+	<div class="accounts-stage">
 		<div class="account-loading" aria-live="polite"><span></span><p>Loading account…</p></div>
+	</div>
 	{:else if user}
+	<div class="accounts-stage">
 		<main class="accounts-workspace">
 			<div class="workspace-bar">
 				<a class="wordmark" href="https://blog.silentflare.com/" aria-label="SilentFlare Blog">
@@ -490,53 +320,19 @@ onMount(() => void loadSession());
 				</div>
 			</div>
 		</main>
+		<footer class="accounts-footer"><a href="https://blog.silentflare.com/">SilentFlare</a><span>·</span><a href="https://blog.silentflare.com/rss.xml">RSS</a><span>·</span><a href="https://tos.silentflare.com/">Terms</a></footer>
+	</div>
 	{:else}
-		<main class="registration-shell">
-			<section class="registration-story">
-				<a class="story-wordmark" href="https://blog.silentflare.com/"><span>S</span>SilentFlare</a>
-				<div><p class="eyebrow">SilentFlare Accounts</p><h1>Build the profile behind your byline.</h1><p>Registration starts with a verified email. Your location is supplied by the API from the current network region.</p><a class="story-link" href="https://auth.silentflare.com/"><Icon icon="material-symbols:login-rounded" />Already registered? Sign in</a></div>
-			</section>
-			<section class="registration-form panel">
-				<div class="steps" aria-label="Registration progress"><span class:active={step === "email" || step === "code"}>1</span><i></i><span class:active={step === "details"}>2</span><i></i><span class:active={step === "security" || step === "totp"}>3</span></div>
-				{#if step === "email"}
-					<p class="eyebrow">Step 1 · Verify email</p><h2>Create your account</h2>
-					{#if !emailConfigured}<p class="message error"><Icon icon="material-symbols:mail-lock-outline-rounded" />Email delivery is not configured on the API yet.</p>{/if}
-					<form class="form-stack" onsubmit={(event) => { event.preventDefault(); void requestCode(); }}><label>Email address<input class="auth-input" type="email" autocomplete="email" bind:value={email} required /></label><TurnstileWidget action="register" resetKey={turnstileReset} onTokenChange={(token) => (turnstileToken = token)} /><button class="command primary" disabled={submitting || !emailConfigured}><Icon icon="material-symbols:send-outline-rounded" />{submitting ? "Sending…" : "Send verification code"}</button></form>
-				{:else if step === "code"}
-					<p class="eyebrow">Step 1 · Verify email</p><h2>Check your inbox</h2><p class="muted">Enter the one-time code below, or click the secure verification link in the email.</p>
-					<form class="form-stack" onsubmit={(event) => { event.preventDefault(); void verifyEmail(); }}><label>Six-digit code<input class="auth-input code-input" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" bind:value={code} required /></label><button class="command primary" disabled={submitting}><Icon icon="material-symbols:mark-email-read-outline-rounded" />Verify email</button></form>
-				{:else if step === "details"}
-					<p class="eyebrow">Step 2 · Account details</p><h2>Choose your identity</h2>
-					<form class="form-stack" onsubmit={(event) => { event.preventDefault(); void completeRegistration(); }}>
-						<div class="form-grid"><label>Username<input class="auth-input" autocomplete="username" bind:value={username} minlength="3" maxlength="24" required /></label><label>Display name <span class="optional">Optional</span><input class="auth-input" bind:value={displayName} maxlength="80" /></label></div>
-						<label class="choice"><input type="checkbox" bind:checked={usePassword} />Set a password</label>
-						{#if usePassword}<label>Password<input class="auth-input" type="password" autocomplete="new-password" bind:value={password} minlength="8" required /></label>{/if}
-					<div class="region-field compact"><span class="region-flag"><Icon icon="material-symbols:public-rounded" aria-label="Global" /></span><div class="region-copy"><span>Region</span><strong>Determined securely after registration</strong></div><Icon icon="material-symbols:my-location-rounded" class="region-pin" /></div>
-						<label class="choice tos"><input type="checkbox" bind:checked={tosAccepted} required />I agree to the <a href="https://tos.silentflare.com/" target="_blank" rel="noopener">Terms of Service</a> ({tosVersion}).</label>
-						<button class="command primary" disabled={submitting}><Icon icon="material-symbols:person-add-outline-rounded" />Create account</button>
-					</form>
-				{:else if step === "security"}
-					<p class="eyebrow">Step 3 · Security</p><h2>Add a second factor?</h2><p class="muted">If enabled, login remains pending until the authenticator code succeeds.</p>
-					<div class="security-actions"><button class="command primary" onclick={() => void startRegistration2FA()} disabled={submitting}><Icon icon="material-symbols:add-moderator-outline-rounded" />Set up 2FA</button><button class="command secondary" onclick={() => void skipRegistration2FA()} disabled={submitting}><Icon icon="material-symbols:arrow-forward-rounded" />Skip for now</button></div>
-				{:else}
-					<p class="eyebrow">Step 3 · Authenticator</p><h2>Connect your app</h2><div class="totp-box"><p>Authenticator secret</p><code>{totpSecret}</code><a href={totpUri}><Icon icon="material-symbols:open-in-new-rounded" />Open authenticator app</a><input class="auth-input code-input" inputmode="numeric" maxlength="6" bind:value={totpCode} placeholder="000000" /><button class="command primary" onclick={() => void verifyRegistration2FA()} disabled={submitting}><Icon icon="material-symbols:verified-user-outline-rounded" />Verify and finish</button></div>
-				{/if}
-				{#if error}<p class="message error"><Icon icon="material-symbols:error-outline-rounded" />{error}</p>{/if}
-				{#if notice}<p class="message notice"><Icon icon="material-symbols:check-circle-outline-rounded" />{notice}</p>{/if}
-			</section>
-		</main>
+		<AuthApp apiBase={apiBase} surface="accounts" />
 	{/if}
-
-	<footer class="accounts-footer"><a href="https://blog.silentflare.com/">SilentFlare</a><span>·</span><a href="https://blog.silentflare.com/rss.xml">RSS</a><span>·</span><a href="https://tos.silentflare.com/">Terms</a></footer>
-</div>
 
 <style>
 	.accounts-stage { min-height: 100svh; padding: 1rem; color: var(--deep-text, #182230); background: #edf3f8; }
 	:global(.dark) .accounts-stage { background: #111923; color: #e8edf4; }
 	.accounts-workspace { width: min(100%, 72rem); margin: 0 auto; }
 	.workspace-bar { min-height: 3.5rem; display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
-	.wordmark, .story-wordmark { display: inline-flex; align-items: center; gap: .65rem; color: inherit; font-weight: 800; }
-	.wordmark span, .story-wordmark span { width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: .5rem; background: #4b9fe8; color: white; }
+	.wordmark { display: inline-flex; align-items: center; gap: .65rem; color: inherit; font-weight: 800; }
+	.wordmark span { width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: .5rem; background: #4b9fe8; color: white; }
 	.panel { border: 1px solid rgba(70, 100, 130, .12); border-radius: .5rem; background: rgba(255,255,255,.96); box-shadow: 0 .75rem 2.5rem rgba(28, 53, 79, .07); }
 	:global(.dark) .panel { border-color: rgba(255,255,255,.08); background: #19232f; }
 	.account-grid { display: grid; gap: 1rem; }
@@ -558,7 +354,6 @@ onMount(() => void loadSession());
 	.eyebrow { margin: 0 0 .4rem; color: #428ed1; font-size: .75rem; font-weight: 800; letter-spacing: 0; text-transform: uppercase; }
 	h2 { margin: 0; font-size: 1.75rem; line-height: 1.08; letter-spacing: 0; }
 	.form-stack { display: flex; flex-direction: column; gap: 1.2rem; }
-	.form-grid { display: grid; gap: 1.2rem; }
 	label { position: relative; display: flex; flex-direction: column; gap: .5rem; font-weight: 700; }
 	.auth-input { min-height: 2.9rem; border-radius: .45rem; }
 	.bio-input { min-height: 8rem; resize: vertical; }
@@ -594,29 +389,12 @@ onMount(() => void loadSession());
 	.message { display: flex; align-items: flex-start; gap: .55rem; margin: 1rem 0 0; padding: 1rem; border-radius: .5rem; font-weight: 700; }
 	.message.error { color: #a82929; background: #fbeaea; }
 	.message.notice { color: #177248; background: #e7f5ed; }
-	.registration-shell { width: min(100%, 68rem); min-height: calc(100svh - 5rem); display: grid; margin: 0 auto; }
-	.registration-story { min-height: 20rem; display: flex; flex-direction: column; justify-content: space-between; padding: clamp(1.5rem, 6vw, 4rem); border-radius: .5rem .5rem 0 0; color: white; background: linear-gradient(145deg, #397fbd, #10233f); }
-	.story-wordmark span { background: white; color: #265f94; }
-	.registration-story h1 { max-width: 13ch; margin: 0; font-size: 2.4rem; line-height: 1; letter-spacing: 0; }
-	.registration-story p:not(.eyebrow) { max-width: 38rem; margin: 1.4rem 0; line-height: 1.7; opacity: .78; }
-	.story-link { min-height: 2.75rem; display: inline-flex; align-items: center; gap: .5rem; color: white; font-weight: 800; text-decoration: underline; }
-	.registration-form { padding: clamp(1.5rem, 6vw, 3.5rem); border-radius: 0 0 .5rem .5rem; }
-	.steps { display: flex; align-items: center; margin-bottom: 2rem; }
-	.steps span { width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: 50%; background: #e6eef6; font-weight: 800; }
-	.steps span.active { background: #4b9fe8; color: white; }
-	.steps i { width: 2.5rem; height: 1px; background: #d8e2eb; }
-	.optional { color: #748395; font-size: .75rem; font-weight: 500; }
-	.choice { min-height: 2.75rem; flex-direction: row; align-items: center; gap: .75rem; }
-	.choice input { width: 1.15rem; height: 1.15rem; }
-	.choice a { text-decoration: underline; }
-	.security-actions { display: flex; flex-direction: column; gap: .75rem; }
-	.muted { color: #6c7b8c; line-height: 1.65; }
 	.accounts-footer { min-height: 3rem; display: flex; align-items: center; justify-content: center; gap: .45rem; color: #718195; font-size: .8rem; }
 	.account-loading { min-height: calc(100svh - 2rem); display: grid; place-content: center; justify-items: center; gap: 1rem; color: #718195; }
 	.account-loading span { width: 2rem; height: 2rem; border: 2px solid #d5e0e9; border-top-color: #4b9fe8; border-radius: 50%; animation: spin .8s linear infinite; }
 	.spin { animation: spin .8s linear infinite; }
-	@media (min-width: 768px) { .identity-card h1, h2 { font-size: 2rem; } .registration-story h1 { font-size: 3.5rem; } .form-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } .security-actions { flex-direction: row; } }
-	@media (min-width: 1024px) { .accounts-stage { padding: 1.5rem; } .account-grid { grid-template-columns: minmax(15rem, 18rem) minmax(0,1fr); align-items: start; } .identity-card { position: sticky; top: 1.5rem; } .registration-shell { grid-template-columns: minmax(0,5fr) minmax(0,6fr); align-items: stretch; } .registration-story { min-height: 42rem; border-radius: .5rem 0 0 .5rem; } .registration-form { border-radius: 0 .5rem .5rem 0; } }
+	@media (min-width: 768px) { .identity-card h1, h2 { font-size: 2rem; } }
+	@media (min-width: 1024px) { .accounts-stage { padding: 1.5rem; } .account-grid { grid-template-columns: minmax(15rem, 18rem) minmax(0,1fr); align-items: start; } .identity-card { position: sticky; top: 1.5rem; } }
 	@keyframes spin { to { transform: rotate(360deg); } }
 	@media (prefers-reduced-motion: reduce) { .account-loading span, .spin { animation: none; } .command, .icon-command { transition: none; } }
 </style>

@@ -3,6 +3,7 @@ import { onMount } from "svelte";
 import EmailCodePanel from "./panels/EmailCodePanel.svelte";
 import MethodSelectPanel from "./panels/MethodSelectPanel.svelte";
 import PasswordPanel from "./panels/PasswordPanel.svelte";
+import RegistrationPanel from "./panels/RegistrationPanel.svelte";
 import TwoFAPanel from "./panels/TwoFAPanel.svelte";
 
 type AuthUser = {
@@ -12,13 +13,26 @@ type AuthUser = {
 	displayName: string;
 };
 
-let { apiBase = "/auth-api" } = $props<{ apiBase?: string }>();
+let { apiBase = "/auth-api", surface = "auth" } = $props<{
+	apiBase?: string;
+	surface?: "auth" | "accounts";
+}>();
 let step = $state<
-	"checking" | "method" | "email" | "password" | "2fa" | "redirecting"
+	| "checking"
+	| "method"
+	| "email"
+	| "password"
+	| "register"
+	| "2fa"
+	| "redirecting"
 >("checking");
 let returnUrl = $state("https://accounts.silentflare.com/");
 let pendingId = $state("");
 let error = $state("");
+let notice = $state("");
+let emailConfigured = $state(false);
+let tosVersion = $state("");
+let registrationVerifyToken = $state("");
 
 async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
 	const response = await fetch(`${apiBase}${path}`, {
@@ -52,7 +66,28 @@ async function bootstrap() {
 	const params = new URLSearchParams(window.location.search);
 	await resolveReturnUrl(params.get("return_url") ?? "");
 	const verifyToken = params.get("verify_token") ?? "";
-	if (verifyToken) {
+	try {
+		const session = await apiFetch<{
+			authenticated: boolean;
+			emailConfigured: boolean;
+			tosVersion: string;
+		}>("/auth/session");
+		emailConfigured = session.emailConfigured;
+		tosVersion = session.tosVersion;
+		if (session.authenticated) {
+			step = "redirecting";
+			window.location.replace(returnUrl);
+			return;
+		}
+	} catch {
+		// The login screen remains usable and will surface API errors on submit.
+	}
+	if (verifyToken && surface === "accounts") {
+		registrationVerifyToken = verifyToken;
+		step = "register";
+		return;
+	}
+	if (verifyToken && surface === "auth") {
 		try {
 			const result = await apiFetch<{
 				requires_2fa?: boolean;
@@ -84,16 +119,13 @@ async function bootstrap() {
 			return;
 		}
 	}
-	try {
-		const session = await apiFetch<{ authenticated: boolean }>("/auth/session");
-		if (session.authenticated) {
-			step = "redirecting";
-			window.location.replace(returnUrl);
-			return;
-		}
-	} catch {
-		// The login screen remains usable and will surface API errors on submit.
-	}
+	step = "method";
+}
+
+function finishRegistration() {
+	notice = "Account created. Sign in with your new credentials.";
+	error = "";
+	registrationVerifyToken = "";
 	step = "method";
 }
 
@@ -101,21 +133,12 @@ onMount(() => void bootstrap());
 </script>
 
 <div class="auth-stage">
-	<header class="auth-topbar">
-		<a href="https://blog.silentflare.com/" class="auth-wordmark" aria-label="SilentFlare Blog">
-			<span class="auth-mark">S</span>
-			<span>SilentFlare</span>
-		</a>
-		<a class="auth-register-link" href="https://accounts.silentflare.com/">Create account</a>
-	</header>
-
 	<main class="auth-main">
 		<section class="auth-shell" aria-live="polite">
-			<div class="auth-story" aria-hidden="true">
-				<p class="auth-kicker">One identity, every subsite</p>
-				<h1>Return to the quiet side of the web.</h1>
-				<p>Your SilentFlare session follows you across the blog, accounts, and connected services without sharing your password with any frontend.</p>
-				<div class="auth-orbit"><span></span><span></span><span></span></div>
+			<div class="auth-story">
+				<a class="story-wordmark" href="https://blog.silentflare.com/" aria-label="SilentFlare Blog"><span>S</span><strong>SilentFlare</strong></a>
+				<div class="story-copy"><h1>One identity for the quiet side of the web.</h1><p>Sign in once, then move between the blog, your profile, and every SilentFlare subsite.</p></div>
+				<a class="story-link" href="https://blog.silentflare.com/">Return to the blog</a>
 			</div>
 
 			<div class="auth-form">
@@ -125,6 +148,8 @@ onMount(() => void bootstrap());
 					<MethodSelectPanel
 						onSelectEmailCode={() => { step = "email"; error = ""; }}
 						onSelectPassword={() => { step = "password"; error = ""; }}
+						onRegister={() => { step = "register"; error = ""; notice = ""; }}
+						{notice}
 						{error}
 					/>
 				{:else if step === "email"}
@@ -144,6 +169,15 @@ onMount(() => void bootstrap());
 						onError={(message) => (error = message)}
 						onBack={() => { step = "method"; error = ""; }}
 					/>
+				{:else if step === "register"}
+					<RegistrationPanel
+						{apiBase}
+						{emailConfigured}
+						{tosVersion}
+						verifyToken={registrationVerifyToken}
+						onBack={() => { step = "method"; error = ""; registrationVerifyToken = ""; }}
+						onComplete={finishRegistration}
+					/>
 				{:else}
 					<TwoFAPanel
 						{apiBase}
@@ -160,26 +194,26 @@ onMount(() => void bootstrap());
 </div>
 
 <style>
-	.auth-stage { min-height: 100svh; color: var(--primary); background: radial-gradient(circle at 15% 20%, color-mix(in srgb, var(--primary) 14%, transparent), transparent 36rem), var(--page-bg); }
-	.auth-topbar { min-height: 4rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .75rem clamp(1rem, 4vw, 3rem); border-bottom: 1px solid var(--line-divider); }
-	.auth-wordmark { min-height: 2.75rem; display: inline-flex; align-items: center; gap: .7rem; color: var(--deep-text); font-weight: 800; }
-	.auth-mark { width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: .65rem; background: var(--primary); color: white; }
-	.auth-register-link { min-height: 2.75rem; display: inline-flex; align-items: center; padding: 0 1rem; border-radius: .8rem; background: var(--btn-regular-bg); font-weight: 700; }
-	.auth-main { width: min(100% - 2rem, 64rem); margin: 0 auto; padding: clamp(2rem, 7vw, 5rem) 0 2rem; }
-	.auth-shell { display: grid; overflow: hidden; border: 1px solid var(--line-divider); border-radius: 1.5rem; background: var(--card-bg); box-shadow: 0 1.6rem 5rem rgba(20, 35, 55, .13); }
-	.auth-story { min-height: 16rem; padding: clamp(2rem, 7vw, 4rem); color: white; background: linear-gradient(145deg, #397fbd, #10233f); position: relative; overflow: hidden; }
-	.auth-kicker { margin: 0 0 1rem; font-size: .78rem; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; opacity: .72; }
-	.auth-story h1 { max-width: 12ch; margin: 0; font-size: clamp(2.25rem, 8vw, 4.4rem); line-height: .98; letter-spacing: -.045em; }
-	.auth-story > p:last-of-type { max-width: 38rem; margin: 1.5rem 0 0; line-height: 1.7; opacity: .78; }
-	.auth-orbit { position: absolute; width: 15rem; height: 15rem; right: -5rem; bottom: -6rem; border: 1px solid rgba(255,255,255,.24); border-radius: 50%; }
-	.auth-orbit span { position: absolute; width: .65rem; height: .65rem; border-radius: 50%; background: white; }
-	.auth-orbit span:nth-child(1) { left: 1rem; top: 3rem; } .auth-orbit span:nth-child(2) { right: 2rem; top: 1rem; } .auth-orbit span:nth-child(3) { left: 5rem; bottom: 1rem; }
-	.auth-form { min-height: 31rem; display: flex; align-items: center; padding: clamp(1.5rem, 6vw, 4rem); }
+	.auth-stage { min-height: 100svh; padding: 1rem; color: var(--primary); background: #edf3f8; }
+	.auth-main { width: min(100%, 62rem); margin: 0 auto; padding: 1rem 0; }
+	.auth-shell { display: grid; overflow: hidden; border: 1px solid rgba(70,100,130,.14); border-radius: .5rem; background: var(--card-bg); box-shadow: 0 1rem 3rem rgba(28,53,79,.09); }
+	.auth-story { order: 2; min-height: 11rem; display: flex; flex-direction: column; justify-content: space-between; gap: 1.5rem; padding: 1.5rem; border-top: 1px solid #dce6ee; color: #182230; background: #f4f8fb; }
+	.story-wordmark { min-height: 2.75rem; display: inline-flex; align-items: center; gap: .65rem; width: max-content; color: #182230; }
+	.story-wordmark span { width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: .5rem; background: #4b9fe8; color: white; font-weight: 800; }
+	.story-copy h1 { max-width: 15ch; margin: 0; font-size: 2rem; line-height: 1.08; letter-spacing: 0; }
+	.story-copy p { max-width: 30rem; margin: 1rem 0 0; color: #68798a; line-height: 1.65; }
+	.story-link { min-height: 2.75rem; display: inline-flex; align-items: center; width: max-content; color: #176db8; font-weight: 700; text-decoration: underline; }
+	.auth-form { order: 1; min-width: 0; min-height: 30rem; display: flex; align-items: center; padding: 1.5rem; }
 	.auth-loading { width: 100%; display: grid; justify-items: center; gap: 1rem; color: var(--muted-text); }
 	.auth-loading span { width: 2rem; height: 2rem; border: 2px solid var(--line-divider); border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite; }
 	.auth-legal { margin: 1rem 0 0; text-align: center; color: var(--muted-text); font-size: .8rem; }
 	.auth-legal a { text-decoration: underline; }
-	@media (min-width: 1024px) { .auth-shell { grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); } .auth-story { min-height: 38rem; display: flex; flex-direction: column; justify-content: center; } }
+	:global(.dark) .auth-stage { background: #111923; }
+	:global(.dark) .auth-story { border-color: #2a3948; color: #edf3f8; background: #19232f; }
+	:global(.dark) .story-wordmark { color: #edf3f8; }
+	:global(.dark) .story-copy p { color: #aab7c3; }
+	@media (min-width: 768px) { .auth-stage { padding: 1.5rem; } .auth-main { padding: 2rem 0; } .auth-form { padding: 2.5rem; } }
+	@media (min-width: 1024px) { .auth-main { padding: 3rem 0 2rem; } .auth-shell { grid-template-columns: minmax(17rem, 2fr) minmax(0, 3fr); align-items: stretch; } .auth-story { order: 1; min-height: 28rem; padding: 2.5rem; border-top: 0; border-right: 1px solid #dce6ee; box-shadow: inset .25rem 0 #4b9fe8; } .story-copy h1 { font-size: 2.4rem; } .auth-form { order: 2; padding: 3rem; } }
 	@keyframes spin { to { transform: rotate(360deg); } }
 	@media (prefers-reduced-motion: reduce) { .auth-loading span { animation: none; } }
 </style>
