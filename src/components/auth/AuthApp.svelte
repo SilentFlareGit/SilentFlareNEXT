@@ -1,5 +1,6 @@
 <script lang="ts">
 import { onMount } from "svelte";
+import AdminOwnerAuth from "./AdminOwnerAuth.svelte";
 import EmailCodePanel from "./panels/EmailCodePanel.svelte";
 import MethodSelectPanel from "./panels/MethodSelectPanel.svelte";
 import PasswordPanel from "./panels/PasswordPanel.svelte";
@@ -20,6 +21,7 @@ let returnUrl = $state("https://accounts.silentflare.com/");
 let pendingId = $state("");
 let error = $state("");
 let notice = $state("");
+let adminMode = $state(false);
 
 async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
 	const response = await fetch(`${apiBase}${path}`, {
@@ -51,7 +53,12 @@ function finishLogin(user: AuthUser, destination?: string) {
 
 async function bootstrap() {
 	const params = new URLSearchParams(window.location.search);
+	adminMode = params.get("audience") === "admin";
 	await resolveReturnUrl(params.get("return_url") ?? "");
+	if (adminMode) {
+		step = "method";
+		return;
+	}
 	const verifyToken = params.get("verify_token") ?? "";
 	if (params.get("registration") === "complete")
 		notice = "Account created. Sign in with your new credentials.";
@@ -108,14 +115,16 @@ onMount(() => void bootstrap());
 <div class="auth-stage">
 	<main class="auth-main">
 		<section class="auth-shell" aria-live="polite">
-			<div class="auth-story">
+			<div class="auth-story" class:admin-story={adminMode}>
 				<a class="story-wordmark" href="https://blog.silentflare.com/" aria-label="SilentFlare Blog"><span>S</span><strong>SilentFlare</strong></a>
-				<div class="story-copy"><h1>One identity for the quiet side of the web.</h1><p>Sign in once, then move between the blog, your profile, and every SilentFlare subsite.</p></div>
+				<div class="story-copy"><h1>{adminMode ? "A private door to public trust." : "One identity for the quiet side of the web."}</h1><p>{adminMode ? "Verify Owner access before reviewing members and moderating conversations." : "Sign in once, then move between the blog, your profile, and every SilentFlare subsite."}</p></div>
 				<a class="story-link" href="https://blog.silentflare.com/">Return to the blog</a>
 			</div>
 
 			<div class="auth-form">
-				{#if step === "checking" || step === "redirecting"}
+				{#if adminMode}
+					<AdminOwnerAuth {apiBase} {returnUrl} />
+				{:else if step === "checking" || step === "redirecting"}
 					<div class="auth-loading"><span></span><p>{step === "checking" ? "Checking your session…" : "Returning you safely…"}</p></div>
 				{:else if step === "method"}
 					<MethodSelectPanel
@@ -176,6 +185,7 @@ onMount(() => void bootstrap());
 	:global(.dark) .auth-story { border-color: #2a3948; color: #edf3f8; background: #19232f; }
 	:global(.dark) .story-wordmark { color: #edf3f8; }
 	:global(.dark) .story-copy p { color: #aab7c3; }
+	.auth-story.admin-story { background: #e8f3fc; }
 	@media (min-width: 768px) { .auth-stage { padding: 1.5rem; } .auth-main { padding: 2rem 0; } .auth-form { padding: 2.5rem; } }
 	@media (min-width: 1024px) { .auth-main { padding: 3rem 0 2rem; } .auth-shell { grid-template-columns: minmax(17rem, 2fr) minmax(0, 3fr); align-items: stretch; } .auth-story { order: 1; min-height: 28rem; padding: 2.5rem; border-top: 0; border-right: 1px solid #dce6ee; box-shadow: inset .25rem 0 #4b9fe8; } .story-copy h1 { font-size: 2.4rem; } .auth-form { order: 2; padding: 3rem; } }
 	@keyframes spin { to { transform: rotate(360deg); } }

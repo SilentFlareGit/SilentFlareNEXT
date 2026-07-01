@@ -83,6 +83,7 @@ WEB_LOGIN_ATTEMPTS = int(os.getenv("WEB_LOGIN_ATTEMPTS", "5"))
 WEB_LOGIN_WINDOW_SECONDS = int(os.getenv("WEB_LOGIN_WINDOW_SECONDS", "900"))
 WEB_LOGIN_SESSION_EPOCH = os.getenv("WEB_LOGIN_SESSION_EPOCH", "")
 SESSION_COOKIE = "sf_bot_session"
+BOT_COOKIE_DOMAIN = os.getenv("BOT_COOKIE_DOMAIN", ".silentflare.com")
 ACCOUNT_SESSION_COOKIE = os.getenv("ACCOUNT_SESSION_COOKIE_NAME", "sf_account_session")
 ACCOUNT_SESSION_SECRET = os.getenv("SESSION_SECRET") or os.getenv("ACCOUNT_SESSION_SECRET", "")
 ACCOUNT_COOKIE_DOMAIN = os.getenv("ACCOUNT_COOKIE_DOMAIN", "")
@@ -365,6 +366,7 @@ def create_session(response: Response, bot_id: str) -> dict[str, str]:
 		samesite="none" if WEB_COOKIE_SECURE else "lax",
 		max_age=WEB_SESSION_TTL,
 		path="/",
+		domain=BOT_COOKIE_DOMAIN or None,
 	)
 	return {"bot_id": bot_id, "csrf": csrf}
 
@@ -385,6 +387,7 @@ def destroy_session(request: Request, response: Response) -> None:
 		secure=WEB_COOKIE_SECURE,
 		samesite="none" if WEB_COOKIE_SECURE else "lax",
 		path="/",
+		domain=BOT_COOKIE_DOMAIN or None,
 	)
 
 
@@ -2709,8 +2712,13 @@ def health() -> dict[str, Any]:
 
 
 @app.get("/auth/options")
-def auth_options() -> dict[str, Any]:
-	telegram_ready = any(bool(telegram_auth_config(bot["id"])["token"]) for bot in AUTH_TARGETS)
+def auth_options(bot_id: str = "") -> dict[str, Any]:
+	target = ensure_bot(bot_id) if bot_id else None
+	telegram_ready = (
+		bool(telegram_auth_config(target["id"])["token"])
+		if target
+		else any(bool(telegram_auth_config(bot["id"])["token"]) for bot in AUTH_TARGETS)
+	)
 	return {
 		"methods": {
 			"telegram": telegram_ready,
