@@ -168,10 +168,15 @@ Current admin behavior:
 - Admin login uses the existing bot-style owner auth surface through `SilentFlare Admin`.
 - Admin supports Telegram bot approval and optional 2FA only.
 - If 2FA is not configured, the UI should show it as unavailable instead of presenting a usable 2FA form.
+- Admin is a standalone, light-only workspace styled to match the Blog's pale blue/white visual language. `src/pages/admin/index.astro` must not add the `dark` class, read the Blog theme preference, or apply a dark body background.
+- The unauthenticated Admin screen uses one responsive owner-console shell: a contextual account/moderation panel beside the Telegram/Authenticator sign-in panel on wide screens, then a single-column, full-width layout on tablet and mobile. Keep the sign-in controls touch-friendly and verify 2048px desktop, tablet, and 390px mobile layouts without horizontal page overflow.
+- The authenticated workspace provides compact Users and Comments navigation, account totals, active-session and disabled-user metrics, search/filter controls, a responsive user table, comment moderation rows, and a user-detail drawer. On narrow screens, data tables may scroll inside their own bounded container, but the document itself must not overflow horizontally.
 - Admin must not show bot backup, chat, health-dashboard, or unrelated operational controls.
 - Admin data actions require the admin session plus `X-CSRF-Token`.
 - Admin user records include profile, security-state flags, registration/last-seen timestamps, admin-only registration and last-seen IP audit values, active-session counts, and comment counts. Historical rows show unavailable values until a new login or comment supplies them.
+- User detail includes email, username, display name, avatar, bio, region, account role/status, email verification, password-present flag, 2FA state, TOS version/time, registration and last-seen IP/time, last user agent, active-session count, and recent comments. Comment moderation includes the author's email/display name, post slug, status, timestamps, content, and recorded creation IP.
 - Raw audit IP values are restricted to the owner-only Admin API. Public account/session/comment responses must never expose them, and Admin responses must never include password hashes, salts, TOTP secrets, session hashes, cookies, or verification secrets.
+- New registrations write `registration_ip`, `last_seen_ip`, `last_seen_at`, and `last_user_agent`; successful account-session creation refreshes last-seen audit data; new comments write `created_ip`. `migrations/0005_admin_user_audit.sql` is the schema reference, while `ensure_account_db()` applies the equivalent idempotent runtime changes.
 - `SilentFlare Admin` may intentionally share the DB Backup Telegram bot credentials. Webhook approval must compare the credential set rather than reject a challenge merely because its logical `bot_id` differs.
 - Telegram approval polling must be serialized. Once an approved response is received, stop the interval before loading Admin data so an overlapping request cannot consume the already-finished challenge and replace a successful login with `Login request expired`.
 
@@ -200,12 +205,12 @@ Important account FastAPI endpoints:
 Important admin FastAPI endpoints:
 
 - `GET /admin/status`: admin session and local account/comment database status.
-- `GET /admin/users`: list public users without password hashes or salts.
+- `GET /admin/users`: list public users with owner-only profile, security-state, audit, session-count, and comment-count fields, without authentication secrets.
 - `GET /admin/users/{user_id}`: return an owner-only user record plus up to 100 recent comments, including available audit IP metadata but excluding all authentication secrets.
 - `POST /admin/users/{user_id}/disable`: soft-disable a user.
 - `POST /admin/users/{user_id}/enable`: re-enable a user.
 - `POST /admin/users/{user_id}/role`: set `user` or `admin`.
-- `GET /admin/comments`: list comments with usernames but not user emails.
+- `GET /admin/comments`: list comments with username, display name, email, post slug, moderation state, timestamps, content, and available creation IP audit data.
 - `POST /admin/comments/{comment_id}/delete`: soft-delete a comment.
 - `POST /admin/comments/{comment_id}/restore`: restore a soft-deleted comment.
 
