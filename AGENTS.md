@@ -123,7 +123,7 @@ Do not print values from `/opt/silentflare/api/api.env`. Reading variable names 
 SilentFlare authentication, account, and admin features are split by audience:
 
 - `auth.silentflare.com`: the canonical public-user authentication frontend. It accepts a server-validated `return_url`, runs email-code/password/2FA login, and returns the browser to an allowed SilentFlare subdomain.
-- `accounts.silentflare.com`: public-user registration, email verification, password choice, 2FA enrollment, avatar, display name, display region, bio, and security settings. When no account session exists it must show the same shared login gateway as Auth, with registration available inside that gateway.
+- `accounts.silentflare.com`: the only public-user registration frontend, plus authenticated profile and security settings. A normal unauthenticated visit must redirect to Auth; Accounts may render registration only for the explicit `?register=1` entry or an email verification link.
 - `admin.silentflare.com`: owner/admin console for public user management and comment management only.
 - `api.silentflare.com`: FastAPI backend that supports both surfaces.
 - `blog.silentflare.com`: public blog renderer. Do not put account forms or admin data management directly into the blog layout.
@@ -132,7 +132,8 @@ Front end sources:
 
 - Auth page: `src/pages/auth/index.astro`.
 - Auth app: `src/components/auth/AuthApp.svelte` and `src/components/auth/panels/`.
-- Shared registration flow: `src/components/auth/panels/RegistrationPanel.svelte`; Auth and unauthenticated Accounts must use this component rather than maintaining separate registration forms.
+- Accounts registration shell: `src/components/account/RegistrationApp.svelte`.
+- Registration flow: `src/components/auth/panels/RegistrationPanel.svelte`; it is rendered only on Accounts even though it lives with the shared authentication panel primitives.
 - Accounts page: `src/pages/accounts/index.astro`.
 - Accounts app: `src/components/account/AccountApp.svelte`.
 - Accounts is a standalone account workspace. Do not restore the public blog navbar/banner above it; navigation back to the blog should remain a compact in-workspace wordmark.
@@ -144,11 +145,11 @@ Front end sources:
 Current account behavior:
 
 - The blog navbar queries `GET /auth/session`; unauthenticated users go to `auth.silentflare.com` with the current URL as `return_url`, while authenticated users go to Accounts.
-- Direct unauthenticated visits to Accounts render the shared Auth login panel first. The create-account command switches the same card to the shared registration flow; do not restore a separate full-page Accounts registration layout.
+- Direct unauthenticated visits to Accounts redirect to `auth.silentflare.com` with Accounts as the safe `return_url`. Auth's create-account command navigates to `accounts.silentflare.com/?register=1`; Auth must not render registration itself.
 - Comment prompts use the same auth redirect. Comment writes require the all-site session, Turnstile, and `X-CSRF-Token`.
 - `return_url` must be HTTPS and its hostname must be exactly `silentflare.com` or end with `.silentflare.com`; credentials, explicit ports, lookalike suffixes, and external hosts fall back to Accounts.
 - Login supports email code, email/password, and username/password. Google, GitHub, and Telegram have reserved UI entries and API routes but are unavailable until provider credentials and callback handling are implemented.
-- Registration is email-first. A user may keep email-code-only login or set a password and may enable or skip 2FA. Completion returns the shared card to its login panel so the new user explicitly signs in; registration never issues a session.
+- Registration is email-first and runs only on Accounts. A user may keep email-code-only login or set a password and may enable or skip 2FA. Completion redirects to Auth so the new user explicitly signs in; registration never issues a session.
 - Users with 2FA enter a database-backed pending login. The API signs the all-site session only after TOTP succeeds.
 - Account sessions use an opaque random token in an `HttpOnly`, `Secure`, `SameSite=Lax`, `Domain=.silentflare.com` cookie. The database stores only an HMAC digest. Do not store account tokens in web storage.
 - Session-backed writes require the derived CSRF token from `GET /auth/session`. Logout deletes the database session and clears the domain cookie.

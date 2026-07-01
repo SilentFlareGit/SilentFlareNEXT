@@ -3,7 +3,6 @@ import { onMount } from "svelte";
 import EmailCodePanel from "./panels/EmailCodePanel.svelte";
 import MethodSelectPanel from "./panels/MethodSelectPanel.svelte";
 import PasswordPanel from "./panels/PasswordPanel.svelte";
-import RegistrationPanel from "./panels/RegistrationPanel.svelte";
 import TwoFAPanel from "./panels/TwoFAPanel.svelte";
 
 type AuthUser = {
@@ -13,26 +12,14 @@ type AuthUser = {
 	displayName: string;
 };
 
-let { apiBase = "/auth-api", surface = "auth" } = $props<{
-	apiBase?: string;
-	surface?: "auth" | "accounts";
-}>();
+let { apiBase = "/auth-api" } = $props<{ apiBase?: string }>();
 let step = $state<
-	| "checking"
-	| "method"
-	| "email"
-	| "password"
-	| "register"
-	| "2fa"
-	| "redirecting"
+	"checking" | "method" | "email" | "password" | "2fa" | "redirecting"
 >("checking");
 let returnUrl = $state("https://accounts.silentflare.com/");
 let pendingId = $state("");
 let error = $state("");
 let notice = $state("");
-let emailConfigured = $state(false);
-let tosVersion = $state("");
-let registrationVerifyToken = $state("");
 
 async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
 	const response = await fetch(`${apiBase}${path}`, {
@@ -66,14 +53,12 @@ async function bootstrap() {
 	const params = new URLSearchParams(window.location.search);
 	await resolveReturnUrl(params.get("return_url") ?? "");
 	const verifyToken = params.get("verify_token") ?? "";
+	if (params.get("registration") === "complete")
+		notice = "Account created. Sign in with your new credentials.";
 	try {
 		const session = await apiFetch<{
 			authenticated: boolean;
-			emailConfigured: boolean;
-			tosVersion: string;
 		}>("/auth/session");
-		emailConfigured = session.emailConfigured;
-		tosVersion = session.tosVersion;
 		if (session.authenticated) {
 			step = "redirecting";
 			window.location.replace(returnUrl);
@@ -82,12 +67,7 @@ async function bootstrap() {
 	} catch {
 		// The login screen remains usable and will surface API errors on submit.
 	}
-	if (verifyToken && surface === "accounts") {
-		registrationVerifyToken = verifyToken;
-		step = "register";
-		return;
-	}
-	if (verifyToken && surface === "auth") {
+	if (verifyToken) {
 		try {
 			const result = await apiFetch<{
 				requires_2fa?: boolean;
@@ -122,13 +102,6 @@ async function bootstrap() {
 	step = "method";
 }
 
-function finishRegistration() {
-	notice = "Account created. Sign in with your new credentials.";
-	error = "";
-	registrationVerifyToken = "";
-	step = "method";
-}
-
 onMount(() => void bootstrap());
 </script>
 
@@ -148,7 +121,7 @@ onMount(() => void bootstrap());
 					<MethodSelectPanel
 						onSelectEmailCode={() => { step = "email"; error = ""; }}
 						onSelectPassword={() => { step = "password"; error = ""; }}
-						onRegister={() => { step = "register"; error = ""; notice = ""; }}
+						onRegister={() => window.location.assign("https://accounts.silentflare.com/?register=1")}
 						{notice}
 						{error}
 					/>
@@ -168,15 +141,6 @@ onMount(() => void bootstrap());
 						on2FARequired={(id) => { pendingId = id; step = "2fa"; }}
 						onError={(message) => (error = message)}
 						onBack={() => { step = "method"; error = ""; }}
-					/>
-				{:else if step === "register"}
-					<RegistrationPanel
-						{apiBase}
-						{emailConfigured}
-						{tosVersion}
-						verifyToken={registrationVerifyToken}
-						onBack={() => { step = "method"; error = ""; registrationVerifyToken = ""; }}
-						onComplete={finishRegistration}
 					/>
 				{:else}
 					<TwoFAPanel

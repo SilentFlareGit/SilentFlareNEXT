@@ -1,7 +1,7 @@
 <script lang="ts">
 import Icon from "@iconify/svelte";
 import { onMount } from "svelte";
-import AuthApp from "../auth/AuthApp.svelte";
+import RegistrationApp from "./RegistrationApp.svelte";
 
 type AccountUser = {
 	id: string;
@@ -18,8 +18,13 @@ type AccountUser = {
 
 let { apiBase = "/accounts-api" } = $props<{ apiBase?: string }>();
 let loading = $state(true);
+let redirecting = $state(false);
+let registrationMode = $state(false);
 let user = $state<AccountUser | null>(null);
 let csrf = $state("");
+let emailConfigured = $state(false);
+let tosVersion = $state("");
+let registrationVerifyToken = $state("");
 let submitting = $state(false);
 let avatarUploading = $state(false);
 let error = $state("");
@@ -74,18 +79,32 @@ function clearMessages() {
 }
 
 async function loadSession() {
+	const params = new URLSearchParams(window.location.search);
+	const wantsRegistration = params.get("register") === "1";
+	registrationVerifyToken = params.get("verify_token") ?? "";
 	try {
 		const result = await apiFetch<{
 			authenticated: boolean;
 			user: AccountUser | null;
 			csrf?: string;
+			emailConfigured: boolean;
+			tosVersion: string;
 		}>("/auth/session");
 		csrf = result.csrf ?? "";
+		emailConfigured = result.emailConfigured;
+		tosVersion = result.tosVersion;
 		if (result.authenticated && result.user) {
 			const profile = await apiFetch<{ user: AccountUser }>(
 				"/accounts/profile",
 			);
 			applyUser(profile.user);
+		} else if (wantsRegistration || registrationVerifyToken) {
+			registrationMode = true;
+		} else {
+			redirecting = true;
+			window.location.replace(
+				"https://auth.silentflare.com/?return_url=https%3A%2F%2Faccounts.silentflare.com%2F",
+			);
 		}
 	} catch (reason) {
 		error =
@@ -235,7 +254,7 @@ async function logout() {
 onMount(() => void loadSession());
 </script>
 
-	{#if loading}
+	{#if loading || redirecting}
 	<div class="accounts-stage">
 		<div class="account-loading" aria-live="polite"><span></span><p>Loading account…</p></div>
 	</div>
@@ -322,8 +341,13 @@ onMount(() => void loadSession());
 		</main>
 		<footer class="accounts-footer"><a href="https://blog.silentflare.com/">SilentFlare</a><span>·</span><a href="https://blog.silentflare.com/rss.xml">RSS</a><span>·</span><a href="https://tos.silentflare.com/">Terms</a></footer>
 	</div>
-	{:else}
-		<AuthApp apiBase={apiBase} surface="accounts" />
+	{:else if registrationMode}
+		<RegistrationApp
+			{apiBase}
+			{emailConfigured}
+			{tosVersion}
+			verifyToken={registrationVerifyToken}
+		/>
 	{/if}
 
 <style>
