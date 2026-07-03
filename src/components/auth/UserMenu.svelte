@@ -102,7 +102,11 @@ const accountInitial = $derived(accountLabel.slice(0, 1).toUpperCase());
 	}
 
 	.login-link {
-		color: color-mix(in srgb, currentColor 78%, transparent);
+		color: rgb(0 0 0 / 72%);
+	}
+
+	:global(.dark) .login-link {
+		color: rgb(255 255 255 / 72%);
 	}
 
 	.login-link:hover {

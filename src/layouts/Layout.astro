@@ -155,7 +155,7 @@ const bannerOffset =
 		<link rel="alternate" type="application/rss+xml" title={profileConfig.name} href={`${Astro.site}rss.xml`}/>
 
 	</head>
-	<body class=" min-h-screen transition " class:list={[{"lg:is-home": isHomePage, "enable-banner": bannerClassesEnabled}]}
+	<body class="min-h-screen bg-[var(--page-bg)] transition" class:list={[{"lg:is-home": isHomePage, "enable-banner": bannerClassesEnabled}]}
 		  data-overlayscrollbars-initialize
 	>
 		<ConfigCarrier></ConfigCarrier>
