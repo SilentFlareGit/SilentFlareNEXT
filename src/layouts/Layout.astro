@@ -409,6 +409,11 @@ const setup = () => {
 		}
 	})
 	window.swup.hooks.on('content:replace', initCustomScrollbar)
+	window.swup.hooks.on('content:focus', (visit: {a11y?: {focus?: string | HTMLElement}}) => {
+		if (visit.a11y) {
+			visit.a11y.focus = '#swup-container'
+		}
+	})
 	window.swup.hooks.on('visit:start', (visit: {to: {url: string}}) => {
 		// change banner height immediately when a link is clicked
 		const bodyElement = document.querySelector('body')
@@ -434,7 +439,7 @@ const setup = () => {
 		// hide the temp high element when the transition is done
 		const heightExtend = document.getElementById('page-height-extend')
 		if (heightExtend) {
-			heightExtend.classList.remove('hidden')
+			heightExtend.classList.add('hidden')
 		}
 	});
 	window.swup.hooks.on('visit:end', (_visit: {to: {url: string}}) => {
