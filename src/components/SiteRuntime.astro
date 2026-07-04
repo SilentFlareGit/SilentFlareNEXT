@@ -37,7 +37,7 @@ function safeHtml(source: string) {
 	return template.innerHTML;
 }
 
-function apply(settings: SiteSettings) {
+function applyContent(settings: SiteSettings) {
 	if (!settings.updated_at) return;
 	const isLegacyAsset = (value: string) => value.startsWith("/assets/images/");
 	document.querySelectorAll<HTMLElement>("[data-site-name]").forEach((node) => { node.textContent = settings.name; });
@@ -48,16 +48,15 @@ function apply(settings: SiteSettings) {
 	});
 	const about = document.querySelector<HTMLElement>("[data-site-about]");
 	if (about && settings.about_markdown) about.innerHTML = safeHtml(settings.about_markdown);
+}
 
+async function applyBanner(settings: SiteSettings) {
+	if (!settings.updated_at) return;
+	const isLegacyAsset = (value: string) => value.startsWith("/assets/images/");
 	const wrapper = document.querySelector<HTMLElement>("#banner-wrapper");
 	if (!wrapper || !settings.backgrounds?.length) return;
 	const usableBackgrounds = settings.backgrounds.filter((background) => !isLegacyAsset(background.url));
 	if (!usableBackgrounds.length) return;
-	const oldBanner = wrapper.querySelector("#banner");
-	oldBanner?.remove();
-	document.querySelector<HTMLElement>("#banner-credit")?.remove();
-	wrapper.querySelectorAll(".site-background-layer").forEach((layer) => layer.remove());
-	if (rotationTimer) window.clearInterval(rotationTimer);
 	let active = 0;
 	const layers = usableBackgrounds.map((background, index) => {
 		const media = document.createElement(background.type === "video" ? "video" : "img");
@@ -78,6 +77,21 @@ function apply(settings: SiteSettings) {
 		wrapper.append(media);
 		return media;
 	});
+	const firstLayer = layers[0];
+	const firstLayerReady = firstLayer instanceof HTMLImageElement
+		? firstLayer.complete
+		: firstLayer instanceof HTMLVideoElement && firstLayer.readyState >= 2;
+	if (firstLayer && !firstLayerReady) {
+		await new Promise<void>((resolve) => {
+			const done = () => resolve();
+			firstLayer.addEventListener("load", done, { once: true });
+			firstLayer.addEventListener("canplay", done, { once: true });
+			firstLayer.addEventListener("error", done, { once: true });
+		});
+	}
+	wrapper.querySelector("#banner")?.remove();
+	document.querySelector<HTMLElement>("#banner-credit")?.remove();
+	if (rotationTimer) window.clearInterval(rotationTimer);
 	if (layers.length > 1) rotationTimer = window.setInterval(() => {
 		layers[active]?.classList.remove("is-active");
 		active = (active + 1) % layers.length;
@@ -92,7 +106,8 @@ async function load() {
 		const body = await response.json();
 		const settings = body.settings as SiteSettings;
 		currentSettings = settings;
-		apply(settings);
+		applyContent(settings);
+		void applyBanner(settings);
 	} catch (error) {
 		console.warn("Site customization could not be loaded.", error);
 	}
@@ -101,7 +116,7 @@ async function load() {
 void load();
 const setupSwup = () => {
 	window.swup.hooks.on("page:view", () => {
-		if (currentSettings) apply(currentSettings);
+		if (currentSettings) applyContent(currentSettings);
 		else void load();
 	});
 };
