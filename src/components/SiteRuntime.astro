@@ -18,6 +18,8 @@ type SiteSettings = {
 
 const API = "https://api.silentflare.com/site/settings";
 const markdown = new MarkdownIt({ html: false, linkify: true, typographer: true });
+let currentSettings: SiteSettings | null = null;
+let rotationTimer: number | undefined;
 
 function safeHtml(source: string) {
 	const template = document.createElement("template");
@@ -54,6 +56,8 @@ function apply(settings: SiteSettings) {
 	const oldBanner = wrapper.querySelector("#banner");
 	oldBanner?.remove();
 	document.querySelector<HTMLElement>("#banner-credit")?.remove();
+	wrapper.querySelectorAll(".site-background-layer").forEach((layer) => layer.remove());
+	if (rotationTimer) window.clearInterval(rotationTimer);
 	let active = 0;
 	const layers = usableBackgrounds.map((background, index) => {
 		const media = document.createElement(background.type === "video" ? "video" : "img");
@@ -74,7 +78,7 @@ function apply(settings: SiteSettings) {
 		wrapper.append(media);
 		return media;
 	});
-	if (layers.length > 1) window.setInterval(() => {
+	if (layers.length > 1) rotationTimer = window.setInterval(() => {
 		layers[active]?.classList.remove("is-active");
 		active = (active + 1) % layers.length;
 		layers[active]?.classList.add("is-active");
@@ -86,14 +90,23 @@ async function load() {
 		const response = await fetch(API, { headers: { Accept: "application/json" } });
 		if (!response.ok) return;
 		const body = await response.json();
-		apply(body.settings);
+		const settings = body.settings as SiteSettings;
+		currentSettings = settings;
+		apply(settings);
 	} catch (error) {
 		console.warn("Site customization could not be loaded.", error);
 	}
 }
 
 void load();
-document.addEventListener("swup:contentReplaced", () => void load());
+const setupSwup = () => {
+	window.swup.hooks.on("page:view", () => {
+		if (currentSettings) apply(currentSettings);
+		else void load();
+	});
+};
+if (window.swup?.hooks) setupSwup();
+else document.addEventListener("swup:enable", setupSwup, { once: true });
 </script>
 
 <style is:global>
