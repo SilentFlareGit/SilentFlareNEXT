@@ -1,0 +1,99 @@
+<script>
+import MarkdownIt from "markdown-it";
+
+type Background = {
+	id: string;
+	type: "image" | "video";
+	url: string;
+	position?: string;
+};
+type SiteSettings = {
+	name: string;
+	bio: string;
+	avatar_url: string;
+	about_markdown: string;
+	backgrounds: Background[];
+	updated_at?: string | null;
+};
+
+const API = "https://api.silentflare.com/site/settings";
+const markdown = new MarkdownIt({ html: false, linkify: true, typographer: true });
+
+function safeHtml(source: string) {
+	const template = document.createElement("template");
+	template.innerHTML = markdown.render(source);
+	for (const element of template.content.querySelectorAll("*")) {
+		for (const attribute of [...element.attributes]) {
+			if (attribute.name.startsWith("on")) element.removeAttribute(attribute.name);
+		}
+		if (element instanceof HTMLAnchorElement) {
+			const parsed = new URL(element.href, window.location.origin);
+			if (!['http:', 'https:', 'mailto:'].includes(parsed.protocol)) element.removeAttribute("href");
+			element.rel = "noopener noreferrer";
+		}
+	}
+	return template.innerHTML;
+}
+
+function apply(settings: SiteSettings) {
+	if (!settings.updated_at) return;
+	document.querySelectorAll<HTMLElement>("[data-site-name]").forEach((node) => { node.textContent = settings.name; });
+	document.querySelectorAll<HTMLElement>("[data-site-bio]").forEach((node) => { node.textContent = settings.bio; });
+	document.querySelectorAll<HTMLElement>("[data-site-avatar]").forEach((node) => {
+		const image = node instanceof HTMLImageElement ? node : node.querySelector("img");
+		if (image) image.src = settings.avatar_url;
+	});
+	const about = document.querySelector<HTMLElement>("[data-site-about]");
+	if (about && settings.about_markdown) about.innerHTML = safeHtml(settings.about_markdown);
+
+	const wrapper = document.querySelector<HTMLElement>("#banner-wrapper");
+	if (!wrapper || !settings.backgrounds?.length) return;
+	const oldBanner = wrapper.querySelector("#banner");
+	oldBanner?.remove();
+	let active = 0;
+	const layers = settings.backgrounds.map((background, index) => {
+		const media = document.createElement(background.type === "video" ? "video" : "img");
+		media.className = "site-background-layer";
+		media.style.objectPosition = background.position || "center";
+		media.setAttribute("aria-hidden", "true");
+		if (media instanceof HTMLVideoElement) {
+			media.src = background.url;
+			media.autoplay = true;
+			media.muted = true;
+			media.loop = true;
+			media.playsInline = true;
+		} else {
+			media.src = background.url;
+			media.alt = "";
+		}
+		media.classList.toggle("is-active", index === 0);
+		wrapper.append(media);
+		return media;
+	});
+	if (layers.length > 1) window.setInterval(() => {
+		layers[active]?.classList.remove("is-active");
+		active = (active + 1) % layers.length;
+		layers[active]?.classList.add("is-active");
+	}, 9000);
+}
+
+async function load() {
+	try {
+		const response = await fetch(API, { headers: { Accept: "application/json" } });
+		if (!response.ok) return;
+		const body = await response.json();
+		apply(body.settings);
+	} catch (error) {
+		console.warn("Site customization could not be loaded.", error);
+	}
+}
+
+void load();
+document.addEventListener("swup:contentReplaced", () => void load());
+</script>
+
+<style is:global>
+	.site-background-layer { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; opacity:0; transform:scale(1.025); transition:opacity 1.2s ease, transform 9s ease; }
+	.site-background-layer.is-active { opacity:1; transform:scale(1); }
+	@media (prefers-reduced-motion: reduce) { .site-background-layer { transition:none; } }
+</style>

@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 APP_NAME = "SilentFlare Bot API"
@@ -95,6 +96,11 @@ ACCOUNT_AVATAR_PUBLIC_BASE = os.getenv(
 	"ACCOUNT_AVATAR_PUBLIC_BASE", "https://api.silentflare.com/account-avatars"
 ).rstrip("/")
 ACCOUNT_AVATAR_MAX_BYTES = int(os.getenv("ACCOUNT_AVATAR_MAX_BYTES", str(2 * 1024 * 1024)))
+SITE_ASSET_DIR = Path(os.getenv("SITE_ASSET_DIR", "/opt/silentflare/api/uploads/site"))
+SITE_ASSET_PUBLIC_BASE = os.getenv(
+	"SITE_ASSET_PUBLIC_BASE", "https://api.silentflare.com/site-assets"
+).rstrip("/")
+SITE_ASSET_MAX_BYTES = int(os.getenv("SITE_ASSET_MAX_BYTES", str(12 * 1024 * 1024)))
 IP_GEOLOCATION_URL_TEMPLATE = os.getenv(
 	"IP_GEOLOCATION_URL_TEMPLATE", "https://ipwho.is/{ip}"
 )
@@ -140,7 +146,7 @@ app.add_middleware(
 		"http://auth.silentflare.com",
 	],
 	allow_credentials=True,
-	allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+	allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
 	allow_headers=["Content-Type", "X-Admin-Token", "X-CSRF-Token"],
 )
 
@@ -232,6 +238,23 @@ class BackupSchedulePayload(BaseModel):
 
 class UserRolePayload(BaseModel):
 	role: str
+
+
+class SiteBackgroundPayload(BaseModel):
+	id: str
+	type: str
+	url: str
+	position: str = "center"
+	credit_text: str = ""
+	credit_url: str = ""
+
+
+class SiteSettingsPayload(BaseModel):
+	name: str
+	bio: str
+	avatar_url: str
+	about_markdown: str
+	backgrounds: list[SiteBackgroundPayload]
 
 
 class AccountRegisterPayload(BaseModel):
@@ -890,6 +913,11 @@ def ensure_account_db() -> None:
 			CREATE INDEX IF NOT EXISTS idx_comments_post_slug ON comments(post_slug);
 			CREATE INDEX IF NOT EXISTS idx_comments_user_id ON comments(user_id);
 			CREATE INDEX IF NOT EXISTS idx_comments_created_at ON comments(created_at);
+			CREATE TABLE IF NOT EXISTS site_settings (
+				id INTEGER PRIMARY KEY CHECK (id = 1),
+				settings_json TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
 			"""
 		)
 		for column_name, column_type in (
@@ -3003,6 +3031,100 @@ def comment_delete(
 		[now, now, comment_id],
 	)
 	return {"ok": True}
+
+
+def default_site_settings() -> dict[str, Any]:
+	return {
+		"name": "SilentFlare",
+		"bio": "Technical practice, product thinking, and sustainable building.",
+		"avatar_url": "/assets/images/demo-avatar.png",
+		"about_markdown": "# About SilentFlare\n\nSilentFlare records technical practice, product thinking, and sustainable building.",
+		"backgrounds": [{
+			"id": "default-banner", "type": "image",
+			"url": "/assets/images/demo-banner-online.webp", "position": "center",
+			"credit_text": "", "credit_url": "",
+		}],
+	}
+
+
+def read_site_settings() -> dict[str, Any]:
+	rows = local_db_query("SELECT settings_json, updated_at FROM site_settings WHERE id = 1")
+	if not rows:
+		return {**default_site_settings(), "updated_at": None}
+	try:
+		settings = json.loads(rows[0]["settings_json"])
+	except (TypeError, json.JSONDecodeError):
+		settings = default_site_settings()
+	return {**default_site_settings(), **settings, "updated_at": rows[0]["updated_at"]}
+
+
+@app.get("/site/settings")
+def site_settings_public() -> dict[str, Any]:
+	return {"ok": True, "settings": read_site_settings()}
+
+
+@app.get("/site-assets/{filename}")
+def site_asset_file(filename: str) -> FileResponse:
+	if Path(filename).name != filename:
+		raise HTTPException(status_code=404, detail="Asset not found")
+	path = SITE_ASSET_DIR / filename
+	if not path.is_file():
+		raise HTTPException(status_code=404, detail="Asset not found")
+	return FileResponse(path, headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
+@app.get("/admin/site-settings")
+def admin_site_settings(request: Request) -> dict[str, Any]:
+	require_admin_console_session(request)
+	return {"ok": True, "settings": read_site_settings()}
+
+
+@app.put("/admin/site-settings")
+def admin_site_settings_update(
+	payload: SiteSettingsPayload, request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	require_admin_console_session(request, x_csrf_token=x_csrf_token, require_csrf=True)
+	settings = payload.model_dump()
+	settings["name"] = settings["name"].strip()[:80]
+	settings["bio"] = settings["bio"].strip()[:300]
+	settings["about_markdown"] = settings["about_markdown"].strip()[:30000]
+	settings["backgrounds"] = settings["backgrounds"][:12]
+	if not settings["name"] or not settings["backgrounds"]:
+		raise HTTPException(status_code=400, detail="Name and at least one background are required")
+	for background in settings["backgrounds"]:
+		if background["type"] not in {"image", "video"}:
+			raise HTTPException(status_code=400, detail="Background type must be image or video")
+		if not background["url"].startswith(("https://", "/")):
+			raise HTTPException(status_code=400, detail="Background URL must use HTTPS")
+	now = utc_now()
+	local_db_query(
+		"INSERT INTO site_settings (id, settings_json, updated_at) VALUES (1, ?, ?) "
+		"ON CONFLICT(id) DO UPDATE SET settings_json = excluded.settings_json, updated_at = excluded.updated_at",
+		[json.dumps(settings, ensure_ascii=False), now],
+	)
+	return {"ok": True, "settings": {**settings, "updated_at": now}}
+
+
+@app.post("/admin/site-assets")
+async def admin_site_asset_upload(
+	request: Request, x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	require_admin_console_session(request, x_csrf_token=x_csrf_token, require_csrf=True)
+	content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+	extensions = {
+		"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp",
+		"image/gif": ".gif", "video/mp4": ".mp4", "video/webm": ".webm",
+	}
+	if content_type not in extensions:
+		raise HTTPException(status_code=415, detail="Use PNG, JPEG, WebP, GIF, MP4, or WebM")
+	data = await request.body()
+	if not data or len(data) > SITE_ASSET_MAX_BYTES:
+		raise HTTPException(status_code=413, detail="Asset is empty or exceeds the upload limit")
+	SITE_ASSET_DIR.mkdir(parents=True, exist_ok=True)
+	filename = f"{uuid.uuid4().hex}{extensions[content_type]}"
+	(SITE_ASSET_DIR / filename).write_bytes(data)
+	return {"ok": True, "url": f"{SITE_ASSET_PUBLIC_BASE}/{filename}", "type": "video" if content_type.startswith("video/") else "image"}
 
 
 @app.get("/admin/status")
