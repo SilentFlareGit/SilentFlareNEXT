@@ -145,6 +145,8 @@ Front end sources:
 Current account behavior:
 
 - The blog navbar queries `GET /auth/session`; unauthenticated users go to `auth.silentflare.com` with the current URL as `return_url`, while authenticated users go to Accounts.
+- When unauthenticated, the blog navbar shows separate `Sign in` and `Join` entries. `Sign in` preserves the current blog URL as the Auth `return_url`; `Join` goes directly to `https://accounts.silentflare.com/?register=1`. Keep both entries readable in light and dark themes.
+- When authenticated, `src/components/auth/UserMenu.svelte` shows the account avatar plus display name, falling back to username and then an initial when profile data is incomplete. The whole account entry links to `https://accounts.silentflare.com/`.
 - Direct unauthenticated visits to Accounts redirect to `auth.silentflare.com` with Accounts as the safe `return_url`. Auth's create-account command navigates to `accounts.silentflare.com/?register=1`; Auth must not render registration itself.
 - Comment prompts use the same auth redirect. Comment writes require the all-site session, Turnstile, and `X-CSRF-Token`.
 - `return_url` must be HTTPS and its hostname must be exactly `silentflare.com` or end with `.silentflare.com`; credentials, explicit ports, lookalike suffixes, and external hosts fall back to Accounts.
@@ -162,6 +164,12 @@ Current account behavior:
 - Region is refreshed from the current request IP when Accounts loads. Prefer Cloudflare location headers; when city/country names are absent, the API may use the configured HTTPS geolocation endpoint. Never accept a user-entered region value.
 - IP-derived region must never be used as an authentication, authorization, 2FA, or risk decision.
 - Account profile content is stored in local user columns: `display_name`, `avatar_url`, `bio`, `display_region`, and `display_region_code`.
+
+Current blog navigation and theme behavior:
+
+- Swup accessibility remains enabled. After navigation, the `content:focus` hook must focus `#swup-container`, which has `tabindex="-1"`, rather than focusing `body`; this prevents a full-page native focus outline while retaining accessible focus management.
+- The temporary `#page-height-extend` element is shown only while a Swup visit is active and must be hidden again on `page:view` and after `visit:end`.
+- Both `html` and `body` use `var(--page-bg)`. Do not leave `body` transparent or hard-code a light background because the absolutely positioned blog layout can otherwise expose a light band in dark mode.
 
 Current admin behavior:
 
