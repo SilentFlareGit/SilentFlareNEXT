@@ -49,7 +49,13 @@ type AdminStatus = {
 	totp_enabled?: boolean;
 };
 
-let { apiBase }: { apiBase: string } = $props();
+let {
+	apiBase,
+	fallbackAssets,
+}: {
+	apiBase: string;
+	fallbackAssets: { avatar: string; banner: string };
+} = $props();
 const ADMIN_BOT_ID = "SilentFlare Admin";
 const apiOrigin = $derived(apiBase.replace(/\/$/, ""));
 let authenticated = $state(false);
@@ -297,7 +303,7 @@ onMount(() => {
 				<form class="filter" onsubmit={(event) => { event.preventDefault(); loadComments(); }}><input class="field" bind:value={postSlugFilter} placeholder="Filter by post slug"/><button class="secondary" type="submit">Apply filter</button></form>
 				<div class="comment-list">{#if loading}<p>Loading comments...</p>{:else}{#each visibleComments as comment}<article><div class="comment-meta"><strong>{comment.display_name || comment.username}</strong><span>{comment.email}</span><i>{comment.status}</i><time>{formatTime(comment.created_at)}</time></div><p>{comment.content}</p><footer><span><Icon icon="material-symbols:article-outline-rounded"/>{comment.post_slug}</span><span><Icon icon="material-symbols:location-on-outline-rounded"/>{comment.created_ip || "IP not recorded"}</span><button class={comment.deleted_at ? "secondary" : "danger-button"} onclick={() => commentAction(comment, comment.deleted_at ? "restore" : "delete")}>{comment.deleted_at ? "Restore" : "Delete"}</button></footer></article>{/each}{/if}</div>
 			{:else}
-				<SiteEditor {apiOrigin} {csrf} />
+				<SiteEditor {apiOrigin} {csrf} {fallbackAssets} />
 			{/if}
 		</section>
 	</div>

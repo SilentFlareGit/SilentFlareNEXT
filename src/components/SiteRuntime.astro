@@ -37,21 +37,25 @@ function safeHtml(source: string) {
 
 function apply(settings: SiteSettings) {
 	if (!settings.updated_at) return;
+	const isLegacyAsset = (value: string) => value.startsWith("/assets/images/");
 	document.querySelectorAll<HTMLElement>("[data-site-name]").forEach((node) => { node.textContent = settings.name; });
 	document.querySelectorAll<HTMLElement>("[data-site-bio]").forEach((node) => { node.textContent = settings.bio; });
 	document.querySelectorAll<HTMLElement>("[data-site-avatar]").forEach((node) => {
 		const image = node instanceof HTMLImageElement ? node : node.querySelector("img");
-		if (image) image.src = settings.avatar_url;
+		if (image && !isLegacyAsset(settings.avatar_url)) image.src = settings.avatar_url;
 	});
 	const about = document.querySelector<HTMLElement>("[data-site-about]");
 	if (about && settings.about_markdown) about.innerHTML = safeHtml(settings.about_markdown);
 
 	const wrapper = document.querySelector<HTMLElement>("#banner-wrapper");
 	if (!wrapper || !settings.backgrounds?.length) return;
+	const usableBackgrounds = settings.backgrounds.filter((background) => !isLegacyAsset(background.url));
+	if (!usableBackgrounds.length) return;
 	const oldBanner = wrapper.querySelector("#banner");
 	oldBanner?.remove();
+	document.querySelector<HTMLElement>("#banner-credit")?.remove();
 	let active = 0;
-	const layers = settings.backgrounds.map((background, index) => {
+	const layers = usableBackgrounds.map((background, index) => {
 		const media = document.createElement(background.type === "video" ? "video" : "img");
 		media.className = "site-background-layer";
 		media.style.objectPosition = background.position || "center";
