@@ -46,3 +46,4 @@ yarn.lock
 # ide
 .idea
 *.iml
+skills-lock.json
