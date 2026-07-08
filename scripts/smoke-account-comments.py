@@ -36,7 +36,7 @@ def install_api_import_stubs() -> None:
 		def route(self, *_args: object, **_kwargs: object):
 			return lambda func: func
 
-		get = post = patch = delete = route
+		get = post = put = patch = delete = route
 
 	class BaseModel:
 		def __init__(self, **kwargs: object) -> None:
@@ -55,11 +55,14 @@ def install_api_import_stubs() -> None:
 	cors_module = types.ModuleType("fastapi.middleware.cors")
 	cors_module.CORSMiddleware = object
 	middleware_module = types.ModuleType("fastapi.middleware")
+	responses_module = types.ModuleType("fastapi.responses")
+	responses_module.FileResponse = object
 	pydantic_module = types.ModuleType("pydantic")
 	pydantic_module.BaseModel = BaseModel
 	sys.modules["fastapi"] = fastapi_module
 	sys.modules["fastapi.middleware"] = middleware_module
 	sys.modules["fastapi.middleware.cors"] = cors_module
+	sys.modules["fastapi.responses"] = responses_module
 	sys.modules["pydantic"] = pydantic_module
 
 

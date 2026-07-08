@@ -342,6 +342,30 @@ class UnifiedProfilePayload(BaseModel):
 	display_region: str = ""
 
 
+class AccountPasswordPayload(BaseModel):
+	current_password: str = ""
+	new_password: str = ""
+
+
+class AccountPrivacyPayload(BaseModel):
+	profile_public: bool = True
+	show_region: bool = True
+	show_comments: bool = True
+	allow_search: bool = True
+	allow_data_export: bool = True
+
+
+class AccountNotificationSettingsPayload(BaseModel):
+	security_email: bool = True
+	comment_replies: bool = True
+	system_email: bool = True
+	marketing_email: bool = False
+
+
+class AccountDangerPayload(BaseModel):
+	confirmation: str = ""
+
+
 class SessionRefreshPayload(BaseModel):
 	return_url: str = ""
 
@@ -981,6 +1005,30 @@ def ensure_account_db() -> None:
 				count INTEGER NOT NULL,
 				PRIMARY KEY(action, key_hash)
 			);
+
+			CREATE TABLE IF NOT EXISTS account_preferences (
+				user_id TEXT PRIMARY KEY,
+				profile_public INTEGER NOT NULL DEFAULT 1,
+				show_region INTEGER NOT NULL DEFAULT 1,
+				show_comments INTEGER NOT NULL DEFAULT 1,
+				allow_search INTEGER NOT NULL DEFAULT 1,
+				allow_data_export INTEGER NOT NULL DEFAULT 1,
+				security_email INTEGER NOT NULL DEFAULT 1,
+				comment_replies INTEGER NOT NULL DEFAULT 1,
+				system_email INTEGER NOT NULL DEFAULT 1,
+				marketing_email INTEGER NOT NULL DEFAULT 0,
+				updated_at TEXT NOT NULL,
+				FOREIGN KEY(user_id) REFERENCES users(id)
+			);
+
+			CREATE TABLE IF NOT EXISTS security_events (
+				id TEXT PRIMARY KEY,
+				user_id TEXT NOT NULL,
+				event_type TEXT NOT NULL,
+				detail TEXT NOT NULL DEFAULT '',
+				created_at TEXT NOT NULL,
+				FOREIGN KEY(user_id) REFERENCES users(id)
+			);
 		""")
 		for column_name, column_type in (
 			("code_hash", "TEXT"),
@@ -1018,6 +1066,16 @@ def ensure_account_db() -> None:
 		except sqlite3.OperationalError as exc:
 			if "duplicate column name" not in str(exc).lower():
 				raise
+		for column_name, column_type in (
+			("last_seen_at", "TEXT"),
+			("display_region", "TEXT"),
+			("display_region_code", "TEXT"),
+		):
+			try:
+				connection.execute(f"ALTER TABLE sessions ADD COLUMN {column_name} {column_type}")
+			except sqlite3.OperationalError as exc:
+				if "duplicate column name" not in str(exc).lower():
+					raise
 		connection.commit()
 
 
@@ -1700,6 +1758,9 @@ def create_account_session(response: Response, request: Request, user_id: str) -
 	if not account_auth_configured():
 		raise HTTPException(status_code=503, detail="Account API is not configured")
 	now = utc_now()
+	region = lookup_ip_region(request)
+	display_region = display_region_value(region)
+	display_region_code = region.get("country_code", "")[:2].upper()
 	expires_at = datetime.fromtimestamp(
 		time.time() + ACCOUNT_SESSION_TTL,
 		tz=timezone.utc,
@@ -1708,8 +1769,9 @@ def create_account_session(response: Response, request: Request, user_id: str) -
 	d1_query(
 		"""
 		INSERT INTO sessions
-			(id, user_id, session_hash, created_at, expires_at, user_agent, ip_hash)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+			(id, user_id, session_hash, created_at, expires_at, user_agent, ip_hash,
+			 last_seen_at, display_region, display_region_code)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		""",
 		[
 			str(uuid.uuid4()),
@@ -1719,6 +1781,9 @@ def create_account_session(response: Response, request: Request, user_id: str) -
 			expires_at,
 			(request.headers.get("user-agent") or "")[:500],
 			hashlib.sha256(client_key(request).encode("utf-8")).hexdigest(),
+			now,
+			display_region,
+			display_region_code,
 		],
 	)
 	d1_query(
@@ -1773,7 +1838,8 @@ def get_account_user(request: Request) -> dict[str, Any] | None:
 			users.display_region_updated_at,
 			users.totp_enabled,
 			users.password_hash,
-			users.disabled_at
+			users.disabled_at,
+			sessions.id AS session_id
 		FROM sessions
 		INNER JOIN users ON users.id = sessions.user_id
 		WHERE sessions.session_hash = ?
@@ -1785,6 +1851,7 @@ def get_account_user(request: Request) -> dict[str, Any] | None:
 	)
 	if not rows:
 		return None
+	d1_query("UPDATE sessions SET last_seen_at = ? WHERE id = ?", [utc_now(), rows[0]["session_id"]])
 	return rows[0]
 
 
@@ -3149,12 +3216,16 @@ def admin_users(request: Request) -> dict[str, Any]:
 			users.tos_accepted_at, users.registration_ip, users.last_seen_ip,
 			users.last_seen_at, users.last_user_agent, users.created_at, users.updated_at,
 			users.disabled_at, CASE WHEN users.password_hash != '' THEN 1 ELSE 0 END AS has_password,
+			account_preferences.profile_public, account_preferences.show_region,
+			account_preferences.show_comments, account_preferences.allow_search,
+			account_preferences.security_email, account_preferences.comment_replies,
 			COUNT(DISTINCT comments.id) AS comment_count,
 			COUNT(DISTINCT sessions.id) AS active_session_count,
 			MAX(comments.created_at) AS latest_comment_at
 		FROM users
 		LEFT JOIN comments ON comments.user_id = users.id
 		LEFT JOIN sessions ON sessions.user_id = users.id AND sessions.expires_at > ?
+		LEFT JOIN account_preferences ON account_preferences.user_id = users.id
 		GROUP BY users.id
 		ORDER BY users.created_at DESC
 		LIMIT 200
@@ -3187,7 +3258,35 @@ def admin_user_detail(user_id: str, request: Request) -> dict[str, Any]:
 		""",
 		[user_id],
 	)
-	return {"ok": True, "user": rows[0], "comments": comments}
+	preferences = preference_payload(ensure_account_preferences(user_id))
+	sessions = d1_query(
+		"""
+		SELECT id, created_at, expires_at, user_agent, last_seen_at, display_region, display_region_code
+		FROM sessions
+		WHERE user_id = ? AND expires_at > ?
+		ORDER BY last_seen_at DESC, created_at DESC
+		LIMIT 20
+		""",
+		[user_id, utc_now()],
+	)
+	security_events = d1_query(
+		"""
+		SELECT event_type, detail, created_at
+		FROM security_events
+		WHERE user_id = ?
+		ORDER BY created_at DESC
+		LIMIT 20
+		""",
+		[user_id],
+	)
+	return {
+		"ok": True,
+		"user": rows[0],
+		"comments": comments,
+		"sessions": [session_payload(row, "") for row in sessions],
+		"preferences": preferences,
+		"securityEvents": security_events,
+	}
 
 
 @app.post("/admin/users/{user_id}/disable")
@@ -4361,6 +4460,320 @@ def accounts_profile_avatar_delete(
 	)
 	delete_managed_avatar(old_avatar_url)
 	return {"ok": True, "user": account_user_payload({**user, "avatar_url": ""})}
+
+
+def ensure_account_preferences(user_id: str) -> dict[str, Any]:
+	rows = d1_query("SELECT * FROM account_preferences WHERE user_id = ? LIMIT 1", [user_id])
+	if rows:
+		return rows[0]
+	now = utc_now()
+	d1_query(
+		"INSERT INTO account_preferences (user_id, updated_at) VALUES (?, ?)",
+		[user_id, now],
+	)
+	return d1_query("SELECT * FROM account_preferences WHERE user_id = ? LIMIT 1", [user_id])[0]
+
+
+def preference_payload(row: dict[str, Any]) -> dict[str, Any]:
+	return {
+		"privacy": {
+			"profilePublic": bool(row.get("profile_public", 1)),
+			"showRegion": bool(row.get("show_region", 1)),
+			"showComments": bool(row.get("show_comments", 1)),
+			"allowSearch": bool(row.get("allow_search", 1)),
+			"allowDataExport": bool(row.get("allow_data_export", 1)),
+		},
+		"notifications": {
+			"securityEmail": bool(row.get("security_email", 1)),
+			"commentReplies": bool(row.get("comment_replies", 1)),
+			"systemEmail": bool(row.get("system_email", 1)),
+			"marketingEmail": bool(row.get("marketing_email", 0)),
+		},
+		"updatedAt": row.get("updated_at") or "",
+	}
+
+
+def record_security_event(user_id: str, event_type: str, detail: str = "") -> None:
+	d1_query(
+		"""
+		INSERT INTO security_events (id, user_id, event_type, detail, created_at)
+		VALUES (?, ?, ?, ?, ?)
+		""",
+		[str(uuid.uuid4()), user_id, event_type, detail[:240], utc_now()],
+	)
+
+
+def session_payload(row: dict[str, Any], current_session_id: str) -> dict[str, Any]:
+	user_agent = str(row.get("user_agent") or "")
+	device = "Browser session"
+	for marker, label in (
+		("Edg/", "Microsoft Edge"),
+		("Chrome/", "Chrome"),
+		("Firefox/", "Firefox"),
+		("Safari/", "Safari"),
+	):
+		if marker in user_agent:
+			device = label
+			break
+	platform = "Unknown device"
+	for marker, label in (
+		("Windows", "Windows"),
+		("Mac OS", "macOS"),
+		("iPhone", "iPhone"),
+		("Android", "Android"),
+		("Linux", "Linux"),
+	):
+		if marker in user_agent:
+			platform = label
+			break
+	return {
+		"id": row["id"],
+		"device": device,
+		"platform": platform,
+		"region": row.get("display_region") or "Region unavailable",
+		"regionCode": row.get("display_region_code") or "",
+		"createdAt": row.get("created_at") or "",
+		"lastActiveAt": row.get("last_seen_at") or row.get("created_at") or "",
+		"expiresAt": row.get("expires_at") or "",
+		"current": hmac.compare_digest(str(row["id"]), current_session_id),
+	}
+
+
+@app.get("/accounts/security")
+def accounts_security_get(request: Request) -> dict[str, Any]:
+	user = require_account_user(request)
+	events = d1_query(
+		"""
+		SELECT event_type, detail, created_at
+		FROM security_events
+		WHERE user_id = ?
+		ORDER BY created_at DESC
+		LIMIT 20
+		""",
+		[str(user["id"])],
+	)
+	return {
+		"ok": True,
+		"emailVerified": True,
+		"hasPassword": bool(user.get("password_hash")),
+		"twoFactorEnabled": bool(user.get("totp_enabled")),
+		"recoveryCodesAvailable": False,
+		"events": events,
+	}
+
+
+@app.post("/accounts/security/password")
+def accounts_password_update(
+	payload: AccountPasswordPayload,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	user = require_account_csrf(request, x_csrf_token)
+	rows = d1_query(
+		"SELECT password_hash, password_salt FROM users WHERE id = ? LIMIT 1",
+		[str(user["id"])],
+	)
+	if not rows:
+		raise HTTPException(status_code=404, detail="Account not found")
+	current_hash = str(rows[0].get("password_hash") or "")
+	current_salt = str(rows[0].get("password_salt") or "")
+	if current_hash and not verify_account_password(payload.current_password, current_hash, current_salt):
+		raise HTTPException(status_code=401, detail="Current password is incorrect")
+	password = validate_account_password(payload.new_password)
+	password_hash, password_salt = hash_account_password(password)
+	d1_query(
+		"UPDATE users SET password_hash = ?, password_salt = ?, updated_at = ? WHERE id = ?",
+		[password_hash, password_salt, utc_now(), str(user["id"])],
+	)
+	record_security_event(str(user["id"]), "password_updated", "Password changed from Accounts")
+	return {"ok": True}
+
+
+@app.get("/accounts/sessions")
+def accounts_sessions_get(request: Request) -> dict[str, Any]:
+	user = require_account_user(request)
+	current_session_id = str(user.get("session_id") or "")
+	rows = d1_query(
+		"""
+		SELECT id, created_at, expires_at, user_agent, last_seen_at, display_region, display_region_code
+		FROM sessions
+		WHERE user_id = ? AND expires_at > ?
+		ORDER BY last_seen_at DESC, created_at DESC
+		""",
+		[str(user["id"]), utc_now()],
+	)
+	return {
+		"ok": True,
+		"sessions": [session_payload(row, current_session_id) for row in rows],
+	}
+
+
+@app.delete("/accounts/sessions/{session_id}")
+def accounts_session_delete(
+	session_id: str,
+	request: Request,
+	response: Response,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	user = require_account_csrf(request, x_csrf_token)
+	d1_query("DELETE FROM sessions WHERE id = ? AND user_id = ?", [session_id, str(user["id"])])
+	if hmac.compare_digest(session_id, str(user.get("session_id") or "")):
+		clear_account_cookie(response)
+	record_security_event(str(user["id"]), "session_revoked", "A session was signed out")
+	return {"ok": True}
+
+
+@app.post("/accounts/sessions/logout-all")
+def accounts_sessions_logout_all(
+	request: Request,
+	response: Response,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	user = require_account_csrf(request, x_csrf_token)
+	d1_query("DELETE FROM sessions WHERE user_id = ?", [str(user["id"])])
+	clear_account_cookie(response)
+	record_security_event(str(user["id"]), "sessions_cleared", "All sessions were signed out")
+	return {"ok": True}
+
+
+@app.get("/accounts/preferences")
+def accounts_preferences_get(request: Request) -> dict[str, Any]:
+	user = require_account_user(request)
+	return {"ok": True, **preference_payload(ensure_account_preferences(str(user["id"])))}
+
+
+@app.patch("/accounts/preferences/privacy")
+def accounts_privacy_update(
+	payload: AccountPrivacyPayload,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	user = require_account_csrf(request, x_csrf_token)
+	now = utc_now()
+	ensure_account_preferences(str(user["id"]))
+	d1_query(
+		"""
+		UPDATE account_preferences
+		SET profile_public = ?, show_region = ?, show_comments = ?, allow_search = ?,
+			allow_data_export = ?, updated_at = ?
+		WHERE user_id = ?
+		""",
+		[
+			int(payload.profile_public), int(payload.show_region), int(payload.show_comments),
+			int(payload.allow_search), int(payload.allow_data_export), now, str(user["id"]),
+		],
+	)
+	return {"ok": True, **preference_payload(ensure_account_preferences(str(user["id"])))}
+
+
+@app.patch("/accounts/preferences/notifications")
+def accounts_notifications_update(
+	payload: AccountNotificationSettingsPayload,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	user = require_account_csrf(request, x_csrf_token)
+	now = utc_now()
+	ensure_account_preferences(str(user["id"]))
+	d1_query(
+		"""
+		UPDATE account_preferences
+		SET security_email = ?, comment_replies = ?, system_email = ?, marketing_email = ?,
+			updated_at = ?
+		WHERE user_id = ?
+		""",
+		[
+			int(payload.security_email), int(payload.comment_replies),
+			int(payload.system_email), int(payload.marketing_email), now, str(user["id"]),
+		],
+	)
+	return {"ok": True, **preference_payload(ensure_account_preferences(str(user["id"])))}
+
+
+@app.post("/accounts/danger/clear-profile")
+def accounts_clear_profile(
+	payload: AccountDangerPayload,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	user = require_account_csrf(request, x_csrf_token)
+	if payload.confirmation != "CLEAR PROFILE":
+		raise HTTPException(status_code=400, detail="Confirmation text is required")
+	delete_managed_avatar(str(user.get("avatar_url") or ""))
+	d1_query(
+		"UPDATE users SET display_name = '', avatar_url = '', bio = '', updated_at = ? WHERE id = ?",
+		[utc_now(), str(user["id"])],
+	)
+	record_security_event(str(user["id"]), "profile_cleared", "Public profile was cleared")
+	return {"ok": True}
+
+
+@app.post("/accounts/danger/clear-comments")
+def accounts_clear_comments(
+	payload: AccountDangerPayload,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	user = require_account_csrf(request, x_csrf_token)
+	if payload.confirmation != "CLEAR COMMENTS":
+		raise HTTPException(status_code=400, detail="Confirmation text is required")
+	now = utc_now()
+	d1_query(
+		"UPDATE comments SET status = 'deleted', deleted_at = ?, updated_at = ? WHERE user_id = ? AND deleted_at IS NULL",
+		[now, now, str(user["id"])],
+	)
+	record_security_event(str(user["id"]), "comments_cleared", "Comments were soft-deleted")
+	return {"ok": True}
+
+
+@app.post("/accounts/danger/deactivate")
+def accounts_deactivate(
+	payload: AccountDangerPayload,
+	request: Request,
+	response: Response,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	user = require_account_csrf(request, x_csrf_token)
+	if payload.confirmation != "DEACTIVATE":
+		raise HTTPException(status_code=400, detail="Confirmation text is required")
+	now = utc_now()
+	d1_query("UPDATE users SET disabled_at = ?, updated_at = ? WHERE id = ?", [now, now, str(user["id"])])
+	d1_query("DELETE FROM sessions WHERE user_id = ?", [str(user["id"])])
+	clear_account_cookie(response)
+	record_security_event(str(user["id"]), "account_deactivated", "Account was deactivated")
+	return {"ok": True}
+
+
+@app.post("/accounts/danger/delete")
+def accounts_delete(
+	payload: AccountDangerPayload,
+	request: Request,
+	response: Response,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	user = require_account_csrf(request, x_csrf_token)
+	if payload.confirmation != "DELETE ACCOUNT":
+		raise HTTPException(status_code=400, detail="Confirmation text is required")
+	now = utc_now()
+	delete_managed_avatar(str(user.get("avatar_url") or ""))
+	d1_query(
+		"""
+		UPDATE users
+		SET disabled_at = ?, display_name = '', avatar_url = '', bio = '',
+			email = ?, username = ?, updated_at = ?
+		WHERE id = ?
+		""",
+		[
+			now,
+			f"deleted-{user['id']}@silentflare.local",
+			f"deleted-{str(user['id']).replace('-', '')[:24]}",
+			now,
+			str(user["id"]),
+		],
+	)
+	d1_query("DELETE FROM sessions WHERE user_id = ?", [str(user["id"])])
+	clear_account_cookie(response)
+	return {"ok": True}
 
 
 @app.get("/account-avatars/{filename}")

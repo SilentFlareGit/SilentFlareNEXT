@@ -18,7 +18,7 @@ let {
 
 <div class="mx-auto w-full max-w-[360px]">
 	<h2 class="mb-1 text-2xl font-extrabold text-black/90 dark:text-white/90">Sign in</h2>
-	<p class="mb-8 text-sm leading-6 text-black/45 dark:text-white/45">One account for the blog and every SilentFlare subsite.</p>
+	<p class="mb-8 text-sm leading-6 text-black/45 dark:text-white/45">One account for the blog, comments, Account Center, and every SilentFlare subsite.</p>
 
 	<div class="flex flex-col gap-3">
 		<button
@@ -85,7 +85,7 @@ let {
 	</div>
 
 	<div class="mt-7 border-t border-[var(--line-divider)] pt-6 text-center">
-		<p class="mb-3 text-sm text-black/50 dark:text-white/50">New to SilentFlare?</p>
+		<p class="mb-3 text-sm text-black/50 dark:text-white/50">New to SilentFlare? Create an account, then manage profile, privacy, sessions, and notifications.</p>
 		<button type="button" class="min-h-11 w-full rounded-lg border border-[var(--line-divider)] px-4 font-bold text-[var(--primary)] transition-colors hover:bg-[var(--btn-regular-bg)]" onclick={onRegister}>
 			Create an account
 		</button>

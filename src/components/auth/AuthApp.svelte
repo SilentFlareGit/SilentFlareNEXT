@@ -23,6 +23,21 @@ let error = $state("");
 let notice = $state("");
 let adminMode = $state(false);
 
+const accountCenterFeatures = [
+	{ label: "Public profile", icon: "material-symbols:person-outline-rounded" },
+	{ label: "Security", icon: "material-symbols:shield-lock-outline-rounded" },
+	{ label: "Sessions", icon: "material-symbols:devices-outline-rounded" },
+	{
+		label: "Privacy",
+		icon: "material-symbols:visibility-lock-outline-rounded",
+	},
+	{
+		label: "Notifications",
+		icon: "material-symbols:notifications-outline-rounded",
+	},
+	{ label: "Danger zone", icon: "material-symbols:warning-outline-rounded" },
+] as const;
+
 async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
 	const response = await fetch(`${apiBase}${path}`, {
 		...init,
@@ -117,7 +132,14 @@ onMount(() => void bootstrap());
 		<section class="auth-shell" aria-live="polite">
 			<div class="auth-story" class:admin-story={adminMode}>
 				<a class="story-wordmark" href="https://blog.silentflare.com/" aria-label="SilentFlare Blog"><span>S</span><strong>SilentFlare</strong></a>
-				<div class="story-copy"><h1>{adminMode ? "A private door to public trust." : "One identity for the quiet side of the web."}</h1><p>{adminMode ? "Verify Owner access before reviewing members and moderating conversations." : "Sign in once, then move between the blog, your profile, and every SilentFlare subsite."}</p></div>
+				<div class="story-copy"><h1>{adminMode ? "A private door to public trust." : "One identity for the quiet side of the web."}</h1><p>{adminMode ? "Verify Owner access before reviewing members, account-center state, and moderated conversations." : "Sign in once, then move between the blog, your profile, sessions, privacy, notifications, and every SilentFlare subsite."}</p></div>
+				{#if !adminMode}
+					<div class="feature-rail" aria-label="Account center areas">
+						{#each accountCenterFeatures as feature}
+							<span><Icon icon={feature.icon} />{feature.label}</span>
+						{/each}
+					</div>
+				{/if}
 				<a class="story-link" href="https://blog.silentflare.com/">Return to the blog</a>
 			</div>
 
@@ -175,6 +197,9 @@ onMount(() => void bootstrap());
 	.story-wordmark span { width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: .5rem; background: #4b9fe8; color: white; font-weight: 800; }
 	.story-copy h1 { max-width: 15ch; margin: 0; font-size: 2rem; line-height: 1.08; letter-spacing: 0; }
 	.story-copy p { max-width: 30rem; margin: 1rem 0 0; color: #68798a; line-height: 1.65; }
+	.feature-rail { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem; }
+	.feature-rail span { min-height: 2.5rem; display: inline-flex; align-items: center; gap: .45rem; border: 1px solid #dce6ee; border-radius: .5rem; padding: 0 .65rem; background: rgba(255,255,255,.62); color: #526575; font-size: .78rem; font-weight: 800; }
+	.feature-rail :global(svg) { flex: none; color: #438fd0; font-size: 1rem; }
 	.story-link { min-height: 2.75rem; display: inline-flex; align-items: center; width: max-content; color: #176db8; font-weight: 700; text-decoration: underline; }
 	.auth-form { order: 1; min-width: 0; min-height: 30rem; display: flex; align-items: center; padding: 1.5rem; }
 	.auth-loading { width: 100%; display: grid; justify-items: center; gap: 1rem; color: var(--muted-text); }
@@ -185,6 +210,7 @@ onMount(() => void bootstrap());
 	:global(.dark) .auth-story { border-color: #2a3948; color: #edf3f8; background: #19232f; }
 	:global(.dark) .story-wordmark { color: #edf3f8; }
 	:global(.dark) .story-copy p { color: #aab7c3; }
+	:global(.dark) .feature-rail span { border-color: #2a3948; background: rgba(17,25,35,.7); color: #c8d3df; }
 	.auth-story.admin-story { background: #e8f3fc; }
 	@media (min-width: 768px) { .auth-stage { padding: 1.5rem; } .auth-main { padding: 2rem 0; } .auth-form { padding: 2.5rem; } }
 	@media (min-width: 1024px) { .auth-main { padding: 3rem 0 2rem; } .auth-shell { grid-template-columns: minmax(17rem, 2fr) minmax(0, 3fr); align-items: stretch; } .auth-story { order: 1; min-height: 28rem; padding: 2.5rem; border-top: 0; border-right: 1px solid #dce6ee; box-shadow: inset .25rem 0 #4b9fe8; } .story-copy h1 { font-size: 2.4rem; } .auth-form { order: 2; padding: 3rem; } }
