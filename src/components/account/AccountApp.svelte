@@ -14,7 +14,20 @@ type AccountUser = {
 	displayRegionCode: string;
 	twoFactorEnabled: boolean;
 	hasPassword: boolean;
+	deletionRequestedAt?: string;
 };
+
+type SensitiveAction =
+	| "clear-profile"
+	| "change-password"
+	| "change-email"
+	| "enable-2fa"
+	| "disable-2fa"
+	| "export-data"
+	| "logout-all"
+	| "clear-comments"
+	| "deactivate-account"
+	| "delete-account";
 
 type AccountSession = {
 	id: string;
@@ -92,6 +105,32 @@ let notifications = $state<NotificationSettings>({
 	marketingEmail: false,
 });
 let dangerConfirmation = $state("");
+let savedDisplayName = $state("");
+let savedBio = $state("");
+let savedPrivacy = $state("");
+let savedNotifications = $state("");
+let mobileMenuOpen = $state(false);
+let sensitiveAction = $state<SensitiveAction | null>(null);
+let modalStep = $state<"intro" | "code" | "details" | "confirm" | "success">(
+	"intro",
+);
+let verificationCode = $state("");
+let verificationToken = $state("");
+let confirmationText = $state("");
+let modalBusy = $state(false);
+let modalError = $state("");
+let newEmail = $state("");
+let disableTotpCode = $state("");
+let scheduledDeletion = $state("");
+let passwordCleanupToken = $state("");
+
+let profileChanged = $derived(
+	displayName !== savedDisplayName || bio !== savedBio,
+);
+let privacyChanged = $derived(JSON.stringify(privacy) !== savedPrivacy);
+let notificationsChanged = $derived(
+	JSON.stringify(notifications) !== savedNotifications,
+);
 
 const panels = [
 	{
@@ -126,6 +165,69 @@ const panels = [
 	},
 ] as const;
 
+const panelCopy = {
+	profile: "Manage the identity shown with your comments and public activity.",
+	security:
+		"Protect sign-in, verify sensitive changes, and review security activity.",
+	sessions:
+		"Review where your account is signed in and remove unfamiliar devices.",
+	privacy: "Choose what account information can appear on public surfaces.",
+	notifications: "Control account, comment, system, and announcement emails.",
+	danger: "Use these controls carefully. Each destructive action is isolated.",
+} as const;
+
+const actionCopy: Record<
+	SensitiveAction,
+	{ title: string; description: string; phrase?: string }
+> = {
+	"clear-profile": {
+		title: "Clear public profile",
+		description: "Your avatar, display name, and bio will be removed.",
+		phrase: "CLEAR PROFILE",
+	},
+	"change-password": {
+		title: "Change password",
+		description:
+			"Verify your email before entering your current and new password.",
+	},
+	"change-email": {
+		title: "Change email",
+		description: "Verify your current email before replacing it.",
+	},
+	"enable-2fa": {
+		title: "Enable two-factor authentication",
+		description: "Verify your email before connecting an authenticator app.",
+	},
+	"disable-2fa": {
+		title: "Disable two-factor authentication",
+		description: "Verify your email, then enter an authenticator code.",
+	},
+	"export-data": {
+		title: "Export account data",
+		description: "Verify your email before creating a private JSON export.",
+	},
+	"logout-all": {
+		title: "Sign out all devices",
+		description: "This ends every active session, including this one.",
+		phrase: "SIGN OUT ALL",
+	},
+	"clear-comments": {
+		title: "Clear all comments",
+		description: "Your comments will be removed from public view.",
+		phrase: "CLEAR COMMENTS",
+	},
+	"deactivate-account": {
+		title: "Deactivate account",
+		description: "Your account will be disabled and every session ended.",
+		phrase: "DEACTIVATE",
+	},
+	"delete-account": {
+		title: "Schedule account deletion",
+		description: "Deletion starts only after a 7-day cooling period.",
+		phrase: "DELETE ACCOUNT",
+	},
+};
+
 async function apiFetch<T>(
 	path: string,
 	init: RequestInit & { csrf?: boolean } = {},
@@ -152,6 +254,8 @@ function applyUser(next: AccountUser) {
 	bio = next.bio;
 	displayRegion = next.displayRegion;
 	displayRegionCode = next.displayRegionCode;
+	savedDisplayName = next.displayName;
+	savedBio = next.bio;
 }
 
 function clearMessages() {
@@ -196,6 +300,8 @@ async function loadAccountExtras() {
 	sessions = sessionResult.sessions;
 	privacy = preferenceResult.privacy;
 	notifications = preferenceResult.notifications;
+	savedPrivacy = JSON.stringify(preferenceResult.privacy);
+	savedNotifications = JSON.stringify(preferenceResult.notifications);
 	securityEvents = securityResult.events;
 }
 
@@ -315,7 +421,7 @@ async function removeAvatar() {
 	}
 }
 
-async function startAccount2FA() {
+async function startAccount2FA(proof: string) {
 	submitting = true;
 	clearMessages();
 	try {
@@ -323,13 +429,18 @@ async function startAccount2FA() {
 			setup_token: string;
 			secret: string;
 			uri: string;
-		}>("/accounts/2fa/setup/start", { method: "POST", csrf: true, body: "{}" });
+		}>("/accounts/2fa/setup/start", {
+			method: "POST",
+			csrf: true,
+			body: JSON.stringify({ verification_token: proof }),
+		});
 		setupToken = result.setup_token;
 		totpSecret = result.secret;
 		totpUri = result.uri;
 	} catch (reason) {
 		error =
 			reason instanceof Error ? reason.message : "Could not start 2FA setup";
+		throw reason;
 	} finally {
 		submitting = false;
 	}
@@ -358,31 +469,6 @@ async function verifyAccount2FA() {
 	}
 }
 
-async function savePassword() {
-	submitting = true;
-	clearMessages();
-	try {
-		await apiFetch("/accounts/security/password", {
-			method: "POST",
-			csrf: true,
-			body: JSON.stringify({
-				current_password: currentPassword,
-				new_password: newPassword,
-			}),
-		});
-		if (user) user = { ...user, hasPassword: true };
-		currentPassword = "";
-		newPassword = "";
-		notice = "Password updated.";
-		await loadAccountExtras();
-	} catch (reason) {
-		error =
-			reason instanceof Error ? reason.message : "Could not update password";
-	} finally {
-		submitting = false;
-	}
-}
-
 async function savePrivacy() {
 	submitting = true;
 	clearMessages();
@@ -402,6 +488,7 @@ async function savePrivacy() {
 			},
 		);
 		privacy = result.privacy;
+		savedPrivacy = JSON.stringify(result.privacy);
 		notice = "Privacy settings saved.";
 	} catch (reason) {
 		error = reason instanceof Error ? reason.message : "Could not save privacy";
@@ -428,6 +515,7 @@ async function saveNotifications() {
 			},
 		);
 		notifications = result.notifications;
+		savedNotifications = JSON.stringify(result.notifications);
 		notice = "Notification settings saved.";
 	} catch (reason) {
 		error =
@@ -456,23 +544,25 @@ async function revokeSession(sessionId: string) {
 	}
 }
 
-async function logoutAll() {
+async function logoutAll(proof: string) {
 	clearMessages();
 	try {
 		await apiFetch("/accounts/sessions/logout-all", {
 			method: "POST",
 			csrf: true,
-			body: "{}",
+			body: JSON.stringify({ verification_token: proof }),
 		});
 		window.location.assign("https://auth.silentflare.com/");
 	} catch (reason) {
 		error =
 			reason instanceof Error ? reason.message : "Could not sign out sessions";
+		throw reason;
 	}
 }
 
 async function dangerAction(
 	path: "clear-profile" | "clear-comments" | "deactivate" | "delete",
+	proof = "",
 ) {
 	submitting = true;
 	clearMessages();
@@ -480,11 +570,17 @@ async function dangerAction(
 		await apiFetch(`/accounts/danger/${path}`, {
 			method: "POST",
 			csrf: true,
-			body: JSON.stringify({ confirmation: dangerConfirmation }),
+			body: JSON.stringify({
+				confirmation: dangerConfirmation,
+				verification_token: proof,
+			}),
 		});
-		if (path === "deactivate" || path === "delete") {
+		if (path === "deactivate") {
 			window.location.assign("https://auth.silentflare.com/");
 			return;
+		}
+		if (path === "delete") {
+			scheduledDeletion = "Deletion is scheduled. You have 7 days to cancel.";
 		}
 		dangerConfirmation = "";
 		notice = "Danger-zone action completed.";
@@ -493,8 +589,205 @@ async function dangerAction(
 	} catch (reason) {
 		error =
 			reason instanceof Error ? reason.message : "Danger-zone action failed";
+		throw reason;
 	} finally {
 		submitting = false;
+	}
+}
+
+function openSensitive(action: SensitiveAction) {
+	sensitiveAction = action;
+	modalStep = "intro";
+	verificationCode = "";
+	verificationToken = "";
+	confirmationText = "";
+	currentPassword = "";
+	newPassword = "";
+	newEmail = user?.email ?? "";
+	disableTotpCode = "";
+	modalError = "";
+}
+
+function closeSensitive() {
+	if (modalBusy) return;
+	sensitiveAction = null;
+}
+
+async function sendSensitiveCode() {
+	if (!sensitiveAction) return;
+	modalBusy = true;
+	modalError = "";
+	try {
+		await apiFetch("/accounts/security/email/request", {
+			method: "POST",
+			csrf: true,
+			body: JSON.stringify({ action: sensitiveAction }),
+		});
+		modalStep = "code";
+	} catch (reason) {
+		modalError =
+			reason instanceof Error
+				? reason.message
+				: "Could not send verification code";
+	} finally {
+		modalBusy = false;
+	}
+}
+
+async function verifySensitiveCode() {
+	if (!sensitiveAction) return;
+	modalBusy = true;
+	modalError = "";
+	try {
+		const result = await apiFetch<{ verificationToken: string }>(
+			"/accounts/security/email/verify",
+			{
+				method: "POST",
+				csrf: true,
+				body: JSON.stringify({
+					action: sensitiveAction,
+					code: verificationCode,
+				}),
+			},
+		);
+		verificationToken = result.verificationToken;
+		modalStep = actionCopy[sensitiveAction].phrase ? "confirm" : "details";
+	} catch (reason) {
+		modalError =
+			reason instanceof Error ? reason.message : "Verification failed";
+	} finally {
+		modalBusy = false;
+	}
+}
+
+function downloadExport(data: unknown) {
+	const blob = new Blob([JSON.stringify(data, null, 2)], {
+		type: "application/json",
+	});
+	const url = URL.createObjectURL(blob);
+	const link = document.createElement("a");
+	link.href = url;
+	link.download = `silentflare-account-${new Date().toISOString().slice(0, 10)}.json`;
+	link.click();
+	URL.revokeObjectURL(url);
+}
+
+async function completeSensitiveAction() {
+	if (!sensitiveAction || !verificationToken) return;
+	modalBusy = true;
+	modalError = "";
+	clearMessages();
+	try {
+		if (sensitiveAction === "change-password") {
+			const result = await apiFetch<{ sessionCleanupToken: string }>(
+				"/accounts/security/password",
+				{
+					method: "POST",
+					csrf: true,
+					body: JSON.stringify({
+						current_password: currentPassword,
+						new_password: newPassword,
+						verification_token: verificationToken,
+					}),
+				},
+			);
+			passwordCleanupToken = result.sessionCleanupToken;
+			if (user) user = { ...user, hasPassword: true };
+		} else if (sensitiveAction === "change-email") {
+			const result = await apiFetch<{ email: string }>(
+				"/accounts/security/email",
+				{
+					method: "PATCH",
+					csrf: true,
+					body: JSON.stringify({
+						new_email: newEmail,
+						verification_token: verificationToken,
+					}),
+				},
+			);
+			if (user) user = { ...user, email: result.email };
+		} else if (sensitiveAction === "enable-2fa") {
+			await startAccount2FA(verificationToken);
+		} else if (sensitiveAction === "disable-2fa") {
+			await apiFetch("/accounts/2fa/disable", {
+				method: "POST",
+				csrf: true,
+				body: JSON.stringify({
+					code: disableTotpCode,
+					verification_token: verificationToken,
+				}),
+			});
+			if (user) user = { ...user, twoFactorEnabled: false };
+		} else if (sensitiveAction === "export-data") {
+			const result = await apiFetch("/accounts/security/export", {
+				method: "POST",
+				csrf: true,
+				body: JSON.stringify({ verification_token: verificationToken }),
+			});
+			downloadExport(result);
+		} else if (sensitiveAction === "logout-all") {
+			await logoutAll(verificationToken);
+			return;
+		} else {
+			const paths = {
+				"clear-profile": "clear-profile",
+				"clear-comments": "clear-comments",
+				"deactivate-account": "deactivate",
+				"delete-account": "delete",
+			} as const;
+			dangerConfirmation = actionCopy[sensitiveAction].phrase ?? "";
+			await dangerAction(paths[sensitiveAction], verificationToken);
+		}
+		modalStep = "success";
+		notice = `${actionCopy[sensitiveAction].title} completed.`;
+		await loadAccountExtras();
+	} catch (reason) {
+		modalError = reason instanceof Error ? reason.message : "Action failed";
+	} finally {
+		modalBusy = false;
+	}
+}
+
+async function cancelDeletion() {
+	submitting = true;
+	clearMessages();
+	try {
+		await apiFetch("/accounts/danger/delete/cancel", {
+			method: "POST",
+			csrf: true,
+			body: "{}",
+		});
+		scheduledDeletion = "";
+		if (user) user = { ...user, deletionRequestedAt: "" };
+		notice = "Scheduled account deletion cancelled.";
+	} catch (reason) {
+		error =
+			reason instanceof Error ? reason.message : "Could not cancel deletion";
+	} finally {
+		submitting = false;
+	}
+}
+
+async function logoutOtherSessions() {
+	if (!passwordCleanupToken) return;
+	modalBusy = true;
+	modalError = "";
+	try {
+		await apiFetch("/accounts/sessions/logout-others", {
+			method: "POST",
+			csrf: true,
+			body: JSON.stringify({ verification_token: passwordCleanupToken }),
+		});
+		passwordCleanupToken = "";
+		notice = "Password updated and other devices signed out.";
+		await loadAccountExtras();
+	} catch (reason) {
+		modalError =
+			reason instanceof Error
+				? reason.message
+				: "Could not sign out other devices";
+	} finally {
+		modalBusy = false;
 	}
 }
 
@@ -575,13 +868,24 @@ onMount(() => void loadSession());
 						{/if}
 						<span>{displayRegion || "Region unavailable"}</span>
 					</div>
-					<nav class="account-nav" aria-label="Account sections">
+					<button
+						class="mobile-menu-command"
+						type="button"
+						aria-expanded={mobileMenuOpen}
+						aria-controls="account-navigation"
+						onclick={() => (mobileMenuOpen = !mobileMenuOpen)}
+					>
+						<Icon icon={mobileMenuOpen ? "material-symbols:close-rounded" : "material-symbols:menu-rounded"} />
+						<span>{mobileMenuOpen ? "Close menu" : "Account menu"}</span>
+					</button>
+					<nav id="account-navigation" class:open={mobileMenuOpen} class="account-nav" aria-label="Account sections">
 						{#each panels as panel}
 							<button
 								type="button"
 								class:active={activePanel === panel.id}
 								onclick={() => {
 									activePanel = panel.id;
+									mobileMenuOpen = false;
 									clearMessages();
 								}}
 							>
@@ -593,16 +897,16 @@ onMount(() => void loadSession());
 				</aside>
 
 				<div class="account-content">
-					<section class="panel hero-panel">
+					<header class="page-heading">
 						<div>
-							<p class="eyebrow">{panels.find((panel) => panel.id === activePanel)?.label}</p>
-							<h2>Control how your SilentFlare account appears, signs in, and stays quiet.</h2>
+							<h2>{panels.find((panel) => panel.id === activePanel)?.label}</h2>
+							<p>{panelCopy[activePanel]}</p>
 						</div>
 						<div class="hero-stats">
-							<span>{user.twoFactorEnabled ? "2FA on" : "2FA optional"}</span>
+							<span class:good={user.twoFactorEnabled}>{user.twoFactorEnabled ? "2FA protected" : "Basic protection"}</span>
 							<span>{sessions.length} session{sessions.length === 1 ? "" : "s"}</span>
 						</div>
-					</section>
+					</header>
 
 					{#if activePanel === "profile"}
 						<section class="panel account-card split-card">
@@ -653,7 +957,7 @@ onMount(() => void loadSession());
 										</button>
 									{/if}
 								</div>
-								<button class="command primary" type="submit" disabled={submitting}>
+								<button class="command primary" type="submit" disabled={submitting || !profileChanged}>
 									<Icon icon="material-symbols:save-outline-rounded" />{submitting ? "Saving..." : "Save profile"}
 								</button>
 							</form>
@@ -681,20 +985,13 @@ onMount(() => void loadSession());
 								<span class="section-icon"><Icon icon="material-symbols:shield-lock-outline-rounded" /></span>
 								<div><p class="eyebrow">Security</p><h3>Sign-in protection</h3></div>
 							</div>
+							<p class="group-label">Sensitive operations / email verification required</p>
 							<div class="security-list">
-								<div class="security-row"><span class="row-icon"><Icon icon="material-symbols:alternate-email-rounded" /></span><div><strong>Email verification</strong><p>{user.email}</p></div><span class="status good">Verified</span></div>
-								<div class="security-row"><span class="row-icon"><Icon icon="material-symbols:key-outline-rounded" /></span><div><strong>Password</strong><p>{user.hasPassword ? "Password login is available" : "Email-code login only"}</p></div><span class="status">{user.hasPassword ? "Set" : "Not set"}</span></div>
-								<div class="security-row"><span class="row-icon"><Icon icon="material-symbols:phonelink-lock-outline-rounded" /></span><div><strong>Two-step verification</strong><p>Authenticator challenge after primary login</p></div><span class:good={user.twoFactorEnabled} class="status">{user.twoFactorEnabled ? "Enabled" : "Optional"}</span></div>
-								<div class="security-row"><span class="row-icon"><Icon icon="material-symbols:emergency-home-outline-rounded" /></span><div><strong>Recovery codes</strong><p>Reserved for the next security phase</p></div><span class="status">Pending</span></div>
+								<div class="security-row"><span class="row-icon"><Icon icon="material-symbols:alternate-email-rounded" /></span><div><strong>Email address</strong><p>{user.email}</p></div><button class="command secondary" type="button" onclick={() => openSensitive("change-email")}>Change</button></div>
+								<div class="security-row"><span class="row-icon"><Icon icon="material-symbols:key-outline-rounded" /></span><div><strong>Password</strong><p>{user.hasPassword ? "Password login is available" : "Email-code login only"}</p></div><button class="command secondary" type="button" onclick={() => openSensitive("change-password")}>{user.hasPassword ? "Change" : "Set password"}</button></div>
+								<div class="security-row"><span class="row-icon"><Icon icon="material-symbols:phonelink-lock-outline-rounded" /></span><div><strong>Two-factor authentication</strong><p>Authenticator challenge after primary login</p></div><button class={user.twoFactorEnabled ? "command subtle-danger" : "command secondary"} type="button" onclick={() => openSensitive(user.twoFactorEnabled ? "disable-2fa" : "enable-2fa")}>{user.twoFactorEnabled ? "Disable" : "Enable"}</button></div>
+								<div class="security-row"><span class="row-icon"><Icon icon="material-symbols:emergency-home-outline-rounded" /></span><div><strong>Recovery codes</strong><p>Recovery codes will appear here when supported.</p></div><span class="status">Unavailable</span></div>
 							</div>
-							<form class="inline-form" onsubmit={(event) => { event.preventDefault(); void savePassword(); }}>
-								<input class="auth-input" type="password" bind:value={currentPassword} placeholder={user.hasPassword ? "Current password" : "Current password not required"} autocomplete="current-password" />
-								<input class="auth-input" type="password" bind:value={newPassword} placeholder="New password" autocomplete="new-password" minlength="8" />
-								<button class="command primary" type="submit" disabled={submitting || newPassword.length < 8}><Icon icon="material-symbols:password-rounded" />Update password</button>
-							</form>
-							{#if !user.twoFactorEnabled && !setupToken}
-								<button class="command secondary" type="button" onclick={() => void startAccount2FA()} disabled={submitting}><Icon icon="material-symbols:add-moderator-outline-rounded" />Set up 2FA</button>
-							{/if}
 							{#if setupToken}
 								<div class="totp-box">
 									<p>Authenticator secret</p>
@@ -738,7 +1035,7 @@ onMount(() => void loadSession());
 									</article>
 								{/each}
 							</div>
-							<button class="command subtle-danger" type="button" onclick={() => void logoutAll()}><Icon icon="material-symbols:logout-rounded" />Sign out all devices</button>
+							<div class="risk-action"><div><strong>Sign out all devices</strong><p>Email verification and confirmation text are required.</p></div><button class="command subtle-danger" type="button" onclick={() => openSensitive("logout-all")}><Icon icon="material-symbols:logout-rounded" />Sign out all</button></div>
 						</section>
 					{:else if activePanel === "privacy"}
 						<section class="panel account-card">
@@ -751,9 +1048,12 @@ onMount(() => void loadSession());
 								<label><span><strong>Show region</strong><small>Display API-owned city/country data on your profile.</small></span><input type="checkbox" bind:checked={privacy.showRegion} /></label>
 								<label><span><strong>Show comment record</strong><small>Allow public surfaces to reference your comments.</small></span><input type="checkbox" bind:checked={privacy.showComments} /></label>
 								<label><span><strong>Allow search</strong><small>Let account search discover your public profile.</small></span><input type="checkbox" bind:checked={privacy.allowSearch} /></label>
-								<label><span><strong>Data export</strong><small>Keep export eligibility enabled for account data.</small></span><input type="checkbox" bind:checked={privacy.allowDataExport} /></label>
 							</div>
-							<button class="command primary" type="button" onclick={() => void savePrivacy()} disabled={submitting}><Icon icon="material-symbols:save-outline-rounded" />Save privacy</button>
+							<div class="card-actions"><button class="command primary" type="button" onclick={() => void savePrivacy()} disabled={submitting || !privacyChanged}><Icon icon="material-symbols:save-outline-rounded" />{submitting ? "Saving..." : "Save privacy"}</button></div>
+						</section>
+						<section class="panel account-card">
+							<div class="section-heading"><span class="section-icon"><Icon icon="material-symbols:download-rounded" /></span><div><p class="eyebrow">Sensitive operation</p><h3>Data export</h3></div></div>
+							<div class="risk-action"><div><strong>Download a JSON copy</strong><p>Includes your profile, preferences, and comment history. Email verification is required.</p></div><button class="command secondary" type="button" onclick={() => openSensitive("export-data")}><Icon icon="material-symbols:download-rounded" />Export data</button></div>
 						</section>
 					{:else if activePanel === "notifications"}
 						<section class="panel account-card">
@@ -767,24 +1067,15 @@ onMount(() => void loadSession());
 								<label><span><strong>System notifications</strong><small>Important account and policy updates.</small></span><input type="checkbox" bind:checked={notifications.systemEmail} /></label>
 								<label><span><strong>Email announcements</strong><small>Occasional SilentFlare updates.</small></span><input type="checkbox" bind:checked={notifications.marketingEmail} /></label>
 							</div>
-							<button class="command primary" type="button" onclick={() => void saveNotifications()} disabled={submitting}><Icon icon="material-symbols:save-outline-rounded" />Save notifications</button>
+							<button class="command primary" type="button" onclick={() => void saveNotifications()} disabled={submitting || !notificationsChanged}><Icon icon="material-symbols:save-outline-rounded" />{submitting ? "Saving..." : "Save notifications"}</button>
 						</section>
 					{:else}
-						<section class="panel account-card danger-card">
-							<div class="section-heading">
-								<span class="section-icon danger-icon"><Icon icon="material-symbols:warning-outline-rounded" /></span>
-								<div><p class="eyebrow">Danger Zone</p><h3>Destructive account actions</h3></div>
-							</div>
-							<label>Confirmation text<input class="auth-input" bind:value={dangerConfirmation} placeholder="Type the exact phrase shown on the action" /></label>
-							<div class="danger-actions">
-								<button class="command secondary" type="button" onclick={() => void dangerAction("clear-profile")} disabled={dangerConfirmation !== "CLEAR PROFILE" || submitting}>Clear profile</button>
-								<button class="command secondary" type="button" onclick={() => void dangerAction("clear-comments")} disabled={dangerConfirmation !== "CLEAR COMMENTS" || submitting}>Clear comments</button>
-								<button class="command subtle-danger" type="button" onclick={() => void logoutAll()}>Sign out all devices</button>
-								<button class="command danger" type="button" onclick={() => void dangerAction("deactivate")} disabled={dangerConfirmation !== "DEACTIVATE" || submitting}>Deactivate account</button>
-								<button class="command danger" type="button" onclick={() => void dangerAction("delete")} disabled={dangerConfirmation !== "DELETE ACCOUNT" || submitting}>Delete account</button>
-							</div>
-							<p class="muted">Required phrases: CLEAR PROFILE, CLEAR COMMENTS, DEACTIVATE, DELETE ACCOUNT.</p>
-						</section>
+						<div class="danger-grid">
+							<section class="panel account-card danger-card"><div class="danger-copy"><span class="section-icon danger-icon"><Icon icon="material-symbols:person-off-outline-rounded" /></span><div><h3>Clear public profile</h3><p>Remove your avatar, display name, and bio. Your account stays active.</p></div></div><button class="command subtle-danger" type="button" onclick={() => openSensitive("clear-profile")}>Clear profile</button></section>
+							<section class="panel account-card danger-card"><div class="danger-copy"><span class="section-icon danger-icon"><Icon icon="material-symbols:comments-disabled-outline-rounded" /></span><div><h3>Clear comments</h3><p>Remove every comment from public view. Email verification is required.</p></div></div><button class="command danger" type="button" onclick={() => openSensitive("clear-comments")}>Clear comments</button></section>
+							<section class="panel account-card danger-card"><div class="danger-copy"><span class="section-icon danger-icon"><Icon icon="material-symbols:pause-circle-outline-rounded" /></span><div><h3>Deactivate account</h3><p>Disable sign-in and end every active session.</p></div></div><button class="command danger" type="button" onclick={() => openSensitive("deactivate-account")}>Deactivate</button></section>
+							<section class="panel account-card danger-card"><div class="danger-copy"><span class="section-icon danger-icon"><Icon icon="material-symbols:delete-forever-outline-rounded" /></span><div><h3>Delete account</h3><p>Schedule permanent deletion after a 7-day cooling period.</p>{#if scheduledDeletion || user.deletionRequestedAt}<p class="scheduled">{scheduledDeletion || `Scheduled for ${formatTime(user.deletionRequestedAt)}`}</p>{/if}</div></div>{#if scheduledDeletion || user.deletionRequestedAt}<button class="command secondary" type="button" onclick={() => void cancelDeletion()} disabled={submitting}>Cancel deletion</button>{:else}<button class="command danger" type="button" onclick={() => openSensitive("delete-account")}>Schedule deletion</button>{/if}</section>
+						</div>
 					{/if}
 
 					{#if error}
@@ -795,6 +1086,47 @@ onMount(() => void loadSession());
 					{/if}
 				</div>
 			</div>
+
+			{#if sensitiveAction}
+				<div class="modal-backdrop" role="presentation" onclick={(event) => event.currentTarget === event.target && closeSensitive()}>
+					<section class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+						<header class="modal-header">
+							<div><p class="eyebrow">Protected action</p><h2 id="confirm-title">{actionCopy[sensitiveAction].title}</h2></div>
+							<button class="icon-command" type="button" aria-label="Close" onclick={closeSensitive} disabled={modalBusy}><Icon icon="material-symbols:close-rounded" /></button>
+						</header>
+						<p class="modal-description">{actionCopy[sensitiveAction].description}</p>
+
+						{#if modalStep === "intro"}
+							<div class="verification-note"><Icon icon="material-symbols:mark-email-read-outline-rounded" /><div><strong>Verify {user.email}</strong><p>We will send a six-digit code. It expires shortly and works only for this action.</p></div></div>
+							<div class="modal-actions"><button class="command secondary" type="button" onclick={closeSensitive}>Cancel</button><button class="command primary" type="button" onclick={() => void sendSensitiveCode()} disabled={modalBusy || !emailConfigured}>{modalBusy ? "Sending..." : "Send verification code"}</button></div>
+						{:else if modalStep === "code"}
+							<label>Email verification code<input class="auth-input code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" bind:value={verificationCode} placeholder="000000" /></label>
+							<div class="modal-actions"><button class="command secondary" type="button" onclick={() => void sendSensitiveCode()} disabled={modalBusy}>Send again</button><button class="command primary" type="button" onclick={() => void verifySensitiveCode()} disabled={modalBusy || verificationCode.length !== 6}>{modalBusy ? "Verifying..." : "Verify code"}</button></div>
+						{:else if modalStep === "details"}
+							{#if sensitiveAction === "change-password"}
+								<div class="modal-fields"><label>Current password<input class="auth-input" type="password" bind:value={currentPassword} autocomplete="current-password" placeholder={user.hasPassword ? "Current password" : "Not required for email-code accounts"} /></label><label>New password<input class="auth-input" type="password" bind:value={newPassword} autocomplete="new-password" minlength="8" /></label></div>
+							{:else if sensitiveAction === "change-email"}
+								<label>New email address<input class="auth-input" type="email" bind:value={newEmail} autocomplete="email" /></label>
+							{:else if sensitiveAction === "disable-2fa"}
+								<label>Authenticator code<input class="auth-input code-input" inputmode="numeric" maxlength="6" bind:value={disableTotpCode} placeholder="000000" /></label>
+							{:else if sensitiveAction === "enable-2fa"}
+								<div class="verification-note"><Icon icon="material-symbols:verified-user-outline-rounded" /><div><strong>Email verified</strong><p>Continue to connect your authenticator app.</p></div></div>
+							{:else}
+								<div class="verification-note"><Icon icon="material-symbols:download-rounded" /><div><strong>Ready to export</strong><p>Your download is created locally after the API returns your data.</p></div></div>
+							{/if}
+							<div class="modal-actions"><button class="command secondary" type="button" onclick={closeSensitive}>Cancel</button><button class="command primary" type="button" onclick={() => void completeSensitiveAction()} disabled={modalBusy || (sensitiveAction === "change-password" && (newPassword.length < 8 || (user.hasPassword && !currentPassword))) || (sensitiveAction === "change-email" && (!newEmail.includes("@") || newEmail === user.email)) || (sensitiveAction === "disable-2fa" && disableTotpCode.length !== 6)}>{modalBusy ? "Working..." : "Continue"}</button></div>
+						{:else if modalStep === "confirm"}
+							<div class="confirmation-warning"><Icon icon="material-symbols:warning-outline-rounded" /><p>Type <strong>{actionCopy[sensitiveAction].phrase}</strong> to confirm. This is the final step.</p></div>
+							<label>Confirmation text<input class="auth-input" bind:value={confirmationText} autocomplete="off" /></label>
+							<div class="modal-actions"><button class="command secondary" type="button" onclick={closeSensitive}>Cancel</button><button class="command danger" type="button" onclick={() => void completeSensitiveAction()} disabled={modalBusy || confirmationText !== actionCopy[sensitiveAction].phrase}>{modalBusy ? "Working..." : actionCopy[sensitiveAction].title}</button></div>
+						{:else}
+							<div class="success-state"><Icon icon="material-symbols:check-circle-outline-rounded" /><strong>{sensitiveAction === "delete-account" ? "Deletion scheduled" : "Action completed"}</strong><p>{sensitiveAction === "delete-account" ? "The 7-day cooling period has started. You can cancel from Danger Zone." : "Your account settings are up to date."}</p></div>
+							<div class="modal-actions">{#if sensitiveAction === "change-password" && passwordCleanupToken}<button class="command subtle-danger" type="button" onclick={() => void logoutOtherSessions()} disabled={modalBusy}>Sign out other devices</button>{/if}<button class="command primary" type="button" onclick={closeSensitive}>Done</button></div>
+						{/if}
+						{#if modalError}<p class="message error" aria-live="polite"><Icon icon="material-symbols:error-outline-rounded" />{modalError}</p>{/if}
+					</section>
+				</div>
+			{/if}
 		</main>
 		<footer class="accounts-footer">
 			<a href="https://blog.silentflare.com/">SilentFlare</a><span>/</span><a href="https://blog.silentflare.com/rss.xml">RSS</a><span>/</span><a href="https://tos.silentflare.com/">Terms</a>
@@ -812,6 +1144,7 @@ onMount(() => void loadSession());
 <style>
 	.accounts-stage {
 		min-height: 100svh;
+		overflow-x: hidden;
 		padding: 1rem;
 		color: var(--deep-text, #182230);
 		background:
@@ -862,20 +1195,24 @@ onMount(() => void loadSession());
 		gap: 1rem;
 	}
 	.identity-card,
-	.account-card,
-	.hero-panel {
+	.account-card {
 		padding: clamp(1.15rem, 3vw, 1.75rem);
 	}
 	.identity-card {
 		min-width: 0;
-		text-align: center;
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr) auto;
+		align-items: center;
+		gap: 0.75rem;
+		text-align: left;
 		box-shadow: 0 1.6rem 3.5rem rgba(28, 53, 79, 0.1);
 	}
 	.avatar-shell {
 		position: relative;
-		width: 6.7rem;
-		height: 6.7rem;
-		margin: 0 auto 1.15rem;
+		grid-row: 1 / span 3;
+		width: 3.75rem;
+		height: 3.75rem;
+		margin: 0;
 	}
 	.avatar,
 	.preview-avatar {
@@ -894,7 +1231,7 @@ onMount(() => void loadSession());
 		box-shadow:
 			0 0 0 0.45rem rgba(75, 159, 232, 0.12),
 			0 0.8rem 2rem rgba(40, 90, 130, 0.13);
-		font-size: 2.2rem;
+		font-size: 1.2rem;
 	}
 	.avatar img,
 	.preview-avatar img {
@@ -906,8 +1243,8 @@ onMount(() => void loadSession());
 		position: absolute;
 		right: -0.15rem;
 		bottom: 0.25rem;
-		width: 2.75rem;
-		height: 2.75rem;
+		width: 2rem;
+		height: 2rem;
 		display: grid;
 		place-items: center;
 		border: 0.2rem solid var(--card-bg, white);
@@ -925,11 +1262,19 @@ onMount(() => void loadSession());
 		pointer-events: none;
 	}
 	.identity-card h1 {
-		margin: 0.2rem 0;
+		grid-column: 2;
+		margin: 0;
 		overflow-wrap: anywhere;
-		font-size: 1.65rem;
+		font-size: 1.1rem;
 		line-height: 1.08;
 		letter-spacing: 0;
+	}
+	.identity-card > .eyebrow {
+		display: none;
+	}
+	.identity-card > .handle {
+		grid-column: 2;
+		margin: 0.15rem 0 0;
 	}
 	.handle,
 	.muted {
@@ -941,7 +1286,9 @@ onMount(() => void loadSession());
 		align-items: center;
 		gap: 0.45rem;
 		max-width: 100%;
-		margin-bottom: 1rem;
+		grid-column: 2;
+		width: max-content;
+		margin: 0;
 		padding: 0 0.75rem;
 		border: 1px solid rgba(75, 159, 232, 0.12);
 		border-radius: 999px;
@@ -958,12 +1305,35 @@ onMount(() => void loadSession());
 		object-fit: cover;
 	}
 	.account-nav {
-		display: grid;
+		grid-column: 1 / -1;
+		display: none;
 		gap: 0.35rem;
 		margin-top: 1rem;
 		padding-top: 1rem;
 		border-top: 1px solid var(--line-divider, rgba(70, 100, 130, 0.12));
 		text-align: left;
+	}
+	.account-nav.open {
+		display: grid;
+	}
+	.mobile-menu-command {
+		grid-column: 3;
+		grid-row: 1 / span 3;
+		min-width: 2.75rem;
+		min-height: 2.75rem;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.45rem;
+		border: 1px solid var(--line-divider, rgba(70, 100, 130, 0.16));
+		border-radius: 0.7rem;
+		background: var(--card-bg, white);
+		color: inherit;
+		font-weight: 800;
+		cursor: pointer;
+	}
+	.mobile-menu-command span {
+		display: none;
 	}
 	.account-nav button {
 		min-height: 2.9rem;
@@ -995,26 +1365,23 @@ onMount(() => void loadSession());
 		display: grid;
 		gap: 1rem;
 	}
-	.hero-panel {
-		position: relative;
-		display: grid;
+	.page-heading {
+		display: flex;
+		flex-direction: column;
 		gap: 1rem;
-		align-items: center;
-		overflow: hidden;
+		padding: 0.35rem 0.15rem 0.2rem;
 	}
-	.hero-panel::before {
-		content: "";
-		position: absolute;
-		inset: 0 0 auto;
-		height: 0.3rem;
-		background: linear-gradient(90deg, var(--primary, #4b9fe8), transparent);
-	}
-	.hero-panel h2 {
-		max-width: 21ch;
+	.page-heading h2 {
 		margin: 0;
-		font-size: clamp(1.65rem, 4vw, 2.35rem);
-		line-height: 1.05;
+		font-size: 1.75rem;
+		line-height: 1.15;
 		letter-spacing: 0;
+	}
+	.page-heading p {
+		max-width: 62ch;
+		margin: 0.35rem 0 0;
+		color: var(--text-75, #617386);
+		line-height: 1.55;
 	}
 	.hero-stats {
 		display: flex;
@@ -1118,9 +1485,7 @@ onMount(() => void loadSession());
 		font-size: 0.75rem;
 		font-weight: 500;
 	}
-	.avatar-actions,
-	.inline-form,
-	.danger-actions {
+	.avatar-actions {
 		display: flex;
 		flex-wrap: wrap;
 		gap: 0.6rem;
@@ -1179,6 +1544,15 @@ onMount(() => void loadSession());
 		opacity: 0.55;
 		transform: none;
 	}
+	.command:focus-visible,
+	.icon-command:focus-visible,
+	.account-nav button:focus-visible,
+	.mobile-menu-command:focus-visible,
+	.toggle-list input:focus-visible,
+	.avatar-camera:focus-within {
+		outline: 3px solid rgba(50, 139, 214, 0.35);
+		outline-offset: 2px;
+	}
 	.split-card {
 		display: grid;
 		gap: 1.5rem;
@@ -1232,6 +1606,13 @@ onMount(() => void loadSession());
 		gap: 0.7rem;
 		margin-bottom: 1rem;
 	}
+	.group-label {
+		margin: 0 0 0.75rem;
+		color: var(--text-75, #657789);
+		font-size: 0.78rem;
+		font-weight: 800;
+		text-transform: uppercase;
+	}
 	.security-row,
 	.session-list article,
 	.toggle-list label {
@@ -1262,12 +1643,6 @@ onMount(() => void loadSession());
 	.status.good {
 		background: #e5f6ec;
 		color: #177248;
-	}
-	.inline-form {
-		margin: 1rem 0;
-	}
-	.inline-form .auth-input {
-		flex: 1 1 13rem;
 	}
 	.totp-box,
 	.event-list div {
@@ -1378,12 +1753,141 @@ onMount(() => void loadSession());
 			linear-gradient(180deg, rgba(255, 245, 245, 0.8), transparent 8rem),
 			var(--card-bg, white);
 	}
+	.danger-grid {
+		display: grid;
+		gap: 1rem;
+	}
+	.danger-card {
+		display: flex;
+		min-width: 0;
+		flex-direction: column;
+		align-items: stretch;
+		gap: 1rem;
+	}
+	.danger-copy {
+		display: flex;
+		align-items: flex-start;
+		gap: 0.85rem;
+	}
+	.danger-copy p,
+	.risk-action p {
+		margin: 0.45rem 0 0;
+		color: var(--text-75, #6c7b8c);
+		line-height: 1.5;
+	}
+	.danger-copy .scheduled {
+		color: #9b3131;
+		font-weight: 800;
+	}
+	.danger-card .command {
+		width: 100%;
+	}
+	.risk-action {
+		display: flex;
+		flex-direction: column;
+		gap: 1rem;
+		padding: 1rem;
+		border: 1px solid var(--line-divider, rgba(70, 100, 130, 0.12));
+		border-radius: 0.8rem;
+		background: var(--btn-regular-bg, #f8fbfd);
+	}
+	.card-actions {
+		margin-top: 1rem;
+	}
+	.modal-backdrop {
+		position: fixed;
+		z-index: 100;
+		inset: 0;
+		display: grid;
+		place-items: center;
+		padding: 1rem;
+		background: rgba(20, 34, 50, 0.48);
+		backdrop-filter: blur(4px);
+	}
+	.confirm-modal {
+		box-sizing: border-box;
+		width: min(100%, 34rem);
+		max-height: calc(100svh - 2rem);
+		overflow-y: auto;
+		padding: 1.25rem;
+		border: 1px solid var(--line-divider, rgba(70, 100, 130, 0.16));
+		border-radius: 0.75rem;
+		background: var(--card-bg, white);
+		box-shadow: 0 1.5rem 4rem rgba(17, 38, 60, 0.24);
+	}
+	.modal-header {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 1rem;
+	}
+	.modal-header h2 {
+		margin: 0;
+		font-size: 1.35rem;
+		letter-spacing: 0;
+	}
+	.modal-description {
+		margin: 0.75rem 0 1rem;
+		color: var(--text-75, #617386);
+		line-height: 1.55;
+	}
+	.verification-note,
+	.confirmation-warning,
+	.success-state {
+		display: flex;
+		align-items: flex-start;
+		gap: 0.75rem;
+		padding: 1rem;
+		border-radius: 0.75rem;
+		background: var(--btn-regular-bg, #edf6fd);
+	}
+	.verification-note > :global(svg),
+	.confirmation-warning > :global(svg),
+	.success-state > :global(svg) {
+		flex: none;
+		font-size: 1.4rem;
+		color: var(--primary, #2d80c5);
+	}
+	.verification-note p,
+	.confirmation-warning p,
+	.success-state p {
+		margin: 0.3rem 0 0;
+		color: var(--text-75, #617386);
+		line-height: 1.5;
+	}
+	.confirmation-warning {
+		margin-bottom: 1rem;
+		background: #fff1f1;
+	}
+	.confirmation-warning > :global(svg) {
+		color: #ae3838;
+	}
+	.success-state {
+		flex-wrap: wrap;
+		background: #e8f6ee;
+	}
+	.success-state > :global(svg) {
+		color: #177248;
+	}
+	.success-state p {
+		flex-basis: 100%;
+	}
+	.modal-fields {
+		display: grid;
+		gap: 1rem;
+	}
+	.modal-actions {
+		display: flex;
+		flex-direction: column-reverse;
+		gap: 0.65rem;
+		margin-top: 1.15rem;
+	}
+	.modal-actions .command {
+		width: 100%;
+	}
 	.danger-icon {
 		background: #fff1f1;
 		color: #b63b3b;
-	}
-	.danger-actions {
-		margin-top: 0.6rem;
 	}
 	.message {
 		display: flex;
@@ -1434,39 +1938,89 @@ onMount(() => void loadSession());
 		.accounts-stage {
 			padding: 1.5rem;
 		}
-		.hero-panel {
-			grid-template-columns: minmax(0, 1fr) auto;
+		.account-grid {
+			grid-template-columns: 13rem minmax(0, 1fr);
+			align-items: start;
+		}
+		.identity-card {
+			display: block;
+			text-align: center;
+		}
+		.identity-card > .eyebrow {
+			display: block;
+		}
+		.identity-card h1 {
+			margin: 0.2rem 0;
+			font-size: 1.35rem;
+		}
+		.identity-card > .handle {
+			margin: 0 0 0.8rem;
+		}
+		.avatar-shell {
+			width: 5.5rem;
+			height: 5.5rem;
+			margin: 0 auto 1rem;
+		}
+		.avatar {
+			font-size: 1.8rem;
+		}
+		.region-pill {
+			margin: 0 auto;
+		}
+		.mobile-menu-command {
+			display: none;
+		}
+		.account-nav,
+		.account-nav.open {
+			display: grid;
+		}
+		.page-heading {
+			flex-direction: row;
+			align-items: center;
+			justify-content: space-between;
 		}
 		.hero-stats {
 			justify-content: flex-end;
 		}
-		.split-card {
-			grid-template-columns: minmax(0, 1fr) minmax(16rem, 0.65fr);
+		.risk-action {
+			flex-direction: row;
+			align-items: center;
+			justify-content: space-between;
+		}
+		.modal-actions {
+			flex-direction: row;
+			justify-content: flex-end;
+		}
+		.modal-actions .command {
+			width: max-content;
 		}
 	}
 	@media (min-width: 1024px) {
 		.account-grid {
-			grid-template-columns: minmax(16rem, 19rem) minmax(0, 1fr);
+			grid-template-columns: 17rem minmax(0, 1fr);
 			align-items: start;
 		}
 		.identity-card {
 			position: sticky;
 			top: 1.5rem;
 		}
+		.split-card {
+			grid-template-columns: minmax(0, 1fr) minmax(16rem, 0.65fr);
+		}
+		.danger-grid {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
 	}
 	@media (max-width: 520px) {
 		.accounts-stage {
 			padding: 0.75rem;
 		}
-		.account-nav {
-			grid-template-columns: repeat(2, minmax(0, 1fr));
-		}
 		.account-nav button {
-			justify-content: center;
+			justify-content: flex-start;
 			min-height: 3.25rem;
-			padding: 0.35rem;
-			font-size: 0.78rem;
-			text-align: center;
+			padding: 0.35rem 0.75rem;
+			font-size: 0.85rem;
+			text-align: left;
 		}
 		.account-nav button :global(svg) {
 			font-size: 1.1rem;

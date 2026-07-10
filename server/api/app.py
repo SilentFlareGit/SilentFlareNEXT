@@ -13,7 +13,7 @@ import struct
 import subprocess
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
@@ -345,6 +345,34 @@ class UnifiedProfilePayload(BaseModel):
 class AccountPasswordPayload(BaseModel):
 	current_password: str = ""
 	new_password: str = ""
+	verification_token: str = ""
+
+
+class AccountSensitiveRequestPayload(BaseModel):
+	action: str = ""
+
+
+class AccountSensitiveVerifyPayload(BaseModel):
+	action: str = ""
+	code: str = ""
+
+
+class AccountSensitiveActionPayload(BaseModel):
+	verification_token: str = ""
+
+
+class AccountEmailUpdatePayload(BaseModel):
+	new_email: str = ""
+	verification_token: str = ""
+
+
+class AccountTwoFAStartPayload(BaseModel):
+	verification_token: str = ""
+
+
+class AccountTwoFADisablePayload(BaseModel):
+	code: str = ""
+	verification_token: str = ""
 
 
 class AccountPrivacyPayload(BaseModel):
@@ -364,6 +392,7 @@ class AccountNotificationSettingsPayload(BaseModel):
 
 class AccountDangerPayload(BaseModel):
 	confirmation: str = ""
+	verification_token: str = ""
 
 
 class SessionRefreshPayload(BaseModel):
@@ -1055,6 +1084,7 @@ def ensure_account_db() -> None:
 			("last_seen_ip", "TEXT"),
 			("last_seen_at", "TEXT"),
 			("last_user_agent", "TEXT"),
+			("deletion_requested_at", "TEXT"),
 		):
 			try:
 				connection.execute(f"ALTER TABLE users ADD COLUMN {column_name} {column_type}")
@@ -1747,6 +1777,7 @@ def account_user_payload(row: dict[str, Any]) -> dict[str, Any]:
 		"displayRegionCode": row.get("display_region_code") or "",
 		"twoFactorEnabled": bool(row.get("totp_enabled")),
 		"hasPassword": bool(row.get("password_hash")),
+		"deletionRequestedAt": row.get("deletion_requested_at") or "",
 	}
 
 
@@ -2983,6 +3014,7 @@ def account_logout(
 def account_me(request: Request, response: Response) -> dict[str, Any]:
 	if not account_auth_configured():
 		return {"user": None, "configured": False}
+	finalize_due_account_deletions()
 	d1_query("DELETE FROM sessions WHERE expires_at <= ?", [utc_now()])
 	user = get_account_user(request)
 	if not user:
@@ -3867,6 +3899,7 @@ def unified_auth_session(request: Request, response: Response) -> dict[str, Any]
 			"emailConfigured": bool(AUTH_EMAIL_API_KEY and AUTH_EMAIL_FROM),
 			"tosVersion": AUTH_TOS_VERSION,
 		}
+	finalize_due_account_deletions()
 	d1_query("DELETE FROM sessions WHERE expires_at <= ?", [utc_now()])
 	user = get_account_user(request)
 	if not user:
@@ -4307,10 +4340,12 @@ def registration_2fa_skip(payload: RegistrationTwoFAPayload) -> dict[str, Any]:
 
 @app.post("/accounts/2fa/setup/start")
 def accounts_2fa_setup_start(
+	payload: AccountTwoFAStartPayload,
 	request: Request,
 	x_csrf_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
 	user = require_account_csrf(request, x_csrf_token)
+	proof = get_sensitive_proof(payload.verification_token, str(user["id"]), "enable-2fa")
 	secret = generate_totp_secret()
 	email = str(user.get("email", ""))
 	setup_token = create_auth_flow(
@@ -4319,6 +4354,7 @@ def accounts_2fa_setup_start(
 		email=email,
 		metadata={"secret": seal_totp_secret(secret)},
 	)
+	consume_auth_flow(str(proof["id"]))
 	uri = f"otpauth://totp/SilentFlare:{quote(email)}?secret={secret}&issuer=SilentFlare&algorithm=SHA1&digits=6&period=30"
 	return {"ok": True, "setup_token": setup_token, "secret": secret, "uri": uri}
 
@@ -4348,11 +4384,12 @@ def accounts_2fa_setup_verify(
 
 @app.post("/accounts/2fa/disable")
 def accounts_2fa_disable(
-	payload: TwoFASetupVerifyPayload,
+	payload: AccountTwoFADisablePayload,
 	request: Request,
 	x_csrf_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
 	user = require_account_csrf(request, x_csrf_token)
+	proof = get_sensitive_proof(payload.verification_token, str(user["id"]), "disable-2fa")
 	rows = d1_query("SELECT totp_secret FROM users WHERE id = ? LIMIT 1", [user["id"]])
 	if not rows or not rows[0].get("totp_secret") or not verify_totp(
 		open_totp_secret(str(rows[0]["totp_secret"])), payload.code
@@ -4363,6 +4400,8 @@ def accounts_2fa_disable(
 		"UPDATE users SET totp_secret = NULL, totp_enabled = 0, updated_at = ? WHERE id = ?",
 		[now, str(user["id"])],
 	)
+	consume_auth_flow(str(proof["id"]))
+	record_security_event(str(user["id"]), "two_factor_disabled", "Two-factor authentication disabled")
 	return {"ok": True}
 
 
@@ -4503,6 +4542,100 @@ def record_security_event(user_id: str, event_type: str, detail: str = "") -> No
 	)
 
 
+def finalize_due_account_deletions() -> None:
+	now = utc_now()
+	rows = d1_query(
+		"SELECT id, avatar_url FROM users WHERE deletion_requested_at IS NOT NULL AND deletion_requested_at <= ?",
+		[now],
+	)
+	for row in rows:
+		user_id = str(row["id"])
+		delete_managed_avatar(str(row.get("avatar_url") or ""))
+		d1_query(
+			"""
+			UPDATE users
+			SET disabled_at = ?, deletion_requested_at = NULL, display_name = '', avatar_url = '', bio = '',
+				email = ?, username = ?, updated_at = ?
+			WHERE id = ?
+			""",
+			[
+				now,
+				f"deleted-{user_id}@silentflare.local",
+				f"deleted-{user_id.replace('-', '')[:24]}",
+				now,
+				user_id,
+			],
+		)
+		d1_query("DELETE FROM sessions WHERE user_id = ?", [user_id])
+
+
+ACCOUNT_SENSITIVE_ACTIONS = {
+	"clear-profile",
+	"change-password",
+	"change-email",
+	"enable-2fa",
+	"disable-2fa",
+	"export-data",
+	"logout-all",
+	"clear-comments",
+	"deactivate-account",
+	"delete-account",
+}
+
+
+def get_sensitive_proof(token: str, user_id: str, action: str) -> dict[str, Any]:
+	if action not in ACCOUNT_SENSITIVE_ACTIONS:
+		raise HTTPException(status_code=400, detail="Unsupported account action")
+	flow = get_auth_flow(token, "account-sensitive-proof")
+	if str(flow.get("user_id") or "") != user_id:
+		raise HTTPException(status_code=403, detail="Email verification is not authorized")
+	metadata = json.loads(str(flow.get("metadata_json") or "{}"))
+	if not hmac.compare_digest(str(metadata.get("action") or ""), action):
+		raise HTTPException(status_code=403, detail="Email verification does not match this action")
+	return flow
+
+
+@app.post("/accounts/security/email/request")
+def accounts_sensitive_email_request(
+	payload: AccountSensitiveRequestPayload,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	user = require_account_csrf(request, x_csrf_token)
+	if payload.action not in ACCOUNT_SENSITIVE_ACTIONS:
+		raise HTTPException(status_code=400, detail="Unsupported account action")
+	create_email_verification(
+		str(user["email"]),
+		f"account-{payload.action}",
+		request,
+		user_id=str(user["id"]),
+	)
+	return {"ok": True}
+
+
+@app.post("/accounts/security/email/verify")
+def accounts_sensitive_email_verify(
+	payload: AccountSensitiveVerifyPayload,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	user = require_account_csrf(request, x_csrf_token)
+	if payload.action not in ACCOUNT_SENSITIVE_ACTIONS:
+		raise HTTPException(status_code=400, detail="Unsupported account action")
+	purpose = f"account-{payload.action}"
+	if not verify_email_code(str(user["email"]), payload.code, purpose):
+		raise HTTPException(status_code=401, detail="Invalid or expired verification code")
+	verification_token = create_auth_flow(
+		"account-sensitive-proof",
+		user_id=str(user["id"]),
+		email=str(user["email"]),
+		metadata={"action": payload.action},
+		ttl_seconds=600,
+	)
+	record_security_event(str(user["id"]), "email_verified", f"Verified for {payload.action}")
+	return {"ok": True, "verificationToken": verification_token}
+
+
 def session_payload(row: dict[str, Any], current_session_id: str) -> dict[str, Any]:
 	user_agent = str(row.get("user_agent") or "")
 	device = "Browser session"
@@ -4569,6 +4702,7 @@ def accounts_password_update(
 	x_csrf_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
 	user = require_account_csrf(request, x_csrf_token)
+	proof = get_sensitive_proof(payload.verification_token, str(user["id"]), "change-password")
 	rows = d1_query(
 		"SELECT password_hash, password_salt FROM users WHERE id = ? LIMIT 1",
 		[str(user["id"])],
@@ -4581,12 +4715,64 @@ def accounts_password_update(
 		raise HTTPException(status_code=401, detail="Current password is incorrect")
 	password = validate_account_password(payload.new_password)
 	password_hash, password_salt = hash_account_password(password)
+	consume_auth_flow(str(proof["id"]))
 	d1_query(
 		"UPDATE users SET password_hash = ?, password_salt = ?, updated_at = ? WHERE id = ?",
 		[password_hash, password_salt, utc_now(), str(user["id"])],
 	)
 	record_security_event(str(user["id"]), "password_updated", "Password changed from Accounts")
-	return {"ok": True}
+	cleanup_token = create_auth_flow(
+		"account-password-cleanup",
+		user_id=str(user["id"]),
+		ttl_seconds=600,
+	)
+	return {"ok": True, "sessionCleanupToken": cleanup_token}
+
+
+@app.patch("/accounts/security/email")
+def accounts_email_update(
+	payload: AccountEmailUpdatePayload,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	user = require_account_csrf(request, x_csrf_token)
+	proof = get_sensitive_proof(payload.verification_token, str(user["id"]), "change-email")
+	new_email = normalize_email(payload.new_email)
+	if new_email == normalize_email(str(user["email"])):
+		raise HTTPException(status_code=400, detail="Enter a different email address")
+	if d1_query("SELECT id FROM users WHERE email = ? AND id != ? LIMIT 1", [new_email, str(user["id"])]):
+		raise HTTPException(status_code=409, detail="Email is already in use")
+	consume_auth_flow(str(proof["id"]))
+	d1_query(
+		"UPDATE users SET email = ?, email_verified_at = ?, updated_at = ? WHERE id = ?",
+		[new_email, utc_now(), utc_now(), str(user["id"])],
+	)
+	record_security_event(str(user["id"]), "email_updated", "Account email changed")
+	return {"ok": True, "email": new_email}
+
+
+@app.post("/accounts/security/export")
+def accounts_data_export(
+	payload: AccountSensitiveActionPayload,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	user = require_account_csrf(request, x_csrf_token)
+	proof = get_sensitive_proof(payload.verification_token, str(user["id"]), "export-data")
+	preferences = preference_payload(ensure_account_preferences(str(user["id"])))
+	comments = d1_query(
+		"SELECT post_slug, content, status, created_at, updated_at FROM comments WHERE user_id = ? ORDER BY created_at DESC",
+		[str(user["id"])],
+	)
+	consume_auth_flow(str(proof["id"]))
+	record_security_event(str(user["id"]), "data_exported", "Account data export created")
+	return {
+		"ok": True,
+		"exportedAt": utc_now(),
+		"profile": account_user_payload(user),
+		"preferences": preferences,
+		"comments": comments,
+	}
 
 
 @app.get("/accounts/sessions")
@@ -4625,11 +4811,14 @@ def accounts_session_delete(
 
 @app.post("/accounts/sessions/logout-all")
 def accounts_sessions_logout_all(
+	payload: AccountSensitiveActionPayload,
 	request: Request,
 	response: Response,
 	x_csrf_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
 	user = require_account_csrf(request, x_csrf_token)
+	proof = get_sensitive_proof(payload.verification_token, str(user["id"]), "logout-all")
+	consume_auth_flow(str(proof["id"]))
 	d1_query("DELETE FROM sessions WHERE user_id = ?", [str(user["id"])])
 	clear_account_cookie(response)
 	record_security_event(str(user["id"]), "sessions_cleared", "All sessions were signed out")
@@ -4699,6 +4888,8 @@ def accounts_clear_profile(
 	user = require_account_csrf(request, x_csrf_token)
 	if payload.confirmation != "CLEAR PROFILE":
 		raise HTTPException(status_code=400, detail="Confirmation text is required")
+	proof = get_sensitive_proof(payload.verification_token, str(user["id"]), "clear-profile")
+	consume_auth_flow(str(proof["id"]))
 	delete_managed_avatar(str(user.get("avatar_url") or ""))
 	d1_query(
 		"UPDATE users SET display_name = '', avatar_url = '', bio = '', updated_at = ? WHERE id = ?",
@@ -4717,6 +4908,8 @@ def accounts_clear_comments(
 	user = require_account_csrf(request, x_csrf_token)
 	if payload.confirmation != "CLEAR COMMENTS":
 		raise HTTPException(status_code=400, detail="Confirmation text is required")
+	proof = get_sensitive_proof(payload.verification_token, str(user["id"]), "clear-comments")
+	consume_auth_flow(str(proof["id"]))
 	now = utc_now()
 	d1_query(
 		"UPDATE comments SET status = 'deleted', deleted_at = ?, updated_at = ? WHERE user_id = ? AND deleted_at IS NULL",
@@ -4736,6 +4929,8 @@ def accounts_deactivate(
 	user = require_account_csrf(request, x_csrf_token)
 	if payload.confirmation != "DEACTIVATE":
 		raise HTTPException(status_code=400, detail="Confirmation text is required")
+	proof = get_sensitive_proof(payload.verification_token, str(user["id"]), "deactivate-account")
+	consume_auth_flow(str(proof["id"]))
 	now = utc_now()
 	d1_query("UPDATE users SET disabled_at = ?, updated_at = ? WHERE id = ?", [now, now, str(user["id"])])
 	d1_query("DELETE FROM sessions WHERE user_id = ?", [str(user["id"])])
@@ -4754,25 +4949,44 @@ def accounts_delete(
 	user = require_account_csrf(request, x_csrf_token)
 	if payload.confirmation != "DELETE ACCOUNT":
 		raise HTTPException(status_code=400, detail="Confirmation text is required")
-	now = utc_now()
-	delete_managed_avatar(str(user.get("avatar_url") or ""))
+	proof = get_sensitive_proof(payload.verification_token, str(user["id"]), "delete-account")
+	consume_auth_flow(str(proof["id"]))
+	scheduled_for = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
 	d1_query(
-		"""
-		UPDATE users
-		SET disabled_at = ?, display_name = '', avatar_url = '', bio = '',
-			email = ?, username = ?, updated_at = ?
-		WHERE id = ?
-		""",
-		[
-			now,
-			f"deleted-{user['id']}@silentflare.local",
-			f"deleted-{str(user['id']).replace('-', '')[:24]}",
-			now,
-			str(user["id"]),
-		],
+		"UPDATE users SET deletion_requested_at = ?, updated_at = ? WHERE id = ?",
+		[scheduled_for, utc_now(), str(user["id"])],
 	)
-	d1_query("DELETE FROM sessions WHERE user_id = ?", [str(user["id"])])
-	clear_account_cookie(response)
+	record_security_event(str(user["id"]), "account_deletion_scheduled", "Deletion scheduled after 7-day cooling period")
+	return {"ok": True, "scheduledFor": scheduled_for}
+
+
+@app.post("/accounts/danger/delete/cancel")
+def accounts_delete_cancel(
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	user = require_account_csrf(request, x_csrf_token)
+	d1_query("UPDATE users SET deletion_requested_at = NULL, updated_at = ? WHERE id = ?", [utc_now(), str(user["id"])])
+	record_security_event(str(user["id"]), "account_deletion_cancelled", "Scheduled deletion cancelled")
+	return {"ok": True}
+
+
+@app.post("/accounts/sessions/logout-others")
+def accounts_sessions_logout_others(
+	payload: AccountSensitiveActionPayload,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	user = require_account_csrf(request, x_csrf_token)
+	flow = get_auth_flow(payload.verification_token, "account-password-cleanup")
+	if str(flow.get("user_id") or "") != str(user["id"]):
+		raise HTTPException(status_code=403, detail="Session cleanup is not authorized")
+	d1_query(
+		"DELETE FROM sessions WHERE user_id = ? AND id != ?",
+		[str(user["id"]), str(user.get("session_id") or "")],
+	)
+	consume_auth_flow(str(flow["id"]))
+	record_security_event(str(user["id"]), "other_sessions_cleared", "Other sessions were signed out after password change")
 	return {"ok": True}
 
 

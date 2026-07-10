@@ -90,6 +90,11 @@ Accounts is a standalone account workspace. Do not restore the public blog navba
 - `DELETE /accounts/profile/avatar`: clear the profile avatar and remove previous managed file when applicable.
 - `GET /account-avatars/{filename}`: immutable public delivery for managed avatars.
 - `POST /accounts/2fa/setup/start`, `POST /accounts/2fa/setup/verify`, `POST /accounts/2fa/disable`: authenticated 2FA management with CSRF.
+- `POST /accounts/security/email/request`, `POST /accounts/security/email/verify`: issue a short-lived, action-bound proof before password, email, 2FA, export, session, or danger-zone changes.
+- `POST /accounts/security/password`, `PATCH /accounts/security/email`, `POST /accounts/security/export`: verified sensitive account changes and private data export.
+- `GET/DELETE /accounts/sessions`, `POST /accounts/sessions/logout-all`, `POST /accounts/sessions/logout-others`: device review and revocation; bulk revocation requires an action-bound proof.
+- `GET/PATCH /accounts/preferences/*`: privacy and notification preferences.
+- `POST /accounts/danger/*`: isolated destructive actions with action-bound email verification and confirmation text. Account deletion is scheduled behind a seven-day cooling period and can be cancelled before it runs.
 - Legacy `POST /account/auth/register` and `POST /account/auth/login` return `410`; do not re-enable them.
 - `GET /comments?postSlug=...`: public comment list for a Ghost post slug.
 - `POST /comments/create`: authenticated public-user comment creation with Turnstile and CSRF.
