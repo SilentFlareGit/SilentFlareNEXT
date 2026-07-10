@@ -1,4 +1,5 @@
 <script lang="ts">
+import Icon from "@iconify/svelte";
 import { onMount } from "svelte";
 import AdminOwnerAuth from "./AdminOwnerAuth.svelte";
 import EmailCodePanel from "./panels/EmailCodePanel.svelte";
