@@ -1920,6 +1920,139 @@ onMount(() => void loadSession());
 		border-radius: 50%;
 		animation: spin 0.8s linear infinite;
 	}
+
+	/* Google Account-inspired structure, using SilentFlare color and type tokens. */
+	.accounts-stage {
+		padding: 0 1rem 2rem;
+		background: var(--sf-surface);
+	}
+	.accounts-workspace {
+		width: min(100%, 82rem);
+	}
+	.workspace-bar {
+		min-height: 4.5rem;
+		margin: 0;
+		border-bottom: 1px solid var(--sf-border);
+	}
+	.account-grid {
+		gap: 2rem;
+		padding-top: 1.5rem;
+	}
+	.identity-card {
+		padding: 0.5rem;
+		border: 0;
+		background: transparent;
+		box-shadow: none;
+	}
+	.avatar-shell {
+		width: 4.75rem;
+		height: 4.75rem;
+	}
+	.avatar {
+		border-width: 2px;
+		box-shadow: 0 0 0 0.3rem var(--sf-accent-soft);
+		font-size: 1.5rem;
+	}
+	.account-nav {
+		gap: 0.2rem;
+		border-top: 0;
+	}
+	.account-nav button {
+		min-height: 3rem;
+		border-radius: 999px;
+		padding: 0 1rem;
+		font-weight: 700;
+	}
+	.account-nav button:hover {
+		transform: none;
+	}
+	.account-nav button.active {
+		background: var(--sf-accent-soft);
+		color: var(--sf-accent-strong);
+	}
+	.account-content {
+		width: 100%;
+		max-width: 54rem;
+		justify-self: center;
+		gap: 1.25rem;
+	}
+	.page-heading {
+		align-items: center;
+		padding: 1rem 0 0.75rem;
+		text-align: center;
+	}
+	.page-heading p {
+		margin-right: auto;
+		margin-left: auto;
+	}
+	.hero-stats {
+		justify-content: center;
+	}
+	.panel {
+		border-color: var(--sf-border-strong);
+		border-radius: var(--sf-radius-lg);
+		box-shadow: none;
+	}
+	.account-card {
+		padding: 1.5rem;
+	}
+	.section-heading {
+		align-items: center;
+		margin-bottom: 1rem;
+	}
+	.section-icon {
+		width: 2.5rem;
+		height: 2.5rem;
+		border-radius: 50%;
+		background: var(--sf-accent-soft);
+		color: var(--sf-accent-strong);
+	}
+	.security-list,
+	.session-list,
+	.toggle-list {
+		gap: 0;
+		border-top: 1px solid var(--sf-border);
+	}
+	.security-row,
+	.session-list article {
+		min-height: 5rem;
+		border: 0;
+		border-bottom: 1px solid var(--sf-border);
+		border-radius: 0;
+		background: transparent;
+	}
+	.row-icon {
+		background: transparent;
+		color: var(--sf-accent-strong);
+	}
+	.risk-action {
+		padding: 1rem 0;
+		border: 0;
+		border-top: 1px solid var(--sf-border);
+		border-radius: 0;
+		background: transparent;
+	}
+	.event-list div,
+	.totp-box {
+		border-color: var(--sf-border);
+		border-radius: var(--sf-radius-md);
+		background: var(--sf-surface-subtle);
+	}
+	.preview-card {
+		padding: 1rem 0;
+	}
+	.danger-card {
+		border-color: color-mix(in srgb, var(--sf-danger) 35%, var(--sf-border));
+	}
+	.danger-icon {
+		background: var(--sf-danger-soft);
+		color: var(--sf-danger);
+	}
+	.confirm-modal {
+		border-color: var(--sf-border-strong);
+		border-radius: var(--sf-radius-lg);
+		box-shadow: 0 1.5rem 4rem rgba(17, 38, 60, 0.22);
+	}
 	.spin {
 		animation: spin 0.8s linear infinite;
 	}
@@ -1964,12 +2097,12 @@ onMount(() => void loadSession());
 			display: grid;
 		}
 		.page-heading {
-			flex-direction: row;
+			flex-direction: column;
 			align-items: center;
-			justify-content: space-between;
+			justify-content: center;
 		}
 		.hero-stats {
-			justify-content: flex-end;
+			justify-content: center;
 		}
 		.risk-action {
 			flex-direction: row;
@@ -2008,7 +2141,7 @@ onMount(() => void loadSession());
 	}
 	@media (max-width: 520px) {
 		.accounts-stage {
-			padding: 0.75rem;
+			padding: 0 0.75rem 1rem;
 		}
 		.account-nav button {
 			justify-content: flex-start;

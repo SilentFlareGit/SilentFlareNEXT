@@ -18,7 +18,7 @@ let {
 </label>
 
 <style>
-	.sf-toggle-row { min-height: 4.5rem; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 1rem; padding: 0.85rem; border: 1px solid var(--sf-border); border-radius: var(--sf-radius-md); background: var(--sf-surface-subtle); cursor: pointer; }
+	.sf-toggle-row { min-height: 4.75rem; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 1rem; padding: 0.85rem 0.25rem; border: 0; border-bottom: 1px solid var(--sf-border); border-radius: 0; background: transparent; cursor: pointer; }
 	.sf-toggle-row span { min-width: 0; display: grid; gap: 0.2rem; }
 	.sf-toggle-row strong { color: var(--sf-text); }
 	.sf-toggle-row small { color: var(--sf-text-muted); font-size: 0.85rem; line-height: 1.45; }
