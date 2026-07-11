@@ -1,0 +1,89 @@
+.sf-app {
+	box-sizing: border-box;
+	min-height: 100svh;
+	color: var(--sf-text);
+	font-family: var(--sf-font-sans);
+	background: var(--sf-page);
+}
+
+.sf-app *,
+.sf-app *::before,
+.sf-app *::after {
+	box-sizing: border-box;
+}
+
+.sf-app button,
+.sf-app input,
+.sf-app textarea,
+.sf-app select {
+	font: inherit;
+}
+
+.sf-app button,
+.sf-app a,
+.sf-app input,
+.sf-app textarea,
+.sf-app select {
+	-webkit-tap-highlight-color: transparent;
+}
+
+.sf-app :is(button, a, input, textarea, select):focus-visible {
+	outline: 0;
+	box-shadow: var(--sf-focus);
+}
+
+.sf-field-label {
+	display: flex;
+	flex-direction: column;
+	gap: var(--sf-space-2);
+	color: var(--sf-text);
+	font-size: 0.9rem;
+	font-weight: 700;
+}
+
+.sf-field {
+	width: 100%;
+	min-height: var(--sf-control-height);
+	border: 1px solid var(--sf-border-strong);
+	border-radius: var(--sf-radius-md);
+	padding: 0.7rem 0.8rem;
+	color: var(--sf-text);
+	background: var(--sf-surface);
+	outline: 0;
+	transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.sf-field::placeholder {
+	color: var(--sf-text-soft);
+}
+
+.sf-field:focus {
+	border-color: var(--sf-accent);
+	box-shadow: var(--sf-focus);
+}
+
+.sf-page-title {
+	margin: 0;
+	color: var(--sf-text);
+	font-size: 1.75rem;
+	font-weight: 800;
+	line-height: 1.15;
+	letter-spacing: 0;
+}
+
+.sf-page-description {
+	margin: 0.5rem 0 0;
+	color: var(--sf-text-muted);
+	line-height: 1.6;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.sf-app *,
+	.sf-app *::before,
+	.sf-app *::after {
+		scroll-behavior: auto !important;
+		transition-duration: 0.01ms !important;
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+	}
+}

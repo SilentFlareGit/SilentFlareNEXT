@@ -1,6 +1,7 @@
 <script lang="ts">
 import Icon from "@iconify/svelte";
 import { onMount } from "svelte";
+import IdentityShell from "../shells/IdentityShell.svelte";
 import AdminOwnerAuth from "./AdminOwnerAuth.svelte";
 import EmailCodePanel from "./panels/EmailCodePanel.svelte";
 import MethodSelectPanel from "./panels/MethodSelectPanel.svelte";
@@ -25,18 +26,18 @@ let notice = $state("");
 let adminMode = $state(false);
 
 const accountCenterFeatures = [
-	{ label: "Public profile", icon: "material-symbols:person-outline-rounded" },
-	{ label: "Security", icon: "material-symbols:shield-lock-outline-rounded" },
-	{ label: "Sessions", icon: "material-symbols:devices-outline-rounded" },
 	{
-		label: "Privacy",
-		icon: "material-symbols:visibility-lock-outline-rounded",
+		label: "Read and join the conversation",
+		icon: "material-symbols:article-outline-rounded",
 	},
 	{
-		label: "Notifications",
-		icon: "material-symbols:notifications-outline-rounded",
+		label: "Shape your public identity",
+		icon: "material-symbols:person-outline-rounded",
 	},
-	{ label: "Danger zone", icon: "material-symbols:warning-outline-rounded" },
+	{
+		label: "Protect access across every subsite",
+		icon: "material-symbols:shield-lock-outline-rounded",
+	},
 ] as const;
 
 async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -128,23 +129,24 @@ async function bootstrap() {
 onMount(() => void bootstrap());
 </script>
 
-<div class="auth-stage">
-	<main class="auth-main">
-		<section class="auth-shell" aria-live="polite">
-			<div class="auth-story" class:admin-story={adminMode}>
-				<a class="story-wordmark" href="https://blog.silentflare.com/" aria-label="SilentFlare Blog"><span>S</span><strong>SilentFlare</strong></a>
-				<div class="story-copy"><h1>{adminMode ? "A private door to public trust." : "One identity for the quiet side of the web."}</h1><p>{adminMode ? "Verify Owner access before reviewing members, account-center state, and moderated conversations." : "Sign in once, then move between the blog, your profile, sessions, privacy, notifications, and every SilentFlare subsite."}</p></div>
-				{#if !adminMode}
-					<div class="feature-rail" aria-label="Account center areas">
-						{#each accountCenterFeatures as feature}
-							<span><Icon icon={feature.icon} />{feature.label}</span>
-						{/each}
-					</div>
-				{/if}
-				<a class="story-link" href="https://blog.silentflare.com/">Return to the blog</a>
-			</div>
+{#snippet story()}
+	{#if !adminMode}
+		<div class="feature-rail" aria-label="Account center areas">
+			{#each accountCenterFeatures as feature}
+				<span><Icon icon={feature.icon} />{feature.label}</span>
+			{/each}
+		</div>
+	{/if}
+{/snippet}
 
-			<div class="auth-form">
+<IdentityShell
+	product={adminMode ? "Admin" : ""}
+	headline={adminMode ? "A private door to public trust." : "One identity across SilentFlare."}
+	description={adminMode ? "Verify Owner access before reviewing members and moderated conversations." : "Sign in once for the blog, comments, your profile, privacy, and security settings."}
+	backHref="https://blog.silentflare.com/"
+	backLabel="Return to the blog"
+	{story}
+>
 				{#if adminMode}
 					<AdminOwnerAuth {apiBase} {returnUrl} />
 				{:else if step === "checking" || step === "redirecting"}
@@ -183,11 +185,7 @@ onMount(() => void bootstrap());
 						onBack={() => { step = "method"; pendingId = ""; }}
 					/>
 				{/if}
-			</div>
-		</section>
-		<p class="auth-legal">By continuing, you agree to the <a href="https://tos.silentflare.com/">SilentFlare Terms of Service</a>.</p>
-	</main>
-</div>
+</IdentityShell>
 
 <style>
 	.auth-stage { min-height: 100svh; padding: 1rem; color: var(--primary); background: #edf3f8; }
@@ -217,4 +215,8 @@ onMount(() => void bootstrap());
 	@media (min-width: 1024px) { .auth-main { padding: 3rem 0 2rem; } .auth-shell { grid-template-columns: minmax(17rem, 2fr) minmax(0, 3fr); align-items: stretch; } .auth-story { order: 1; min-height: 28rem; padding: 2.5rem; border-top: 0; border-right: 1px solid #dce6ee; box-shadow: inset .25rem 0 #4b9fe8; } .story-copy h1 { font-size: 2.4rem; } .auth-form { order: 2; padding: 3rem; } }
 	@keyframes spin { to { transform: rotate(360deg); } }
 	@media (prefers-reduced-motion: reduce) { .auth-loading span { animation: none; } }
+	.feature-rail { grid-template-columns: 1fr; gap: 0; max-width: 25rem; }
+	.feature-rail span { min-height: 3rem; border: 0; border-bottom: 1px solid var(--sf-border); border-radius: 0; padding: 0.35rem 0; background: transparent; color: var(--sf-text-muted); font-size: 0.85rem; }
+	.feature-rail span:first-child { border-top: 1px solid var(--sf-border); }
+	.feature-rail :global(svg) { color: var(--sf-accent); }
 </style>

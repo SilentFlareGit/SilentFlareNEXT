@@ -1,5 +1,7 @@
 <script lang="ts">
 import Icon from "@iconify/svelte";
+import Alert from "../../ui/Alert.svelte";
+import Button from "../../ui/Button.svelte";
 
 let {
 	onSelectEmailCode,
@@ -23,7 +25,7 @@ let {
 	<div class="flex flex-col gap-3">
 		<button
 			type="button"
-			class="flex w-full items-center gap-4 rounded-xl border border-[var(--line-divider)] bg-[var(--btn-plain-bg)] px-5 py-4 text-left transition-all hover:border-[var(--primary)]/30 hover:bg-[var(--btn-regular-bg)] active:scale-[0.98]"
+			class="method-option"
 			onclick={onSelectEmailCode}
 		>
 			<span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--btn-regular-bg)]">
@@ -38,11 +40,11 @@ let {
 
 		<button
 			type="button"
-			class="flex w-full items-center gap-4 rounded-xl border border-[var(--line-divider)] bg-[var(--btn-plain-bg)] px-5 py-4 text-left transition-all hover:border-[var(--primary)]/30 hover:bg-[var(--btn-regular-bg)] active:scale-[0.98]"
+			class="method-option"
 			onclick={onSelectPassword}
 		>
 			<span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--btn-regular-bg)]">
-				<Icon icon="material-symbols:lock-outline-rounded" class="text-[1.3rem] text-[var(--primary)]" />
+				<Icon icon="material-symbols:key-outline-rounded" class="text-[1.3rem] text-[var(--primary)]" />
 			</span>
 			<div>
 				<p class="font-bold text-black/85 dark:text-white/85">Email or username + password</p>
@@ -86,22 +88,34 @@ let {
 
 	<div class="mt-7 border-t border-[var(--line-divider)] pt-6 text-center">
 		<p class="mb-3 text-sm text-black/50 dark:text-white/50">New to SilentFlare? Create an account, then manage profile, privacy, sessions, and notifications.</p>
-		<button type="button" class="min-h-11 w-full rounded-lg border border-[var(--line-divider)] px-4 font-bold text-[var(--primary)] transition-colors hover:bg-[var(--btn-regular-bg)]" onclick={onRegister}>
-			Create an account
-		</button>
+		<Button variant="secondary" full onclick={onRegister}>Create an account</Button>
 	</div>
 
-	{#if notice}
-		<div class="mt-5 flex items-start gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-4 text-[0.9rem] font-bold text-emerald-700 dark:text-emerald-400">
-			<Icon icon="material-symbols:check-circle-outline-rounded" class="mt-0.5 shrink-0 text-[1.2rem]" />
-			<p class="leading-snug">{notice}</p>
-		</div>
-	{/if}
-
-	{#if error}
-		<div class="mt-5 flex items-start gap-3 rounded-xl border border-red-500/20 bg-red-500/10 p-4 text-[0.9rem] font-bold text-red-600 dark:text-red-400">
-			<Icon icon="material-symbols:error-outline-rounded" class="mt-0.5 shrink-0 text-[1.2rem]" />
-			<p class="leading-snug">{error}</p>
-		</div>
-	{/if}
+	{#if notice}<div class="mt-5"><Alert tone="success" message={notice} /></div>{/if}
+	{#if error}<div class="mt-5"><Alert tone="error" message={error} /></div>{/if}
 </div>
+
+<style>
+	.method-option {
+		width: 100%;
+		min-height: 4.75rem;
+		display: flex;
+		align-items: center;
+		gap: 1rem;
+		border: 0;
+		border-bottom: 1px solid var(--sf-border);
+		padding: 0.85rem 0.25rem;
+		background: transparent;
+		color: var(--sf-text);
+		text-align: left;
+		cursor: pointer;
+		transition: color 150ms ease, background-color 150ms ease;
+	}
+	.method-option:first-child {
+		border-top: 1px solid var(--sf-border);
+	}
+	.method-option:hover {
+		color: var(--sf-accent-strong);
+		background: var(--sf-surface-subtle);
+	}
+</style>

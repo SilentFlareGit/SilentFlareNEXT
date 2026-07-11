@@ -1,5 +1,7 @@
 <script lang="ts">
 import Icon from "@iconify/svelte";
+import Alert from "../../ui/Alert.svelte";
+import Button from "../../ui/Button.svelte";
 
 type AuthUser = {
 	id: string;
@@ -91,24 +93,8 @@ $effect(() => {
 		<p class="text-xs text-black/40 dark:text-white/40">
 			Compatible with Google Authenticator, Microsoft Authenticator, 1Password, Bitwarden, and other TOTP apps.
 		</p>
-		<button
-			class="btn-regular scale-animation flex w-full items-center justify-center gap-2 rounded-xl py-3.5 text-[1rem] font-bold disabled:cursor-wait disabled:opacity-70"
-			type="submit"
-			disabled={submitting}
-		>
-			{#if submitting}
-				<span class="h-5 w-5 animate-spin rounded-full border-2 border-current border-t-transparent"></span>
-			{:else}
-				<Icon icon="material-symbols:verified-outline-rounded" class="text-[1.2rem]" />
-			{/if}
-			{submitting ? "Verifying..." : "Verify"}
-		</button>
+		<Button type="submit" icon="material-symbols:verified-outline-rounded" loading={submitting} full>Verify</Button>
 	</form>
 
-	{#if error}
-		<div class="mt-5 flex items-start gap-3 rounded-xl border border-red-500/20 bg-red-500/10 p-4 text-[0.9rem] font-bold text-red-600 dark:text-red-400">
-			<Icon icon="material-symbols:error-outline-rounded" class="mt-0.5 shrink-0 text-[1.2rem]" />
-			<p class="leading-snug">{error}</p>
-		</div>
-	{/if}
+	{#if error}<div class="mt-5"><Alert tone="error" message={error} /></div>{/if}
 </div>

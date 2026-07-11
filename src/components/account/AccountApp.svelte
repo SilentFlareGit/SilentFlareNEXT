@@ -1,6 +1,12 @@
 <script lang="ts">
 import Icon from "@iconify/svelte";
 import { onMount } from "svelte";
+import Alert from "../ui/Alert.svelte";
+import BrandMark from "../ui/BrandMark.svelte";
+import Button from "../ui/Button.svelte";
+import StatusBadge from "../ui/StatusBadge.svelte";
+import TextField from "../ui/TextField.svelte";
+import Toggle from "../ui/Toggle.svelte";
 import RegistrationApp from "./RegistrationApp.svelte";
 
 type AccountUser = {
@@ -814,13 +820,7 @@ onMount(() => void loadSession());
 	<div class="accounts-stage">
 		<main class="accounts-workspace">
 			<div class="workspace-bar">
-				<a
-					class="wordmark"
-					href="https://blog.silentflare.com/"
-					aria-label="SilentFlare Blog"
-				>
-					<span>S</span><strong>SilentFlare</strong>
-				</a>
+				<BrandMark product="Account" />
 				<button
 					class="icon-command"
 					type="button"
@@ -903,8 +903,8 @@ onMount(() => void loadSession());
 							<p>{panelCopy[activePanel]}</p>
 						</div>
 						<div class="hero-stats">
-							<span class:good={user.twoFactorEnabled}>{user.twoFactorEnabled ? "2FA protected" : "Basic protection"}</span>
-							<span>{sessions.length} session{sessions.length === 1 ? "" : "s"}</span>
+							<StatusBadge tone={user.twoFactorEnabled ? "success" : "neutral"} label={user.twoFactorEnabled ? "2FA protected" : "Basic protection"} />
+							<StatusBadge label={`${sessions.length} session${sessions.length === 1 ? "" : "s"}`} />
 						</div>
 					</header>
 
@@ -926,10 +926,7 @@ onMount(() => void loadSession());
 										<h3>Profile details</h3>
 									</div>
 								</div>
-								<label>
-									Display name
-									<input class="auth-input" bind:value={displayName} maxlength="80" autocomplete="name" />
-								</label>
+								<TextField label="Display name" bind:value={displayName} maxlength={80} autocomplete="name" />
 								<label>
 									Bio
 									<textarea class="auth-input bio-input" bind:value={bio} maxlength="500"></textarea>
@@ -957,9 +954,7 @@ onMount(() => void loadSession());
 										</button>
 									{/if}
 								</div>
-								<button class="command primary" type="submit" disabled={submitting || !profileChanged}>
-									<Icon icon="material-symbols:save-outline-rounded" />{submitting ? "Saving..." : "Save profile"}
-								</button>
+								<Button type="submit" icon="material-symbols:save-outline-rounded" loading={submitting} disabled={!profileChanged}>Save profile</Button>
 							</form>
 							<article class="profile-preview">
 								<p class="eyebrow">Homepage Preview</p>
@@ -990,7 +985,7 @@ onMount(() => void loadSession());
 								<div class="security-row"><span class="row-icon"><Icon icon="material-symbols:alternate-email-rounded" /></span><div><strong>Email address</strong><p>{user.email}</p></div><button class="command secondary" type="button" onclick={() => openSensitive("change-email")}>Change</button></div>
 								<div class="security-row"><span class="row-icon"><Icon icon="material-symbols:key-outline-rounded" /></span><div><strong>Password</strong><p>{user.hasPassword ? "Password login is available" : "Email-code login only"}</p></div><button class="command secondary" type="button" onclick={() => openSensitive("change-password")}>{user.hasPassword ? "Change" : "Set password"}</button></div>
 								<div class="security-row"><span class="row-icon"><Icon icon="material-symbols:phonelink-lock-outline-rounded" /></span><div><strong>Two-factor authentication</strong><p>Authenticator challenge after primary login</p></div><button class={user.twoFactorEnabled ? "command subtle-danger" : "command secondary"} type="button" onclick={() => openSensitive(user.twoFactorEnabled ? "disable-2fa" : "enable-2fa")}>{user.twoFactorEnabled ? "Disable" : "Enable"}</button></div>
-								<div class="security-row"><span class="row-icon"><Icon icon="material-symbols:emergency-home-outline-rounded" /></span><div><strong>Recovery codes</strong><p>Recovery codes will appear here when supported.</p></div><span class="status">Unavailable</span></div>
+								<div class="security-row"><span class="row-icon"><Icon icon="material-symbols:emergency-home-outline-rounded" /></span><div><strong>Recovery codes</strong><p>Recovery codes will appear here when supported.</p></div><StatusBadge label="Unavailable" /></div>
 							</div>
 							{#if setupToken}
 								<div class="totp-box">
@@ -1027,8 +1022,8 @@ onMount(() => void loadSession());
 											<p>{session.region} / Last active {formatTime(session.lastActiveAt)}</p>
 											<small>Created {formatTime(session.createdAt)} / Expires {formatTime(session.expiresAt)}</small>
 										</div>
-										{#if session.current}
-											<span class="status good">Current</span>
+									{#if session.current}
+										<StatusBadge tone="success" label="Current" />
 										{:else}
 											<button class="command secondary" type="button" onclick={() => void revokeSession(session.id)}>Sign out</button>
 										{/if}
@@ -1044,12 +1039,12 @@ onMount(() => void loadSession());
 								<div><p class="eyebrow">Privacy</p><h3>Public visibility</h3></div>
 							</div>
 							<div class="toggle-list">
-								<label><span><strong>Public profile</strong><small>Allow your profile preview to be visible.</small></span><input type="checkbox" bind:checked={privacy.profilePublic} /></label>
-								<label><span><strong>Show region</strong><small>Display API-owned city/country data on your profile.</small></span><input type="checkbox" bind:checked={privacy.showRegion} /></label>
-								<label><span><strong>Show comment record</strong><small>Allow public surfaces to reference your comments.</small></span><input type="checkbox" bind:checked={privacy.showComments} /></label>
-								<label><span><strong>Allow search</strong><small>Let account search discover your public profile.</small></span><input type="checkbox" bind:checked={privacy.allowSearch} /></label>
+								<Toggle label="Public profile" description="Allow your profile preview to be visible." bind:checked={privacy.profilePublic} />
+								<Toggle label="Show region" description="Display API-owned city and country data on your profile." bind:checked={privacy.showRegion} />
+								<Toggle label="Show comment record" description="Allow public surfaces to reference your comments." bind:checked={privacy.showComments} />
+								<Toggle label="Allow search" description="Let account search discover your public profile." bind:checked={privacy.allowSearch} />
 							</div>
-							<div class="card-actions"><button class="command primary" type="button" onclick={() => void savePrivacy()} disabled={submitting || !privacyChanged}><Icon icon="material-symbols:save-outline-rounded" />{submitting ? "Saving..." : "Save privacy"}</button></div>
+							<div class="card-actions"><Button icon="material-symbols:save-outline-rounded" loading={submitting} disabled={!privacyChanged} onclick={() => void savePrivacy()}>Save privacy</Button></div>
 						</section>
 						<section class="panel account-card">
 							<div class="section-heading"><span class="section-icon"><Icon icon="material-symbols:download-rounded" /></span><div><p class="eyebrow">Sensitive operation</p><h3>Data export</h3></div></div>
@@ -1062,12 +1057,12 @@ onMount(() => void loadSession());
 								<div><p class="eyebrow">Notifications</p><h3>Email and system signals</h3></div>
 							</div>
 							<div class="toggle-list">
-								<label><span><strong>Security notifications</strong><small>Password, session, and 2FA changes.</small></span><input type="checkbox" bind:checked={notifications.securityEmail} /></label>
-								<label><span><strong>Comment replies</strong><small>Replies to your blog comments.</small></span><input type="checkbox" bind:checked={notifications.commentReplies} /></label>
-								<label><span><strong>System notifications</strong><small>Important account and policy updates.</small></span><input type="checkbox" bind:checked={notifications.systemEmail} /></label>
-								<label><span><strong>Email announcements</strong><small>Occasional SilentFlare updates.</small></span><input type="checkbox" bind:checked={notifications.marketingEmail} /></label>
+								<Toggle label="Security notifications" description="Password, session, and 2FA changes." bind:checked={notifications.securityEmail} />
+								<Toggle label="Comment replies" description="Replies to your blog comments." bind:checked={notifications.commentReplies} />
+								<Toggle label="System notifications" description="Important account and policy updates." bind:checked={notifications.systemEmail} />
+								<Toggle label="Email announcements" description="Occasional SilentFlare updates." bind:checked={notifications.marketingEmail} />
 							</div>
-							<button class="command primary" type="button" onclick={() => void saveNotifications()} disabled={submitting || !notificationsChanged}><Icon icon="material-symbols:save-outline-rounded" />{submitting ? "Saving..." : "Save notifications"}</button>
+							<Button icon="material-symbols:save-outline-rounded" loading={submitting} disabled={!notificationsChanged} onclick={() => void saveNotifications()}>Save notifications</Button>
 						</section>
 					{:else}
 						<div class="danger-grid">
@@ -1078,12 +1073,8 @@ onMount(() => void loadSession());
 						</div>
 					{/if}
 
-					{#if error}
-						<p class="message error"><Icon icon="material-symbols:error-outline-rounded" />{error}</p>
-					{/if}
-					{#if notice}
-						<p class="message notice"><Icon icon="material-symbols:check-circle-outline-rounded" />{notice}</p>
-					{/if}
+					{#if error}<Alert tone="error" message={error} />{/if}
+					{#if notice}<Alert tone="success" message={notice} />{/if}
 				</div>
 			</div>
 
@@ -1147,9 +1138,7 @@ onMount(() => void loadSession());
 		overflow-x: hidden;
 		padding: 1rem;
 		color: var(--deep-text, #182230);
-		background:
-			linear-gradient(180deg, rgba(255, 255, 255, 0.46), transparent 21rem),
-			var(--page-bg, #edf3f8);
+		background: var(--sf-page);
 	}
 	:global(.dark) .accounts-stage {
 		background: var(--page-bg, #101820);
@@ -1185,10 +1174,10 @@ onMount(() => void loadSession());
 		box-shadow: 0 0.5rem 1.2rem rgba(43, 126, 190, 0.24);
 	}
 	.panel {
-		border: 1px solid var(--line-divider, rgba(70, 100, 130, 0.14));
-		border-radius: var(--radius-large, 1rem);
-		background: var(--card-bg, rgba(255, 255, 255, 0.96));
-		box-shadow: 0 1.25rem 3.5rem rgba(28, 53, 79, 0.08);
+		border: 1px solid var(--sf-border);
+		border-radius: var(--sf-radius-lg);
+		background: var(--sf-surface);
+		box-shadow: 0 0.75rem 2.5rem rgba(28, 53, 79, 0.06);
 	}
 	.account-grid {
 		display: grid;
@@ -1559,12 +1548,14 @@ onMount(() => void loadSession());
 	}
 	.profile-preview {
 		min-width: 0;
+		padding-top: 1.25rem;
+		border-top: 1px solid var(--sf-border);
 	}
 	.preview-card {
 		padding: 1.2rem;
-		border: 1px solid var(--line-divider, rgba(70, 100, 130, 0.14));
-		border-radius: 0.9rem;
-		background: var(--btn-regular-bg, #f6f9fc);
+		border: 0;
+		border-radius: 0;
+		background: transparent;
 		text-align: center;
 	}
 	.preview-avatar {
@@ -1749,9 +1740,7 @@ onMount(() => void loadSession());
 	}
 	.danger-card {
 		border-color: #f0caca;
-		background:
-			linear-gradient(180deg, rgba(255, 245, 245, 0.8), transparent 8rem),
-			var(--card-bg, white);
+		background: var(--sf-surface);
 	}
 	.danger-grid {
 		display: grid;
@@ -2006,6 +1995,12 @@ onMount(() => void loadSession());
 		}
 		.split-card {
 			grid-template-columns: minmax(0, 1fr) minmax(16rem, 0.65fr);
+		}
+		.profile-preview {
+			padding-top: 0;
+			padding-left: 1.5rem;
+			border-top: 0;
+			border-left: 1px solid var(--sf-border);
 		}
 		.danger-grid {
 			grid-template-columns: repeat(2, minmax(0, 1fr));
