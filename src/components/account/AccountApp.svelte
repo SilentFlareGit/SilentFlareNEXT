@@ -1873,7 +1873,7 @@ onMount(() => void loadSession());
 	/* Google Account-inspired structure, using SilentFlare color and type tokens. */
 	.accounts-stage {
 		padding: 0 1rem 2rem;
-		background: var(--sf-surface);
+		background: var(--sf-page);
 	}
 	.accounts-workspace {
 		width: min(100%, 82rem);
@@ -1883,10 +1883,10 @@ onMount(() => void loadSession());
 		padding-top: 1rem;
 	}
 	.identity-card {
-		padding: 0.5rem;
-		border: 0;
-		background: transparent;
-		box-shadow: none;
+		padding: 1rem;
+		border: 1px solid var(--sf-border-strong);
+		background: var(--sf-surface);
+		box-shadow: var(--sf-shadow-surface);
 	}
 	.avatar-shell {
 		width: 4.75rem;
@@ -1917,11 +1917,15 @@ onMount(() => void loadSession());
 	.account-content {
 		width: 100%;
 		max-width: 54rem;
+		min-height: calc(100svh - 3rem);
 		justify-self: center;
+		align-content: start;
 		gap: 1.25rem;
 	}
 	.page-heading {
+		min-height: 7rem;
 		align-items: center;
+		justify-content: center;
 		padding: 1rem 0 0.75rem;
 		text-align: center;
 	}
@@ -2078,6 +2082,12 @@ onMount(() => void loadSession());
 	@media (max-width: 520px) {
 		.accounts-stage {
 			padding: 0 0.75rem 1rem;
+		}
+		.account-content {
+			min-height: auto;
+		}
+		.page-heading {
+			min-height: auto;
 		}
 		.account-nav button {
 			justify-content: flex-start;
