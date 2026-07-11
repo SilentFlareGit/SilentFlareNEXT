@@ -33,6 +33,11 @@
 }
 
 :root.dark {
+	--sf-page: #101820;
+	--sf-surface: #17212c;
+	--sf-surface-subtle: #1c2936;
+	--sf-surface-muted: #223446;
+	--sf-text: #e8edf4;
 	--sf-text-muted: #a7b5c2;
 	--sf-text-soft: #8293a3;
 	--sf-accent-strong: #83c2f2;

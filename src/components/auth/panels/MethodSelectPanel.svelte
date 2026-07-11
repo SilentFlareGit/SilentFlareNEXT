@@ -19,8 +19,8 @@ let {
 </script>
 
 <div class="mx-auto w-full max-w-[360px]">
-	<h2 class="mb-1 text-2xl font-extrabold text-black/90 dark:text-white/90">Sign in</h2>
-	<p class="mb-8 text-sm leading-6 text-black/45 dark:text-white/45">One account for the blog, comments, Account Center, and every SilentFlare subsite.</p>
+	<h2 class="mb-1 text-2xl font-extrabold text-[var(--sf-text)]">Sign in</h2>
+	<p class="mb-8 text-sm leading-6 text-[var(--sf-text-muted)]">One account for the blog, comments, Account Center, and every SilentFlare subsite.</p>
 
 	<div class="flex flex-col gap-3">
 		<button
@@ -32,8 +32,8 @@ let {
 				<Icon icon="material-symbols:mail-outline-rounded" class="text-[1.3rem] text-[var(--primary)]" />
 			</span>
 			<div>
-				<p class="font-bold text-black/85 dark:text-white/85">Email verification code</p>
-				<p class="mt-0.5 text-xs text-black/45 dark:text-white/45">No password needed; we email you a code</p>
+				<p class="font-bold text-[var(--sf-text)]">Email verification code</p>
+				<p class="mt-0.5 text-xs text-[var(--sf-text-muted)]">No password needed; we email you a code</p>
 			</div>
 			<Icon icon="material-symbols:chevron-right-rounded" class="ml-auto shrink-0 text-[1.3rem] text-black/30 dark:text-white/30" />
 		</button>
@@ -47,8 +47,8 @@ let {
 				<Icon icon="material-symbols:key-outline-rounded" class="text-[1.3rem] text-[var(--primary)]" />
 			</span>
 			<div>
-				<p class="font-bold text-black/85 dark:text-white/85">Email or username + password</p>
-				<p class="mt-0.5 text-xs text-black/45 dark:text-white/45">Sign in with your credentials</p>
+				<p class="font-bold text-[var(--sf-text)]">Email or username + password</p>
+				<p class="mt-0.5 text-xs text-[var(--sf-text-muted)]">Sign in with your credentials</p>
 			</div>
 			<Icon icon="material-symbols:chevron-right-rounded" class="ml-auto shrink-0 text-[1.3rem] text-black/30 dark:text-white/30" />
 		</button>
@@ -83,11 +83,11 @@ let {
 				<span class="hidden sm:inline">Telegram</span>
 			</button>
 		</div>
-		<p class="text-center text-xs text-black/30 dark:text-white/30">OAuth coming soon</p>
+		<p class="text-center text-xs text-[var(--sf-text-soft)]">OAuth coming soon</p>
 	</div>
 
 	<div class="mt-7 border-t border-[var(--line-divider)] pt-6 text-center">
-		<p class="mb-3 text-sm text-black/50 dark:text-white/50">New to SilentFlare? Create an account, then manage profile, privacy, sessions, and notifications.</p>
+		<p class="mb-3 text-sm text-[var(--sf-text-muted)]">New to SilentFlare? Create an account, then manage profile, privacy, sessions, and notifications.</p>
 		<Button variant="secondary" full onclick={onRegister}>Create an account</Button>
 	</div>
 
