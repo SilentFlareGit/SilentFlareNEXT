@@ -7,6 +7,7 @@ import "../styles/main.css";
 import "../styles/tokens.css";
 import "../styles/foundations.css";
 import "../styles/subsites.css";
+import { defaultFavicons } from "../constants/icon";
 
 interface Props {
 	title: string;
@@ -25,6 +26,9 @@ const { title, description, theme = "adaptive" } = Astro.props;
 		<meta name="color-scheme" content={theme === "light" ? "light" : "light dark"} />
 		<title>{title}</title>
 		<meta name="description" content={description} />
+		{defaultFavicons.map((favicon) => (
+			<link rel="icon" href={favicon.src} sizes={favicon.sizes} media={favicon.theme && `(prefers-color-scheme: ${favicon.theme})`} />
+		))}
 		{theme === "adaptive" && (
 			<script is:inline>
 				const storedTheme = localStorage.getItem("theme");
