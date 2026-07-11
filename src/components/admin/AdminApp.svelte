@@ -354,7 +354,7 @@ onMount(() => {
 });
 </script>
 
-<main class="admin-shell">
+<main class="sf-app admin-shell">
 {#if checkingSession || !authenticated}
 	<section class="session-check"><span></span><p>Opening the secure Admin workspace...</p></section>
 {:else}

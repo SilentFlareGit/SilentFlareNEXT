@@ -1,0 +1,42 @@
+---
+import "@fontsource/roboto/400.css";
+import "@fontsource/roboto/500.css";
+import "@fontsource/roboto/700.css";
+import "../styles/variables.styl";
+import "../styles/main.css";
+import "../styles/tokens.css";
+import "../styles/foundations.css";
+import "../styles/subsites.css";
+
+interface Props {
+	title: string;
+	description: string;
+	theme?: "adaptive" | "light";
+}
+
+const { title, description, theme = "adaptive" } = Astro.props;
+---
+
+<!doctype html>
+<html lang="en" data-subsite-theme={theme}>
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<meta name="color-scheme" content={theme === "light" ? "light" : "light dark"} />
+		<title>{title}</title>
+		<meta name="description" content={description} />
+		{theme === "adaptive" && (
+			<script is:inline>
+				const storedTheme = localStorage.getItem("theme");
+				const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+				document.documentElement.classList.toggle(
+					"dark",
+					storedTheme === "dark" || (!storedTheme && prefersDark),
+				);
+			</script>
+		)}
+	</head>
+	<body class="sf-subsite-body">
+		<slot />
+	</body>
+</html>

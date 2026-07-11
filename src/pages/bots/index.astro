@@ -1,31 +1,12 @@
 ---
 import BotApp from "../../components/bots/BotApp.svelte";
-import "@fontsource/roboto/400.css";
-import "@fontsource/roboto/500.css";
-import "@fontsource/roboto/700.css";
+import SubsiteLayout from "../../layouts/SubsiteLayout.astro";
 
 const apiBase =
 	import.meta.env.PUBLIC_API_BASE_URL ?? "https://api.silentflare.com";
 ---
 
-<!doctype html>
-<html lang="en" class="dark:bg-zinc-950">
-	<head>
-		<meta charset="UTF-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<title>Telegram Bot Management</title>
-		<meta name="description" content="SilentFlare bot operations dashboard" />
-		<!-- Optional script to ensure system dark mode is respected on mount -->
-		<script is:inline>
-			if (localStorage.theme === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-				document.documentElement.classList.add('dark');
-			} else {
-				document.documentElement.classList.remove('dark');
-			}
-		</script>
-	</head>
-	<body class="antialiased m-0 min-h-screen">
-		<div class="sr-only" aria-hidden="true">Owner-approved operations Send approval request SilentFlare DB Backup</div>
-		<BotApp client:only="svelte" {apiBase} />
-	</body>
-</html>
+<SubsiteLayout title="SilentFlare Bot Management" description="SilentFlare owner-approved bot operations dashboard.">
+	<div class="sr-only" aria-hidden="true">Owner-approved operations Send approval request SilentFlare DB Backup</div>
+	<BotApp client:only="svelte" {apiBase} />
+</SubsiteLayout>

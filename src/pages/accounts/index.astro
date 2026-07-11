@@ -1,36 +1,11 @@
 ---
 import AccountApp from "../../components/account/AccountApp.svelte";
-import "@fontsource/roboto/400.css";
-import "@fontsource/roboto/500.css";
-import "@fontsource/roboto/700.css";
-import "../../styles/variables.styl";
-import "../../styles/main.css";
-import "../../styles/tokens.css";
-import "../../styles/foundations.css";
+import SubsiteLayout from "../../layouts/SubsiteLayout.astro";
 
 const apiBase = "/accounts-api";
 ---
 
-<!doctype html>
-<html lang="en">
-	<head>
-		<meta charset="UTF-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<title>SilentFlare Accounts</title>
-		<meta
-			name="description"
-			content="SilentFlare registration, profile, avatar, region, and account security center"
-		/>
-		<script is:inline>
-			if (typeof localStorage !== "undefined" && localStorage.theme === "dark") {
-				document.documentElement.classList.add("dark");
-			}
-		</script>
-	</head>
-	<body class="m-0 min-h-screen antialiased">
-		<div class="sr-only" aria-hidden="true">
-			SilentFlare accounts center unified login register email verification profile avatar upload IP region country city two factor security
-		</div>
-		<AccountApp client:only="svelte" {apiBase} />
-	</body>
-</html>
+<SubsiteLayout title="SilentFlare Accounts" description="SilentFlare profile, privacy, sessions, and account security center.">
+	<div class="sr-only" aria-hidden="true">SilentFlare accounts center unified login register email verification profile avatar upload IP region country city two factor security</div>
+	<AccountApp client:only="svelte" {apiBase} />
+</SubsiteLayout>

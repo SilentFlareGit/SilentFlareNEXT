@@ -43,7 +43,7 @@ let {
 
 <style>
 	.identity-stage { padding: 0.75rem; overflow-x: hidden; }
-	.identity-main { width: min(100%, 72rem); margin: 0 auto; }
+	.identity-main { width: min(100%, 80rem); margin: 0 auto; }
 	.identity-shell { display: grid; gap: 1.5rem; padding: 1rem 0; }
 	.identity-story { min-width: 0; display: flex; flex-direction: column; gap: 1rem; padding: 0.5rem 0; }
 	.story-copy h1 { max-width: 17ch; margin: 0; color: var(--sf-text); font-size: 2rem; line-height: 1.08; letter-spacing: 0; }
@@ -61,10 +61,10 @@ let {
 		.identity-form { padding: 2.5rem; }
 	}
 	@media (min-width: 1024px) {
-		.identity-shell { min-height: 100svh; grid-template-columns: minmax(0, 1fr) 29rem; align-items: center; gap: clamp(4rem, 9vw, 8rem); padding: 2rem 0; }
+		.identity-shell { min-height: 100svh; grid-template-columns: minmax(0, 1fr) 31rem; align-items: center; gap: clamp(4rem, 8vw, 7rem); padding: 2rem 0; }
 		.identity-story { min-height: 29rem; justify-content: center; padding: 2rem 0; }
 		.identity-form { padding: 3rem; }
-		.story-copy h1 { font-size: 3rem; }
+		.story-copy h1 { font-size: 3.25rem; }
 		.identity-legal { text-align: center; }
 	}
 </style>

@@ -2,9 +2,7 @@
 import defaultAvatar from "../../assets/images/demo-avatar.png";
 import defaultBanner from "../../assets/images/demo-banner-online.webp";
 import AdminApp from "../../components/admin/AdminApp.svelte";
-import "@fontsource/roboto/400.css";
-import "@fontsource/roboto/500.css";
-import "@fontsource/roboto/700.css";
+import SubsiteLayout from "../../layouts/SubsiteLayout.astro";
 
 const apiBase = "/admin-api";
 const fallbackAssets = {
@@ -13,20 +11,7 @@ const fallbackAssets = {
 };
 ---
 
-<!doctype html>
-<html lang="en">
-	<head>
-		<meta charset="UTF-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<title>SilentFlare Admin</title>
-		<meta
-			name="description"
-			content="SilentFlare owner console for public users and comments"
-		/>
-		<meta name="color-scheme" content="light" />
-	</head>
-	<body class="m-0 min-h-screen bg-[#edf3f8] antialiased">
-		<div style="position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0);" aria-hidden="true">SilentFlare user and comment control public users and comments</div>
-		<AdminApp client:only="svelte" {apiBase} {fallbackAssets} />
-	</body>
-</html>
+<SubsiteLayout title="SilentFlare Admin" description="SilentFlare owner console for public users and comments." theme="light">
+	<div class="sr-only" aria-hidden="true">SilentFlare user and comment control public users and comments</div>
+	<AdminApp client:only="svelte" {apiBase} {fallbackAssets} />
+</SubsiteLayout>

@@ -791,7 +791,7 @@ $: toneToClass = (tone: string) => {
 };
 </script>
 
-<div class="min-h-screen {currentStep === 'app' && isChatBot() ? 'bg-[#07121a] text-slate-100' : 'bg-[#eef2f6] text-zinc-900 dark:bg-[#07111f] dark:text-zinc-100'} font-sans selection:bg-cyan-400/25">
+<div class="sf-app min-h-screen {currentStep === 'app' && isChatBot() ? 'bg-[#07121a] text-slate-100' : 'bg-[var(--sf-page)] text-[var(--sf-text)]'} font-sans selection:bg-sky-400/25">
 	<!-- Console grid background -->
 	<div
 		class="fixed inset-0 z-0 pointer-events-none opacity-70 dark:opacity-40"
