@@ -29,6 +29,18 @@ Public users share one opaque API-issued session cookie across `.silentflare.com
 
 Accounts is a standalone account workspace. Do not restore the public blog navbar/banner above it. Admin is a standalone, light-only owner workspace and must not show bot backup, chat, health-dashboard, or unrelated operational controls.
 
+## Account Center UI Contract
+
+- Keep the Google Account-inspired information architecture, but use SilentFlare's pale blue, white, compact radius, border, and typography tokens.
+- Do not add a top product bar, oversized Hero card, top-right logout icon, account-center eyebrow, or page-level protection/session badges.
+- Desktop uses a fixed-width identity/navigation column and a fluid content column. The sidebar contains avatar, display name, username, read-only region, section navigation, and a text `Sign out` command below the navigation.
+- Mobile replaces the persistent sidebar navigation with the account summary and drawer menu. Controls stack to one column, preserve at least 44 px targets, and must not create document-level horizontal scrolling.
+- Each content page keeps only a concise page title and one description above its functional cards. Public Profile, Security, Sessions, Privacy, Notifications, and Danger Zone remain separate navigation destinations.
+- Session rows must show a device icon, device/platform, region, activity timestamps, and current-session or revoke controls. `Sign out all` is a direct CSRF-protected session action and does not open an email-verification modal.
+- Danger Zone exposes only `Delete account`. Profile clearing, comment clearing, and account deactivation must not be restored to this UI.
+- The delete button is disabled until 2FA is enabled. The modal sequence is email-code request, email-code verification, current authenticator code plus exact `DELETE ACCOUNT` confirmation, then request submission.
+- A submitted deletion is a review request, not an immediate delete. Show pending/approved state and allow cancellation before the scheduled deletion runs.
+
 ## Current Account Behavior
 
 - The blog navbar queries `GET /auth/session`.
@@ -95,6 +107,7 @@ Accounts is a standalone account workspace. Do not restore the public blog navba
 - `GET/DELETE /accounts/sessions`, `POST /accounts/sessions/logout-all`, `POST /accounts/sessions/logout-others`: device review and revocation. Logout-all requires the authenticated session and CSRF, but no email proof.
 - `GET/PATCH /accounts/preferences/*`: privacy and notification preferences.
 - `POST /accounts/danger/delete`: deletion requests require action-bound email verification, enabled 2FA, a valid current authenticator code, and confirmation text. Requests wait for administrator approval; approval starts the seven-day cooling period. Users can cancel before deletion runs.
+- `POST /accounts/danger/delete/cancel`: clears pending or approved deletion-review state before final deletion.
 - Legacy `POST /account/auth/register` and `POST /account/auth/login` return `410`; do not re-enable them.
 - `GET /comments?postSlug=...`: public comment list for a Ghost post slug.
 - `POST /comments/create`: authenticated public-user comment creation with Turnstile and CSRF.
@@ -109,6 +122,7 @@ Accounts is a standalone account workspace. Do not restore the public blog navba
 - `src/pages/admin/index.astro` must not add the `dark` class, read the Blog theme preference, or apply a dark body background.
 - The unauthenticated Admin screen uses one responsive owner-console shell.
 - The authenticated workspace provides compact Users and Comments navigation, account totals, active-session and disabled-user metrics, search/filter controls, responsive user table, comment moderation rows, and user-detail drawer.
+- User rows and the detail drawer expose deletion-review state without exposing verification material. Pending requests provide explicit owner-only approve and reject actions.
 - On narrow screens, tables may scroll inside bounded containers, but the document itself must not overflow horizontally.
 - Admin data actions require admin session plus `X-CSRF-Token`.
 - Raw audit IP values are restricted to the owner-only Admin API.
@@ -135,5 +149,6 @@ Accounts is a standalone account workspace. Do not restore the public blog navba
 - `migrations/0003_unified_auth.sql` is the unified auth schema reference; `ensure_account_db()` applies equivalent idempotent runtime changes.
 - `migrations/0004_account_avatar_region.sql` covers API-owned avatar/region metadata.
 - `migrations/0005_admin_user_audit.sql` is the schema reference for admin audit fields; `ensure_account_db()` applies equivalent idempotent runtime changes.
+- `ensure_account_db()` also maintains `deletion_requested_at`, `deletion_review_status`, `deletion_approved_at`, and `deletion_scheduled_for`. Only rows with approved status and a due schedule may be finalized.
 
 Production readiness caveat: `GET https://auth.silentflare.com/auth-api/auth/session` must return `configured:true`. `emailConfigured:false` means password/session flows may work but email-code login and registration cannot send mail. Real email flows require the email API variables on FNS1 and a verified sender domain; verify real inbox delivery before declaring email ready.
