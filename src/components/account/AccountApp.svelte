@@ -2,7 +2,6 @@
 import Icon from "@iconify/svelte";
 import { onMount } from "svelte";
 import Alert from "../ui/Alert.svelte";
-import BrandMark from "../ui/BrandMark.svelte";
 import Button from "../ui/Button.svelte";
 import StatusBadge from "../ui/StatusBadge.svelte";
 import TextField from "../ui/TextField.svelte";
@@ -21,18 +20,16 @@ type AccountUser = {
 	twoFactorEnabled: boolean;
 	hasPassword: boolean;
 	deletionRequestedAt?: string;
+	deletionReviewStatus?: string;
+	deletionScheduledFor?: string;
 };
 
 type SensitiveAction =
-	| "clear-profile"
 	| "change-password"
 	| "change-email"
 	| "enable-2fa"
 	| "disable-2fa"
 	| "export-data"
-	| "logout-all"
-	| "clear-comments"
-	| "deactivate-account"
 	| "delete-account";
 
 type AccountSession = {
@@ -127,6 +124,7 @@ let modalBusy = $state(false);
 let modalError = $state("");
 let newEmail = $state("");
 let disableTotpCode = $state("");
+let deletionTotpCode = $state("");
 let scheduledDeletion = $state("");
 let passwordCleanupToken = $state("");
 
@@ -186,11 +184,6 @@ const actionCopy: Record<
 	SensitiveAction,
 	{ title: string; description: string; phrase?: string }
 > = {
-	"clear-profile": {
-		title: "Clear public profile",
-		description: "Your avatar, display name, and bio will be removed.",
-		phrase: "CLEAR PROFILE",
-	},
 	"change-password": {
 		title: "Change password",
 		description:
@@ -212,24 +205,10 @@ const actionCopy: Record<
 		title: "Export account data",
 		description: "Verify your email before creating a private JSON export.",
 	},
-	"logout-all": {
-		title: "Sign out all devices",
-		description: "This ends every active session, including this one.",
-		phrase: "SIGN OUT ALL",
-	},
-	"clear-comments": {
-		title: "Clear all comments",
-		description: "Your comments will be removed from public view.",
-		phrase: "CLEAR COMMENTS",
-	},
-	"deactivate-account": {
-		title: "Deactivate account",
-		description: "Your account will be disabled and every session ended.",
-		phrase: "DEACTIVATE",
-	},
 	"delete-account": {
-		title: "Schedule account deletion",
-		description: "Deletion starts only after a 7-day cooling period.",
+		title: "Request account deletion",
+		description:
+			"Verify your email and authenticator code before sending this request for administrator review.",
 		phrase: "DELETE ACCOUNT",
 	},
 };
@@ -550,13 +529,13 @@ async function revokeSession(sessionId: string) {
 	}
 }
 
-async function logoutAll(proof: string) {
+async function logoutAll() {
 	clearMessages();
 	try {
 		await apiFetch("/accounts/sessions/logout-all", {
 			method: "POST",
 			csrf: true,
-			body: JSON.stringify({ verification_token: proof }),
+			body: "{}",
 		});
 		window.location.assign("https://auth.silentflare.com/");
 	} catch (reason) {
@@ -566,28 +545,21 @@ async function logoutAll(proof: string) {
 	}
 }
 
-async function dangerAction(
-	path: "clear-profile" | "clear-comments" | "deactivate" | "delete",
-	proof = "",
-) {
+async function dangerAction(proof = "") {
 	submitting = true;
 	clearMessages();
 	try {
-		await apiFetch(`/accounts/danger/${path}`, {
+		await apiFetch("/accounts/danger/delete", {
 			method: "POST",
 			csrf: true,
 			body: JSON.stringify({
 				confirmation: dangerConfirmation,
 				verification_token: proof,
+				two_factor_code: deletionTotpCode,
 			}),
 		});
-		if (path === "deactivate") {
-			window.location.assign("https://auth.silentflare.com/");
-			return;
-		}
-		if (path === "delete") {
-			scheduledDeletion = "Deletion is scheduled. You have 7 days to cancel.";
-		}
+		scheduledDeletion =
+			"Deletion request submitted. Waiting for administrator review.";
 		dangerConfirmation = "";
 		notice = "Danger-zone action completed.";
 		const profile = await apiFetch<{ user: AccountUser }>("/accounts/profile");
@@ -611,6 +583,7 @@ function openSensitive(action: SensitiveAction) {
 	newPassword = "";
 	newEmail = user?.email ?? "";
 	disableTotpCode = "";
+	deletionTotpCode = "";
 	modalError = "";
 }
 
@@ -731,21 +704,15 @@ async function completeSensitiveAction() {
 				body: JSON.stringify({ verification_token: verificationToken }),
 			});
 			downloadExport(result);
-		} else if (sensitiveAction === "logout-all") {
-			await logoutAll(verificationToken);
-			return;
 		} else {
-			const paths = {
-				"clear-profile": "clear-profile",
-				"clear-comments": "clear-comments",
-				"deactivate-account": "deactivate",
-				"delete-account": "delete",
-			} as const;
 			dangerConfirmation = actionCopy[sensitiveAction].phrase ?? "";
-			await dangerAction(paths[sensitiveAction], verificationToken);
+			await dangerAction(verificationToken);
 		}
 		modalStep = "success";
-		notice = `${actionCopy[sensitiveAction].title} completed.`;
+		notice =
+			sensitiveAction === "delete-account"
+				? "Deletion request submitted for administrator review."
+				: `${actionCopy[sensitiveAction].title} completed.`;
 		await loadAccountExtras();
 	} catch (reason) {
 		modalError = reason instanceof Error ? reason.message : "Action failed";
@@ -764,8 +731,14 @@ async function cancelDeletion() {
 			body: "{}",
 		});
 		scheduledDeletion = "";
-		if (user) user = { ...user, deletionRequestedAt: "" };
-		notice = "Scheduled account deletion cancelled.";
+		if (user)
+			user = {
+				...user,
+				deletionRequestedAt: "",
+				deletionReviewStatus: "",
+				deletionScheduledFor: "",
+			};
+		notice = "Account deletion request cancelled.";
 	} catch (reason) {
 		error =
 			reason instanceof Error ? reason.message : "Could not cancel deletion";
@@ -819,19 +792,6 @@ onMount(() => void loadSession());
 {:else if user}
 	<div class="accounts-stage">
 		<main class="accounts-workspace">
-			<div class="workspace-bar">
-				<BrandMark product="Account" />
-				<button
-					class="icon-command"
-					type="button"
-					title="Sign out"
-					aria-label="Sign out"
-					onclick={() => void logout()}
-				>
-					<Icon icon="material-symbols:logout-rounded" />
-				</button>
-			</div>
-
 			<div class="account-grid">
 				<aside class="identity-card panel">
 					<div class="avatar-shell">
@@ -857,7 +817,6 @@ onMount(() => void loadSession());
 							/>
 						</label>
 					</div>
-					<p class="eyebrow">Account Center</p>
 					<h1>{displayName || user.username}</h1>
 					<p class="handle">@{user.username}</p>
 					<div class="region-pill">
@@ -893,6 +852,10 @@ onMount(() => void loadSession());
 								<span>{panel.label}</span>
 							</button>
 						{/each}
+						<button class="sidebar-logout" type="button" onclick={() => void logout()}>
+							<Icon icon="material-symbols:logout-rounded" />
+							<span>Sign out</span>
+						</button>
 					</nav>
 				</aside>
 
@@ -901,10 +864,6 @@ onMount(() => void loadSession());
 						<div>
 							<h2>{panels.find((panel) => panel.id === activePanel)?.label}</h2>
 							<p>{panelCopy[activePanel]}</p>
-						</div>
-						<div class="hero-stats">
-							<StatusBadge tone={user.twoFactorEnabled ? "success" : "neutral"} label={user.twoFactorEnabled ? "2FA protected" : "Basic protection"} />
-							<StatusBadge label={`${sessions.length} session${sessions.length === 1 ? "" : "s"}`} />
 						</div>
 					</header>
 
@@ -1016,7 +975,7 @@ onMount(() => void loadSession());
 							<div class="session-list">
 								{#each sessions as session}
 									<article>
-										<span class="row-icon"><Icon icon={session.current ? "material-symbols:laptop-mac-outline-rounded" : "material-symbols:devices-other-rounded"} /></span>
+										<span class="row-icon"><Icon icon={session.current ? "material-symbols:computer-outline-rounded" : "material-symbols:devices-outline-rounded"} /></span>
 										<div>
 											<strong>{session.device} on {session.platform}</strong>
 											<p>{session.region} / Last active {formatTime(session.lastActiveAt)}</p>
@@ -1030,7 +989,7 @@ onMount(() => void loadSession());
 									</article>
 								{/each}
 							</div>
-							<div class="risk-action"><div><strong>Sign out all devices</strong><p>Email verification and confirmation text are required.</p></div><button class="command subtle-danger" type="button" onclick={() => openSensitive("logout-all")}><Icon icon="material-symbols:logout-rounded" />Sign out all</button></div>
+							<div class="risk-action"><div><strong>Sign out all devices</strong><p>Ends every active session, including this one.</p></div><button class="command subtle-danger" type="button" onclick={() => void logoutAll()}><Icon icon="material-symbols:logout-rounded" />Sign out all</button></div>
 						</section>
 					{:else if activePanel === "privacy"}
 						<section class="panel account-card">
@@ -1066,10 +1025,7 @@ onMount(() => void loadSession());
 						</section>
 					{:else}
 						<div class="danger-grid">
-							<section class="panel account-card danger-card"><div class="danger-copy"><span class="section-icon danger-icon"><Icon icon="material-symbols:person-off-outline-rounded" /></span><div><h3>Clear public profile</h3><p>Remove your avatar, display name, and bio. Your account stays active.</p></div></div><button class="command subtle-danger" type="button" onclick={() => openSensitive("clear-profile")}>Clear profile</button></section>
-							<section class="panel account-card danger-card"><div class="danger-copy"><span class="section-icon danger-icon"><Icon icon="material-symbols:comments-disabled-outline-rounded" /></span><div><h3>Clear comments</h3><p>Remove every comment from public view. Email verification is required.</p></div></div><button class="command danger" type="button" onclick={() => openSensitive("clear-comments")}>Clear comments</button></section>
-							<section class="panel account-card danger-card"><div class="danger-copy"><span class="section-icon danger-icon"><Icon icon="material-symbols:pause-circle-outline-rounded" /></span><div><h3>Deactivate account</h3><p>Disable sign-in and end every active session.</p></div></div><button class="command danger" type="button" onclick={() => openSensitive("deactivate-account")}>Deactivate</button></section>
-							<section class="panel account-card danger-card"><div class="danger-copy"><span class="section-icon danger-icon"><Icon icon="material-symbols:delete-forever-outline-rounded" /></span><div><h3>Delete account</h3><p>Schedule permanent deletion after a 7-day cooling period.</p>{#if scheduledDeletion || user.deletionRequestedAt}<p class="scheduled">{scheduledDeletion || `Scheduled for ${formatTime(user.deletionRequestedAt)}`}</p>{/if}</div></div>{#if scheduledDeletion || user.deletionRequestedAt}<button class="command secondary" type="button" onclick={() => void cancelDeletion()} disabled={submitting}>Cancel deletion</button>{:else}<button class="command danger" type="button" onclick={() => openSensitive("delete-account")}>Schedule deletion</button>{/if}</section>
+							<section class="panel account-card danger-card"><div class="danger-copy"><span class="section-icon danger-icon"><Icon icon="material-symbols:delete-forever-outline-rounded" /></span><div><h3>Delete account</h3><p>Email verification and two-factor authentication are both required. An administrator must approve every deletion request.</p>{#if !user.twoFactorEnabled}<p class="scheduled">Enable two-factor authentication in Security before requesting deletion.</p>{:else if scheduledDeletion || user.deletionRequestedAt}<p class="scheduled">{scheduledDeletion || (user.deletionReviewStatus === "approved" && user.deletionScheduledFor ? `Approved. Scheduled for ${formatTime(user.deletionScheduledFor)}` : "Deletion request is waiting for administrator review.")}</p>{/if}</div></div>{#if scheduledDeletion || user.deletionRequestedAt}<button class="command secondary" type="button" onclick={() => void cancelDeletion()} disabled={submitting}>Cancel request</button>{:else}<button class="command danger" type="button" onclick={() => openSensitive("delete-account")} disabled={!user.twoFactorEnabled}>Request deletion</button>{/if}</section>
 						</div>
 					{/if}
 
@@ -1108,10 +1064,11 @@ onMount(() => void loadSession());
 							<div class="modal-actions"><button class="command secondary" type="button" onclick={closeSensitive}>Cancel</button><button class="command primary" type="button" onclick={() => void completeSensitiveAction()} disabled={modalBusy || (sensitiveAction === "change-password" && (newPassword.length < 8 || (user.hasPassword && !currentPassword))) || (sensitiveAction === "change-email" && (!newEmail.includes("@") || newEmail === user.email)) || (sensitiveAction === "disable-2fa" && disableTotpCode.length !== 6)}>{modalBusy ? "Working..." : "Continue"}</button></div>
 						{:else if modalStep === "confirm"}
 							<div class="confirmation-warning"><Icon icon="material-symbols:warning-outline-rounded" /><p>Type <strong>{actionCopy[sensitiveAction].phrase}</strong> to confirm. This is the final step.</p></div>
+							{#if sensitiveAction === "delete-account"}<label>Authenticator code<input class="auth-input code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" bind:value={deletionTotpCode} placeholder="000000" /></label>{/if}
 							<label>Confirmation text<input class="auth-input" bind:value={confirmationText} autocomplete="off" /></label>
-							<div class="modal-actions"><button class="command secondary" type="button" onclick={closeSensitive}>Cancel</button><button class="command danger" type="button" onclick={() => void completeSensitiveAction()} disabled={modalBusy || confirmationText !== actionCopy[sensitiveAction].phrase}>{modalBusy ? "Working..." : actionCopy[sensitiveAction].title}</button></div>
+							<div class="modal-actions"><button class="command secondary" type="button" onclick={closeSensitive}>Cancel</button><button class="command danger" type="button" onclick={() => void completeSensitiveAction()} disabled={modalBusy || confirmationText !== actionCopy[sensitiveAction].phrase || (sensitiveAction === "delete-account" && deletionTotpCode.length !== 6)}>{modalBusy ? "Working..." : actionCopy[sensitiveAction].title}</button></div>
 						{:else}
-							<div class="success-state"><Icon icon="material-symbols:check-circle-outline-rounded" /><strong>{sensitiveAction === "delete-account" ? "Deletion scheduled" : "Action completed"}</strong><p>{sensitiveAction === "delete-account" ? "The 7-day cooling period has started. You can cancel from Danger Zone." : "Your account settings are up to date."}</p></div>
+							<div class="success-state"><Icon icon="material-symbols:check-circle-outline-rounded" /><strong>{sensitiveAction === "delete-account" ? "Deletion request submitted" : "Action completed"}</strong><p>{sensitiveAction === "delete-account" ? "Your request is waiting for administrator review. You can cancel it from Danger Zone." : "Your account settings are up to date."}</p></div>
 							<div class="modal-actions">{#if sensitiveAction === "change-password" && passwordCleanupToken}<button class="command subtle-danger" type="button" onclick={() => void logoutOtherSessions()} disabled={modalBusy}>Sign out other devices</button>{/if}<button class="command primary" type="button" onclick={closeSensitive}>Done</button></div>
 						{/if}
 						{#if modalError}<p class="message error" aria-live="polite"><Icon icon="material-symbols:error-outline-rounded" />{modalError}</p>{/if}
@@ -1147,13 +1104,6 @@ onMount(() => void loadSession());
 	.accounts-workspace {
 		width: min(100%, 78rem);
 		margin: 0 auto;
-	}
-	.workspace-bar {
-		min-height: 3.5rem;
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		margin-bottom: 1rem;
 	}
 	.wordmark {
 		display: inline-flex;
@@ -1349,6 +1299,13 @@ onMount(() => void loadSession());
 		background: var(--btn-regular-bg-hover, #e5f2fd);
 		color: var(--primary, #287dc0);
 	}
+	.account-nav .sidebar-logout {
+		margin-top: 0.65rem;
+		border-top: 1px solid var(--sf-border);
+		border-radius: 0;
+		padding-top: 0.65rem;
+		color: var(--sf-danger);
+	}
 	.account-content {
 		min-width: 0;
 		display: grid;
@@ -1372,14 +1329,6 @@ onMount(() => void loadSession());
 		color: var(--text-75, #617386);
 		line-height: 1.55;
 	}
-	.hero-stats {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.5rem;
-		align-content: start;
-		justify-content: flex-start;
-	}
-	.hero-stats span,
 	.status {
 		display: inline-flex;
 		align-items: center;
@@ -1929,14 +1878,9 @@ onMount(() => void loadSession());
 	.accounts-workspace {
 		width: min(100%, 82rem);
 	}
-	.workspace-bar {
-		min-height: 4.5rem;
-		margin: 0;
-		border-bottom: 1px solid var(--sf-border);
-	}
 	.account-grid {
 		gap: 2rem;
-		padding-top: 1.5rem;
+		padding-top: 1rem;
 	}
 	.identity-card {
 		padding: 0.5rem;
@@ -1984,9 +1928,6 @@ onMount(() => void loadSession());
 	.page-heading p {
 		margin-right: auto;
 		margin-left: auto;
-	}
-	.hero-stats {
-		justify-content: center;
 	}
 	.panel {
 		border-color: var(--sf-border-strong);
@@ -2068,9 +2009,6 @@ onMount(() => void loadSession());
 			display: block;
 			text-align: center;
 		}
-		.identity-card > .eyebrow {
-			display: block;
-		}
 		.identity-card h1 {
 			margin: 0.2rem 0;
 			font-size: 1.35rem;
@@ -2099,9 +2037,6 @@ onMount(() => void loadSession());
 		.page-heading {
 			flex-direction: column;
 			align-items: center;
-			justify-content: center;
-		}
-		.hero-stats {
 			justify-content: center;
 		}
 		.risk-action {
@@ -2136,7 +2071,8 @@ onMount(() => void loadSession());
 			border-left: 1px solid var(--sf-border);
 		}
 		.danger-grid {
-			grid-template-columns: repeat(2, minmax(0, 1fr));
+			max-width: 44rem;
+			margin: 0 auto;
 		}
 	}
 	@media (max-width: 520px) {

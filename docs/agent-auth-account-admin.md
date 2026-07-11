@@ -90,11 +90,11 @@ Accounts is a standalone account workspace. Do not restore the public blog navba
 - `DELETE /accounts/profile/avatar`: clear the profile avatar and remove previous managed file when applicable.
 - `GET /account-avatars/{filename}`: immutable public delivery for managed avatars.
 - `POST /accounts/2fa/setup/start`, `POST /accounts/2fa/setup/verify`, `POST /accounts/2fa/disable`: authenticated 2FA management with CSRF.
-- `POST /accounts/security/email/request`, `POST /accounts/security/email/verify`: issue a short-lived, action-bound proof before password, email, 2FA, export, session, or danger-zone changes.
+- `POST /accounts/security/email/request`, `POST /accounts/security/email/verify`: issue a short-lived, action-bound proof before password, email, 2FA, export, or danger-zone changes.
 - `POST /accounts/security/password`, `PATCH /accounts/security/email`, `POST /accounts/security/export`: verified sensitive account changes and private data export.
-- `GET/DELETE /accounts/sessions`, `POST /accounts/sessions/logout-all`, `POST /accounts/sessions/logout-others`: device review and revocation; bulk revocation requires an action-bound proof.
+- `GET/DELETE /accounts/sessions`, `POST /accounts/sessions/logout-all`, `POST /accounts/sessions/logout-others`: device review and revocation. Logout-all requires the authenticated session and CSRF, but no email proof.
 - `GET/PATCH /accounts/preferences/*`: privacy and notification preferences.
-- `POST /accounts/danger/*`: isolated destructive actions with action-bound email verification and confirmation text. Account deletion is scheduled behind a seven-day cooling period and can be cancelled before it runs.
+- `POST /accounts/danger/delete`: deletion requests require action-bound email verification, enabled 2FA, a valid current authenticator code, and confirmation text. Requests wait for administrator approval; approval starts the seven-day cooling period. Users can cancel before deletion runs.
 - Legacy `POST /account/auth/register` and `POST /account/auth/login` return `410`; do not re-enable them.
 - `GET /comments?postSlug=...`: public comment list for a Ghost post slug.
 - `POST /comments/create`: authenticated public-user comment creation with Turnstile and CSRF.
@@ -124,6 +124,7 @@ Accounts is a standalone account workspace. Do not restore the public blog navba
 - `POST /admin/users/{user_id}/disable`: soft-disable a user.
 - `POST /admin/users/{user_id}/enable`: re-enable a user.
 - `POST /admin/users/{user_id}/role`: set `user` or `admin`.
+- `POST /admin/users/{user_id}/deletion/approve` and `/reject`: review pending deletion requests. Approval starts the seven-day cooling period.
 - `GET /admin/comments`: list comments with username, display name, email, post slug, moderation state, timestamps, content, and available creation IP audit data.
 - `POST /admin/comments/{comment_id}/delete`: soft-delete a comment.
 - `POST /admin/comments/{comment_id}/restore`: restore a soft-deleted comment.

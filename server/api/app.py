@@ -393,6 +393,7 @@ class AccountNotificationSettingsPayload(BaseModel):
 class AccountDangerPayload(BaseModel):
 	confirmation: str = ""
 	verification_token: str = ""
+	two_factor_code: str = ""
 
 
 class SessionRefreshPayload(BaseModel):
@@ -1085,6 +1086,9 @@ def ensure_account_db() -> None:
 			("last_seen_at", "TEXT"),
 			("last_user_agent", "TEXT"),
 			("deletion_requested_at", "TEXT"),
+			("deletion_review_status", "TEXT"),
+			("deletion_approved_at", "TEXT"),
+			("deletion_scheduled_for", "TEXT"),
 		):
 			try:
 				connection.execute(f"ALTER TABLE users ADD COLUMN {column_name} {column_type}")
@@ -1778,6 +1782,8 @@ def account_user_payload(row: dict[str, Any]) -> dict[str, Any]:
 		"twoFactorEnabled": bool(row.get("totp_enabled")),
 		"hasPassword": bool(row.get("password_hash")),
 		"deletionRequestedAt": row.get("deletion_requested_at") or "",
+		"deletionReviewStatus": row.get("deletion_review_status") or "",
+		"deletionScheduledFor": row.get("deletion_scheduled_for") or "",
 	}
 
 
@@ -1870,6 +1876,9 @@ def get_account_user(request: Request) -> dict[str, Any] | None:
 			users.totp_enabled,
 			users.password_hash,
 			users.disabled_at,
+			users.deletion_requested_at,
+			users.deletion_review_status,
+			users.deletion_scheduled_for,
 			sessions.id AS session_id
 		FROM sessions
 		INNER JOIN users ON users.id = sessions.user_id
@@ -3247,7 +3256,9 @@ def admin_users(request: Request) -> dict[str, Any]:
 			users.email_verified_at, users.totp_enabled, users.tos_version,
 			users.tos_accepted_at, users.registration_ip, users.last_seen_ip,
 			users.last_seen_at, users.last_user_agent, users.created_at, users.updated_at,
-			users.disabled_at, CASE WHEN users.password_hash != '' THEN 1 ELSE 0 END AS has_password,
+			users.disabled_at, users.deletion_requested_at, users.deletion_review_status,
+			users.deletion_approved_at, users.deletion_scheduled_for,
+			CASE WHEN users.password_hash != '' THEN 1 ELSE 0 END AS has_password,
 			account_preferences.profile_public, account_preferences.show_region,
 			account_preferences.show_comments, account_preferences.allow_search,
 			account_preferences.security_email, account_preferences.comment_replies,
@@ -3276,6 +3287,8 @@ def admin_user_detail(user_id: str, request: Request) -> dict[str, Any]:
 			display_region, display_region_code, email_verified_at, totp_enabled,
 			tos_version, tos_accepted_at, registration_ip, last_seen_ip,
 			last_seen_at, last_user_agent, created_at, updated_at, disabled_at,
+			deletion_requested_at, deletion_review_status, deletion_approved_at,
+			deletion_scheduled_for,
 			CASE WHEN password_hash != '' THEN 1 ELSE 0 END AS has_password
 		FROM users WHERE id = ? LIMIT 1
 		""",
@@ -4405,6 +4418,62 @@ def accounts_2fa_disable(
 	return {"ok": True}
 
 
+@app.post("/admin/users/{user_id}/deletion/approve")
+def admin_user_deletion_approve(
+	user_id: str,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	require_admin_console_session(request, x_csrf_token=x_csrf_token, require_csrf=True)
+	rows = d1_query(
+		"SELECT deletion_review_status FROM users WHERE id = ? LIMIT 1",
+		[user_id],
+	)
+	if not rows:
+		raise HTTPException(status_code=404, detail="User not found")
+	if rows[0].get("deletion_review_status") != "pending":
+		raise HTTPException(status_code=409, detail="No pending deletion request")
+	now = utc_now()
+	scheduled_for = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+	d1_query(
+		"""
+		UPDATE users SET deletion_review_status = 'approved', deletion_approved_at = ?,
+			deletion_scheduled_for = ?, updated_at = ? WHERE id = ?
+		""",
+		[now, scheduled_for, now, user_id],
+	)
+	record_security_event(user_id, "account_deletion_approved", "Administrator approved deletion; 7-day cooling period started")
+	return {"ok": True, "scheduledFor": scheduled_for}
+
+
+@app.post("/admin/users/{user_id}/deletion/reject")
+def admin_user_deletion_reject(
+	user_id: str,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	require_admin_console_session(request, x_csrf_token=x_csrf_token, require_csrf=True)
+	rows = d1_query(
+		"SELECT deletion_review_status FROM users WHERE id = ? LIMIT 1",
+		[user_id],
+	)
+	if not rows:
+		raise HTTPException(status_code=404, detail="User not found")
+	if rows[0].get("deletion_review_status") != "pending":
+		raise HTTPException(status_code=409, detail="No pending deletion request")
+	now = utc_now()
+	d1_query(
+		"""
+		UPDATE users SET deletion_requested_at = NULL, deletion_review_status = NULL,
+			deletion_approved_at = NULL, deletion_scheduled_for = NULL, updated_at = ?
+		WHERE id = ?
+		""",
+		[now, user_id],
+	)
+	record_security_event(user_id, "account_deletion_rejected", "Administrator rejected deletion request")
+	return {"ok": True}
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Accounts profile (new unified routes)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -4545,7 +4614,7 @@ def record_security_event(user_id: str, event_type: str, detail: str = "") -> No
 def finalize_due_account_deletions() -> None:
 	now = utc_now()
 	rows = d1_query(
-		"SELECT id, avatar_url FROM users WHERE deletion_requested_at IS NOT NULL AND deletion_requested_at <= ?",
+		"SELECT id, avatar_url FROM users WHERE deletion_review_status = 'approved' AND deletion_scheduled_for IS NOT NULL AND deletion_scheduled_for <= ?",
 		[now],
 	)
 	for row in rows:
@@ -4554,7 +4623,8 @@ def finalize_due_account_deletions() -> None:
 		d1_query(
 			"""
 			UPDATE users
-			SET disabled_at = ?, deletion_requested_at = NULL, display_name = '', avatar_url = '', bio = '',
+			SET disabled_at = ?, deletion_requested_at = NULL, deletion_review_status = NULL,
+				deletion_approved_at = NULL, deletion_scheduled_for = NULL, display_name = '', avatar_url = '', bio = '',
 				email = ?, username = ?, updated_at = ?
 			WHERE id = ?
 			""",
@@ -4576,7 +4646,6 @@ ACCOUNT_SENSITIVE_ACTIONS = {
 	"enable-2fa",
 	"disable-2fa",
 	"export-data",
-	"logout-all",
 	"clear-comments",
 	"deactivate-account",
 	"delete-account",
@@ -4811,14 +4880,11 @@ def accounts_session_delete(
 
 @app.post("/accounts/sessions/logout-all")
 def accounts_sessions_logout_all(
-	payload: AccountSensitiveActionPayload,
 	request: Request,
 	response: Response,
 	x_csrf_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
 	user = require_account_csrf(request, x_csrf_token)
-	proof = get_sensitive_proof(payload.verification_token, str(user["id"]), "logout-all")
-	consume_auth_flow(str(proof["id"]))
 	d1_query("DELETE FROM sessions WHERE user_id = ?", [str(user["id"])])
 	clear_account_cookie(response)
 	record_security_event(str(user["id"]), "sessions_cleared", "All sessions were signed out")
@@ -4943,21 +5009,32 @@ def accounts_deactivate(
 def accounts_delete(
 	payload: AccountDangerPayload,
 	request: Request,
-	response: Response,
 	x_csrf_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
 	user = require_account_csrf(request, x_csrf_token)
 	if payload.confirmation != "DELETE ACCOUNT":
 		raise HTTPException(status_code=400, detail="Confirmation text is required")
 	proof = get_sensitive_proof(payload.verification_token, str(user["id"]), "delete-account")
-	consume_auth_flow(str(proof["id"]))
-	scheduled_for = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
-	d1_query(
-		"UPDATE users SET deletion_requested_at = ?, updated_at = ? WHERE id = ?",
-		[scheduled_for, utc_now(), str(user["id"])],
+	rows = d1_query(
+		"SELECT totp_enabled, totp_secret FROM users WHERE id = ? LIMIT 1",
+		[str(user["id"])],
 	)
-	record_security_event(str(user["id"]), "account_deletion_scheduled", "Deletion scheduled after 7-day cooling period")
-	return {"ok": True, "scheduledFor": scheduled_for}
+	if not rows or not rows[0].get("totp_enabled") or not rows[0].get("totp_secret"):
+		raise HTTPException(status_code=403, detail="Two-factor authentication must be enabled before requesting deletion")
+	if not verify_totp(open_totp_secret(str(rows[0]["totp_secret"])), payload.two_factor_code):
+		raise HTTPException(status_code=401, detail="Invalid authenticator code")
+	consume_auth_flow(str(proof["id"]))
+	now = utc_now()
+	d1_query(
+		"""
+		UPDATE users SET deletion_requested_at = ?, deletion_review_status = 'pending',
+			deletion_approved_at = NULL, deletion_scheduled_for = NULL, updated_at = ?
+		WHERE id = ?
+		""",
+		[now, now, str(user["id"])],
+	)
+	record_security_event(str(user["id"]), "account_deletion_requested", "Deletion request is pending administrator review")
+	return {"ok": True, "reviewStatus": "pending"}
 
 
 @app.post("/accounts/danger/delete/cancel")
@@ -4966,8 +5043,15 @@ def accounts_delete_cancel(
 	x_csrf_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
 	user = require_account_csrf(request, x_csrf_token)
-	d1_query("UPDATE users SET deletion_requested_at = NULL, updated_at = ? WHERE id = ?", [utc_now(), str(user["id"])])
-	record_security_event(str(user["id"]), "account_deletion_cancelled", "Scheduled deletion cancelled")
+	d1_query(
+		"""
+		UPDATE users SET deletion_requested_at = NULL, deletion_review_status = NULL,
+			deletion_approved_at = NULL, deletion_scheduled_for = NULL, updated_at = ?
+		WHERE id = ?
+		""",
+		[utc_now(), str(user["id"])],
+	)
+	record_security_event(str(user["id"]), "account_deletion_cancelled", "Deletion request cancelled")
 	return {"ok": True}
 
 
