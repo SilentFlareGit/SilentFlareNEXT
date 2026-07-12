@@ -5,6 +5,7 @@ import Alert from "../ui/Alert.svelte";
 import Button from "../ui/Button.svelte";
 import StatusBadge from "../ui/StatusBadge.svelte";
 import TextField from "../ui/TextField.svelte";
+import ThemeToggle from "../ui/ThemeToggle.svelte";
 import Toggle from "../ui/Toggle.svelte";
 import RegistrationApp from "./RegistrationApp.svelte";
 
@@ -168,17 +169,6 @@ const panels = [
 		icon: "material-symbols:warning-outline-rounded",
 	},
 ] as const;
-
-const panelCopy = {
-	profile: "Manage the identity shown with your comments and public activity.",
-	security:
-		"Protect sign-in, verify sensitive changes, and review security activity.",
-	sessions:
-		"Review where your account is signed in and remove unfamiliar devices.",
-	privacy: "Choose what account information can appear on public surfaces.",
-	notifications: "Control account, comment, system, and announcement emails.",
-	danger: "Use these controls carefully. Each destructive action is isolated.",
-} as const;
 
 const actionCopy: Record<
 	SensitiveAction,
@@ -791,6 +781,7 @@ onMount(() => void loadSession());
 	</div>
 {:else if user}
 	<div class="accounts-stage">
+		<div class="account-theme-command"><ThemeToggle /></div>
 		<main class="accounts-workspace">
 			<div class="account-grid">
 				<aside class="identity-card panel">
@@ -861,13 +852,6 @@ onMount(() => void loadSession());
 				</aside>
 
 				<div class="account-content">
-					<header class="page-heading">
-						<div>
-							<h2>{panels.find((panel) => panel.id === activePanel)?.label}</h2>
-							<p>{panelCopy[activePanel]}</p>
-						</div>
-					</header>
-
 					{#if activePanel === "profile"}
 						<section class="panel account-card split-card">
 							<form
@@ -1102,6 +1086,7 @@ onMount(() => void loadSession());
 
 <style>
 	.accounts-stage {
+		position: relative;
 		min-height: 100svh;
 		overflow-x: hidden;
 		padding: 1rem;
@@ -1115,6 +1100,13 @@ onMount(() => void loadSession());
 	.accounts-workspace {
 		width: min(100%, 78rem);
 		margin: 0 auto;
+		padding-top: 3.75rem;
+	}
+	.account-theme-command {
+		position: absolute;
+		z-index: 10;
+		top: 1rem;
+		right: 1rem;
 	}
 	.wordmark {
 		display: inline-flex;
@@ -1464,9 +1456,15 @@ onMount(() => void loadSession());
 		font-weight: 500;
 	}
 	.avatar-actions {
-		display: flex;
-		flex-wrap: wrap;
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 10rem));
 		gap: 0.6rem;
+	}
+	.avatar-actions .command {
+		width: 100%;
+		min-width: 0;
+		flex-direction: row;
+		white-space: nowrap;
 	}
 	.command,
 	.icon-command {
@@ -2065,6 +2063,13 @@ onMount(() => void loadSession());
 		.accounts-stage {
 			padding: 1.5rem;
 		}
+		.accounts-workspace {
+			padding-top: 0;
+		}
+		.account-theme-command {
+			top: 1.5rem;
+			right: 1.5rem;
+		}
 		.account-grid {
 			grid-template-columns: 13rem minmax(0, 1fr);
 			align-items: start;
@@ -2171,6 +2176,9 @@ onMount(() => void loadSession());
 		}
 		.command {
 			width: 100%;
+		}
+		.avatar-actions {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
 		}
 		.toggle-list label {
 			align-items: start;
