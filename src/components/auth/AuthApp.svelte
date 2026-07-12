@@ -71,6 +71,10 @@ function finishLogin(user: AuthUser, destination?: string) {
 async function bootstrap() {
 	const params = new URLSearchParams(window.location.search);
 	adminMode = params.get("audience") === "admin";
+	if (adminMode) {
+		document.documentElement.classList.remove("dark");
+		document.documentElement.style.colorScheme = "light";
+	}
 	await resolveReturnUrl(params.get("return_url") ?? "");
 	if (adminMode) {
 		step = "method";
@@ -141,6 +145,7 @@ onMount(() => void bootstrap());
 
 <IdentityShell
 	product={adminMode ? "Admin" : ""}
+	showTheme={!adminMode}
 	headline={adminMode ? "A private door to public trust." : "One identity across SilentFlare."}
 	description={adminMode ? "Verify Owner access before reviewing members and moderated conversations." : "Sign in once for the blog, comments, your profile, privacy, and security settings."}
 	backHref="https://blog.silentflare.com/"

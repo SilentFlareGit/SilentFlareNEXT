@@ -9,6 +9,7 @@ let {
 	backHref,
 	backLabel,
 	product = "",
+	showTheme = true,
 	story,
 	children,
 }: {
@@ -17,13 +18,14 @@ let {
 	backHref: string;
 	backLabel: string;
 	product?: string;
+	showTheme?: boolean;
 	story?: Snippet;
 	children: Snippet;
 } = $props();
 </script>
 
 <div class="sf-app identity-stage">
-	<div class="theme-command"><ThemeToggle /></div>
+	{#if showTheme}<div class="theme-command"><ThemeToggle /></div>{/if}
 	<main class="identity-main">
 		<section class="identity-shell">
 			<aside class="identity-story">
