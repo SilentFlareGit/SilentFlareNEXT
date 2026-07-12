@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { Snippet } from "svelte";
 import BrandMark from "../ui/BrandMark.svelte";
+import ThemeToggle from "../ui/ThemeToggle.svelte";
 
 let {
 	headline,
@@ -22,6 +23,7 @@ let {
 </script>
 
 <div class="sf-app identity-stage">
+	<div class="theme-command"><ThemeToggle /></div>
 	<main class="identity-main">
 		<section class="identity-shell">
 			<aside class="identity-story">
@@ -42,7 +44,8 @@ let {
 </div>
 
 <style>
-	.identity-stage { padding: 0.75rem; overflow-x: hidden; }
+	.identity-stage { position: relative; padding: 0.75rem; overflow-x: hidden; }
+	.theme-command { position: absolute; z-index: 10; top: 1rem; right: 1rem; }
 	.identity-main { width: min(100%, 80rem); margin: 0 auto; }
 	.identity-shell { display: grid; gap: 1.5rem; padding: 1rem 0; }
 	.identity-story { min-width: 0; display: flex; flex-direction: column; gap: 1rem; padding: 0.5rem 0; }
@@ -56,6 +59,7 @@ let {
 	.identity-legal a { color: inherit; text-decoration: underline; text-underline-offset: 0.15rem; }
 	@media (min-width: 768px) {
 		.identity-stage { padding: 1.5rem; }
+		.theme-command { top: 1.5rem; right: 1.5rem; }
 		.identity-shell { gap: 2rem; padding: 1.5rem 0; }
 		.identity-story { padding: 1rem 0; }
 		.identity-form { padding: 2.5rem; }
