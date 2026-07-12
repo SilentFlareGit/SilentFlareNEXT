@@ -842,6 +842,7 @@ onMount(() => void loadSession());
 							<button
 								type="button"
 								class:active={activePanel === panel.id}
+								aria-current={activePanel === panel.id ? "page" : undefined}
 								onclick={() => {
 									activePanel = panel.id;
 									mobileMenuOpen = false;
@@ -886,6 +887,14 @@ onMount(() => void loadSession());
 									</div>
 								</div>
 								<TextField label="Display name" bind:value={displayName} maxlength={80} autocomplete="name" />
+								<div class="readonly-field">
+									<span>Region</span>
+									<div>
+										{#if flagUrl(displayRegionCode)}<img src={flagUrl(displayRegionCode)} alt="" />{:else}<Icon icon="material-symbols:public-rounded" />{/if}
+										<strong>{displayRegion || "Region unavailable"}</strong>
+									</div>
+									<small>Updated automatically from your current connection.</small>
+								</div>
 								<label>
 									Bio
 									<textarea class="auth-input bio-input" bind:value={bio} maxlength="500"></textarea>
@@ -944,7 +953,6 @@ onMount(() => void loadSession());
 								<div class="security-row"><span class="row-icon"><Icon icon="material-symbols:alternate-email-rounded" /></span><div><strong>Email address</strong><p>{user.email}</p></div><button class="command secondary" type="button" onclick={() => openSensitive("change-email")}>Change</button></div>
 								<div class="security-row"><span class="row-icon"><Icon icon="material-symbols:key-outline-rounded" /></span><div><strong>Password</strong><p>{user.hasPassword ? "Password login is available" : "Email-code login only"}</p></div><button class="command secondary" type="button" onclick={() => openSensitive("change-password")}>{user.hasPassword ? "Change" : "Set password"}</button></div>
 								<div class="security-row"><span class="row-icon"><Icon icon="material-symbols:phonelink-lock-outline-rounded" /></span><div><strong>Two-factor authentication</strong><p>Authenticator challenge after primary login</p></div><button class={user.twoFactorEnabled ? "command subtle-danger" : "command secondary"} type="button" onclick={() => openSensitive(user.twoFactorEnabled ? "disable-2fa" : "enable-2fa")}>{user.twoFactorEnabled ? "Disable" : "Enable"}</button></div>
-								<div class="security-row"><span class="row-icon"><Icon icon="material-symbols:emergency-home-outline-rounded" /></span><div><strong>Recovery codes</strong><p>Recovery codes will appear here when supported.</p></div><StatusBadge label="Unavailable" /></div>
 							</div>
 							{#if setupToken}
 								<div class="totp-box">
@@ -973,6 +981,9 @@ onMount(() => void loadSession());
 								<div><p class="eyebrow">Sessions</p><h3>Logged-in devices</h3></div>
 							</div>
 							<div class="session-list">
+								{#if sessions.length === 0}
+									<div class="empty-state"><Icon icon="material-symbols:devices-outline-rounded" /><div><strong>No active sessions found</strong><p>New sign-ins will appear here with device and activity details.</p></div></div>
+								{/if}
 								{#each sessions as session}
 									<article>
 										<span class="row-icon"><Icon icon={session.current ? "material-symbols:computer-outline-rounded" : "material-symbols:devices-outline-rounded"} /></span>
@@ -1387,6 +1398,35 @@ onMount(() => void loadSession());
 		flex-direction: column;
 		gap: 1rem;
 	}
+	.readonly-field {
+		display: grid;
+		gap: 0.5rem;
+		color: var(--sf-text);
+		font-weight: 800;
+	}
+	.readonly-field > div {
+		min-height: var(--sf-control-height);
+		display: flex;
+		align-items: center;
+		gap: 0.65rem;
+		padding: 0.65rem 0.8rem;
+		border: 1px solid var(--sf-border);
+		border-radius: var(--sf-radius-md);
+		background: var(--sf-surface-subtle);
+	}
+	.readonly-field img,
+	.readonly-field :global(svg) {
+		flex: none;
+		width: 1.25rem;
+		height: 1.25rem;
+		border-radius: 50%;
+	}
+	.readonly-field small {
+		color: var(--sf-text-muted);
+		font-size: 0.78rem;
+		font-weight: 500;
+		line-height: 1.4;
+	}
 	label {
 		position: relative;
 		display: flex;
@@ -1625,6 +1665,26 @@ onMount(() => void loadSession());
 	}
 	.event-list {
 		margin-top: 1.2rem;
+	}
+	.empty-state {
+		min-height: 8rem;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.85rem;
+		padding: 1.25rem;
+		color: var(--sf-text-muted);
+		text-align: left;
+	}
+	.empty-state > :global(svg) {
+		flex: none;
+		font-size: 1.75rem;
+		color: var(--sf-accent-strong);
+	}
+	.empty-state p {
+		margin: 0.25rem 0 0;
+		font-size: 0.86rem;
+		line-height: 1.45;
 	}
 	.event-list div strong,
 	.event-list div span {
@@ -1918,24 +1978,24 @@ onMount(() => void loadSession());
 		width: 100%;
 		max-width: 54rem;
 		min-height: calc(100svh - 3rem);
-		justify-self: center;
+		justify-self: start;
 		align-content: start;
 		gap: 1.25rem;
 	}
 	.page-heading {
-		min-height: 7rem;
-		align-items: center;
-		justify-content: center;
-		padding: 1rem 0 0.75rem;
-		text-align: center;
+		min-height: 6rem;
+		align-items: flex-start;
+		justify-content: flex-end;
+		padding: 0.75rem 0 0.85rem;
+		text-align: left;
 	}
 	.page-heading p {
-		margin-right: auto;
-		margin-left: auto;
+		margin-right: 0;
+		margin-left: 0;
 	}
 	.panel {
 		border-color: var(--sf-border-strong);
-		border-radius: var(--sf-radius-lg);
+		border-radius: var(--sf-radius-md);
 		box-shadow: none;
 	}
 	.account-card {
