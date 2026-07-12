@@ -18,6 +18,9 @@ Public users share one opaque API-issued session cookie across `.silentflare.com
 
 - Auth page: `src/pages/auth/index.astro`.
 - Auth app: `src/components/auth/AuthApp.svelte` and `src/components/auth/panels/`.
+- Shared subsite document shell: `src/layouts/SubsiteLayout.astro`.
+- Shared identity shell: `src/components/shells/IdentityShell.svelte`.
+- Auth/registration theme command: `src/components/ui/ThemeToggle.svelte`.
 - Accounts registration shell: `src/components/account/RegistrationApp.svelte`.
 - Registration flow: `src/components/auth/panels/RegistrationPanel.svelte`; rendered only on Accounts even though it lives with shared authentication panel primitives.
 - Accounts page: `src/pages/accounts/index.astro`.
@@ -28,6 +31,15 @@ Public users share one opaque API-issued session cookie across `.silentflare.com
 - Blog comment login redirect: `src/components/comments/CommentSection.svelte`.
 
 Accounts is a standalone account workspace. Do not restore the public blog navbar/banner above it. Admin is a standalone, light-only owner workspace and must not show bot backup, chat, health-dashboard, or unrelated operational controls.
+
+## Auth Theme Behavior
+
+- Auth and Accounts registration expose one compact icon-only theme command in the top-right of `IdentityShell`.
+- The command toggles directly between light and dark, updates the document immediately, and stores the explicit choice as `localStorage.theme` so later visits restore it before rendering.
+- The icon shows the available action: moon while light is active and sun while dark is active. Keep its tooltip and accessible label synchronized with that action.
+- The control is at least `44px` square, uses shared `--sf-*` tokens, and must remain outside the login form so changing the theme cannot submit, reset, or shift the authentication flow.
+- When no explicit preference exists, `SubsiteLayout` initially follows `prefers-color-scheme`. Once the user clicks the command, the saved explicit preference takes precedence.
+- Auth text and panels must use semantic theme tokens instead of conflicting light-only surfaces and `dark:text-*` utilities.
 
 ## Account Center UI Contract
 

@@ -70,6 +70,15 @@ GHOST_REQUEST_PROTO=https
 - The temporary `#page-height-extend` element is shown only while a Swup visit is active and must be hidden again on `page:view` and after `visit:end`.
 - Both `html` and `body` use `var(--page-bg)`. Do not leave `body` transparent or hard-code a light background, or the absolutely positioned blog layout can expose a light band in dark mode.
 
+## Shared Subsite Front End
+
+- Auth, Accounts, Admin, and Bots use `src/layouts/SubsiteLayout.astro` for shared document metadata, Roboto font loading, favicon links, Blog-derived tokens, foundations, and subsite reset styles.
+- Shared semantic colors and dimensions live in `src/styles/tokens.css`; shared subsite document behavior lives in `src/styles/subsites.css`. Prefer `--sf-*` semantic tokens over new hard-coded colors.
+- Interactive shared primitives live in `src/components/ui/`. `IdentityShell.svelte` is the standalone identity layout used by Auth and Accounts registration; it must not be replaced with the public Blog navbar or `MainGridLayout`.
+- Adaptive subsites restore the saved `localStorage.theme` value before rendering. Explicit `light` and `dark` choices are supported; when no choice is stored, the initial theme follows the system preference.
+- Admin remains the exception: its `SubsiteLayout` uses `theme="light"` and must not read or apply the saved Blog theme.
+- Dark mode must update the complete semantic surface set (`--sf-page`, `--sf-surface`, `--sf-surface-subtle`, `--sf-surface-muted`, and `--sf-text`) together. Do not combine a light semantic surface with Tailwind `dark:text-*` utilities, which can produce invisible light text on a light panel.
+
 ## Coding Style
 
 - Biome is the source of truth for formatting and linting.

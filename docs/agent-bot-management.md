@@ -8,6 +8,7 @@ The bot management surface is split across this repo and FNS1 infrastructure:
 
 - Front end source: `src/pages/bots/index.astro`.
 - Main bot UI component: `src/components/bots/BotApp.svelte`.
+- Shared document shell and visual foundations: `src/layouts/SubsiteLayout.astro`, `src/styles/tokens.css`, and `src/styles/subsites.css`.
 - API source: `server/api/app.py`.
 - API requirements: `server/api/requirements.txt`.
 - Production API service: `silentflare-api.service`.
