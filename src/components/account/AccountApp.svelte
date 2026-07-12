@@ -1088,18 +1088,20 @@ onMount(() => void loadSession());
 	.accounts-stage {
 		position: relative;
 		min-height: 100svh;
+		display: flex;
+		flex-direction: column;
 		overflow-x: hidden;
 		padding: 1rem;
-		color: var(--deep-text, #182230);
+		color: var(--sf-text);
 		background: var(--sf-page);
 	}
 	:global(.dark) .accounts-stage {
-		background: var(--page-bg, #101820);
-		color: var(--deep-text, #e8edf4);
+		background: var(--sf-page);
+		color: var(--sf-text);
 	}
 	.accounts-workspace {
 		width: min(100%, 78rem);
-		margin: 0 auto;
+		margin: auto;
 		padding-top: 3.75rem;
 	}
 	.account-theme-command {
@@ -1189,7 +1191,7 @@ onMount(() => void loadSession());
 		height: 2rem;
 		display: grid;
 		place-items: center;
-		border: 0.2rem solid var(--card-bg, white);
+		border: 0.2rem solid var(--sf-surface);
 		border-radius: 50%;
 		background: #182e49;
 		color: white;
@@ -1220,7 +1222,7 @@ onMount(() => void loadSession());
 	}
 	.handle,
 	.muted {
-		color: var(--text-75, #6c7b8c);
+		color: var(--sf-text-muted);
 	}
 	.region-pill {
 		display: inline-flex;
@@ -1234,8 +1236,8 @@ onMount(() => void loadSession());
 		padding: 0 0.75rem;
 		border: 1px solid rgba(75, 159, 232, 0.12);
 		border-radius: 999px;
-		background: var(--btn-regular-bg, #eef6fd);
-		color: var(--text-75, #44637f);
+		background: var(--sf-surface-muted);
+		color: var(--sf-text-muted);
 		font-size: 0.82rem;
 		font-weight: 700;
 	}
@@ -1267,9 +1269,9 @@ onMount(() => void loadSession());
 		align-items: center;
 		justify-content: center;
 		gap: 0.45rem;
-		border: 1px solid var(--line-divider, rgba(70, 100, 130, 0.16));
+		border: 1px solid var(--sf-border);
 		border-radius: 0.7rem;
-		background: var(--card-bg, white);
+		background: var(--sf-surface);
 		color: inherit;
 		font-weight: 800;
 		cursor: pointer;
@@ -1286,7 +1288,7 @@ onMount(() => void loadSession());
 		border-radius: 0.7rem;
 		padding: 0 0.8rem;
 		background: transparent;
-		color: var(--text-75, #52677b);
+		color: var(--sf-text-muted);
 		font-weight: 800;
 		cursor: pointer;
 		transition:
@@ -1295,19 +1297,21 @@ onMount(() => void loadSession());
 			transform 0.16s ease;
 	}
 	.account-nav button:hover {
-		background: var(--btn-regular-bg, #eef6fd);
+		background: var(--sf-surface-muted);
 		transform: translateX(2px);
 	}
 	.account-nav button.active {
-		background: var(--btn-regular-bg-hover, #e5f2fd);
-		color: var(--primary, #287dc0);
+		background: var(--sf-accent-soft);
+		color: var(--sf-accent-strong);
 	}
 	.account-nav .sidebar-logout {
 		margin-top: 0.65rem;
-		border-top: 1px solid var(--sf-border);
-		border-radius: 0;
-		padding-top: 0.65rem;
+		border-radius: 999px;
+		padding-top: 0;
 		color: var(--sf-danger);
+	}
+	.account-nav .sidebar-logout:hover {
+		background: var(--sf-danger-soft);
 	}
 	.account-content {
 		min-width: 0;
@@ -1433,8 +1437,8 @@ onMount(() => void loadSession());
 		border: 1px solid var(--line-divider, rgba(70, 100, 130, 0.18));
 		border-radius: 0.65rem;
 		padding: 0.65rem 0.8rem;
-		background: var(--card-bg, white);
-		color: inherit;
+		background: var(--sf-surface);
+		color: var(--sf-text);
 		font: inherit;
 		outline: none;
 		transition:
@@ -1492,19 +1496,19 @@ onMount(() => void loadSession());
 		transform: translateY(-1px);
 	}
 	.command.primary {
-		background: var(--btn-regular-bg-hover, #dceeff);
-		color: var(--primary, #176db8);
+		background: var(--sf-accent-soft);
+		color: var(--sf-accent-strong);
 	}
 	.command.secondary,
 	.icon-command {
-		border: 1px solid var(--line-divider, rgba(70, 100, 130, 0.16));
-		background: var(--card-bg, white);
-		color: var(--deep-text, #31465b);
+		border: 1px solid var(--sf-border-strong);
+		background: var(--sf-surface);
+		color: var(--sf-text);
 	}
 	.command.subtle-danger {
-		border: 1px solid #f0caca;
-		background: #fff5f5;
-		color: #a34141;
+		border: 1px solid color-mix(in srgb, var(--sf-danger) 32%, var(--sf-border));
+		background: var(--sf-danger-soft);
+		color: var(--sf-danger);
 	}
 	.command.danger {
 		background: #aa2d2d;
@@ -1572,7 +1576,7 @@ onMount(() => void loadSession());
 	}
 	blockquote {
 		margin: 0;
-		color: var(--deep-text, #31465b);
+		color: var(--sf-text);
 		line-height: 1.6;
 		overflow-wrap: anywhere;
 	}
@@ -1808,7 +1812,7 @@ onMount(() => void loadSession());
 		padding: 1.25rem;
 		border: 1px solid var(--line-divider, rgba(70, 100, 130, 0.16));
 		border-radius: 0.75rem;
-		background: var(--card-bg, white);
+		background: var(--sf-surface);
 		box-shadow: 0 1.5rem 4rem rgba(17, 38, 60, 0.24);
 	}
 	.modal-header {
@@ -2068,7 +2072,7 @@ onMount(() => void loadSession());
 		}
 		.account-theme-command {
 			top: 1.5rem;
-			right: 1.5rem;
+			right: max(1.5rem, calc((100vw - 82rem) / 2));
 		}
 		.account-grid {
 			grid-template-columns: 13rem minmax(0, 1fr);
