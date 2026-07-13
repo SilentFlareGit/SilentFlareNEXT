@@ -40,12 +40,13 @@ Current product state:
 - `Telegram Chat Bot` is the user-facing bot id for the MessagesHelperBot service. `telegram-chat-bot` and `messages-helper-bot` may be accepted only as backwards-compatible aliases.
 - Telegram authorization creates a one-time pending challenge.
 - The fixed Owner may send `/allowweblogin` to enable Admin web login and `/denyweblogin` to disable it. Commands are accepted only from the configured Owner ID, including Telegram's `/command@botname` form. Disabling immediately revokes all Admin sessions and pending Admin challenges.
-- Admin web-login state is process-local and defaults to disabled whenever `silentflare-api.service` starts or restarts. The Owner must send `/allowweblogin` again after a restart.
+- Admin web-login state is persisted in `ADMIN_WEB_LOGIN_STATE_PATH`. Once enabled, it survives `silentflare-api.service` restarts and stays enabled until the Owner sends `/denyweblogin`.
 - The bot replies after either command. Failure to send that optional confirmation must not undo the state change or make the webhook fail.
-- Admin sessions use the same opaque bot-session cookie family but are bound to `SilentFlare Admin`, expire absolutely after one hour, and are never sliding sessions.
+- Admin sessions use the same opaque bot-session cookie family but are bound to `SilentFlare Admin`, expire absolutely after one hour, and are never sliding sessions. Expiry requires another Telegram approval, not another `/allowweblogin` command.
 - The Telegram bot sends an inline approval button to the fixed Owner account.
 - After Owner approval, the API should edit the same Telegram message to show approval success and link expiry.
 - If Telegram `editMessageText` or `answerCallbackQuery` fails, the webhook must still return `200` after applying the approval state.
+- Telegram callback acknowledgements and message edits are background tasks. The approved challenge must become available to browser polling before those optional Bot API calls finish.
 - The web UI polls challenge status and receives a bot-scoped session after approval.
 - Sessions are bound to `bot_id`; a session for one bot must not authorize another bot.
 - Write operations require the session cookie plus `X-CSRF-Token`.

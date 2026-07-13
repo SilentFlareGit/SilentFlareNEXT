@@ -70,6 +70,8 @@ WEB_COOKIE_SECURE=1
 WEB_SESSION_TTL=43200
 WEB_LOGIN_ATTEMPTS=5
 WEB_LOGIN_WINDOW_SECONDS=900
+ADMIN_WEB_LOGIN_STATE_PATH=/opt/silentflare/api/admin-web-login-state.json
+TELEGRAM_API_TIMEOUT_SECONDS=8
 TURNSTILE_SECRET_KEY=<turnstile-secret>
 TURNSTILE_EXPECTED_HOSTNAMES=auth.silentflare.com,accounts.silentflare.com,silentflare.com,www.silentflare.com
 TURNSTILE_EXPECTED_HOSTNAME=accounts.silentflare.com
@@ -106,7 +108,7 @@ BOT_SILENTFLARE_DB_BACKUP_TOTP_SECRET=<totp-secret>
 BOT_GHOST_DB_BACKUP_TOTP_SECRET=<totp-secret>
 ```
 
-`WEB_SESSION_TTL` applies to ordinary bot-management sessions. Admin Owner sessions are intentionally hard-coded to an absolute 3600-second lifetime and do not slide on activity. Admin web login is process-local, starts disabled after every API restart, and can only be toggled by the configured Telegram Owner through `/allowweblogin` and `/denyweblogin`; there is no environment variable that bypasses this gate.
+`WEB_SESSION_TTL` applies to ordinary bot-management sessions. Admin Owner sessions are intentionally hard-coded to an absolute 3600-second lifetime and do not slide on activity. Admin web login starts disabled on first installation, is persisted at `ADMIN_WEB_LOGIN_STATE_PATH`, and can only be toggled by the configured Telegram Owner through `/allowweblogin` and `/denyweblogin`; there is no environment variable that bypasses this gate. A one-hour session expiry requires a new Telegram approval but does not change the persisted gate.
 
 `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_D1_DATABASE_ID`, and `CLOUDFLARE_API_TOKEN` are not required for production account persistence or admin user/comment management. Production accounts/comments use the FNS1 local account database.
 

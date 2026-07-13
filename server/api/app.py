@@ -21,7 +21,7 @@ from urllib.parse import quote, unquote, urlencode, urlparse
 from urllib.request import Request as UrlRequest, urlopen
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -84,6 +84,16 @@ WEB_COOKIE_SECURE = os.getenv("WEB_COOKIE_SECURE", "1") != "0"
 WEB_LOGIN_ATTEMPTS = int(os.getenv("WEB_LOGIN_ATTEMPTS", "5"))
 WEB_LOGIN_WINDOW_SECONDS = int(os.getenv("WEB_LOGIN_WINDOW_SECONDS", "900"))
 WEB_LOGIN_SESSION_EPOCH = os.getenv("WEB_LOGIN_SESSION_EPOCH", "")
+ADMIN_WEB_LOGIN_STATE_PATH = Path(
+	os.getenv(
+		"ADMIN_WEB_LOGIN_STATE_PATH",
+		"/opt/silentflare/api/admin-web-login-state.json",
+	)
+)
+TELEGRAM_API_TIMEOUT_SECONDS = max(
+	3,
+	int(os.getenv("TELEGRAM_API_TIMEOUT_SECONDS", "8")),
+)
 SESSION_COOKIE = "sf_bot_session"
 BOT_COOKIE_DOMAIN = os.getenv("BOT_COOKIE_DOMAIN", ".silentflare.com")
 ACCOUNT_SESSION_COOKIE = os.getenv("ACCOUNT_SESSION_COOKIE_NAME", "sf_account_session")
@@ -181,8 +191,43 @@ BOTS = [
 ]
 AUTH_TARGETS = [*BOTS, ADMIN_AUTH_BOT]
 
+
+def load_admin_web_login_state() -> bool:
+	try:
+		state = json.loads(ADMIN_WEB_LOGIN_STATE_PATH.read_text(encoding="utf-8"))
+	except (FileNotFoundError, OSError, json.JSONDecodeError, TypeError):
+		return False
+	return state.get("enabled") is True if isinstance(state, dict) else False
+
+
+def persist_admin_web_login_state(enabled: bool) -> None:
+	ADMIN_WEB_LOGIN_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+	temporary_path = ADMIN_WEB_LOGIN_STATE_PATH.with_name(
+		f".{ADMIN_WEB_LOGIN_STATE_PATH.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp"
+	)
+	try:
+		temporary_path.write_text(
+			json.dumps(
+				{
+					"enabled": enabled,
+					"updated_at": datetime.now(timezone.utc)
+					.isoformat()
+					.replace("+00:00", "Z"),
+				},
+				separators=(",", ":"),
+			)
+			+ "\n",
+			encoding="utf-8",
+		)
+		os.chmod(temporary_path, 0o600)
+		os.replace(temporary_path, ADMIN_WEB_LOGIN_STATE_PATH)
+	finally:
+		if temporary_path.exists():
+			temporary_path.unlink()
+
+
 SESSIONS: dict[str, dict[str, Any]] = {}
-ADMIN_WEB_LOGIN_ENABLED = False
+ADMIN_WEB_LOGIN_ENABLED = load_admin_web_login_state()
 LOGIN_CHALLENGES: dict[str, dict[str, Any]] = {}
 LOGIN_FAILURES: dict[str, list[float]] = {}
 
@@ -498,6 +543,7 @@ def get_session(request: Request) -> dict[str, Any]:
 
 def set_admin_web_login(enabled: bool) -> None:
 	global ADMIN_WEB_LOGIN_ENABLED
+	persist_admin_web_login_state(enabled)
 	ADMIN_WEB_LOGIN_ENABLED = enabled
 	if enabled:
 		return
@@ -665,7 +711,7 @@ def telegram_api(config: dict[str, Any], method: str, payload: dict[str, Any]) -
 		method="POST",
 	)
 	request.add_header("Content-Type", "application/json")
-	with urlopen(request, timeout=20) as response:
+	with urlopen(request, timeout=TELEGRAM_API_TIMEOUT_SECONDS) as response:
 		body = json.loads(response.read().decode("utf-8"))
 	if not body.get("ok"):
 		raise HTTPException(status_code=502, detail="Telegram API request failed")
@@ -750,6 +796,27 @@ def answer_callback(
 				"callback_query_id": callback_id,
 				"text": text,
 				"show_alert": alert,
+			},
+		)
+	except Exception:
+		pass
+
+
+def send_admin_web_login_confirmation(
+	config: dict[str, Any], chat_id: Any, enabled: bool
+) -> None:
+	try:
+		telegram_api(
+			config,
+			"sendMessage",
+			{
+				"chat_id": chat_id,
+				"text": (
+					"Admin web login enabled until you send /denyweblogin. "
+					"Each approved session expires after one hour."
+					if enabled
+					else "Admin web login disabled. All Admin sessions were revoked."
+				),
 			},
 		)
 	except Exception:
@@ -3571,7 +3638,11 @@ def admin_comment_restore(
 
 
 @app.post("/telegram/update")
-async def telegram_update(request: Request, token: str = "") -> dict[str, Any]:
+async def telegram_update(
+	request: Request,
+	background_tasks: BackgroundTasks,
+	token: str = "",
+) -> dict[str, Any]:
 	webhook_config = telegram_config_from_webhook_token(token)
 	if not webhook_config:
 		raise HTTPException(status_code=401, detail="Invalid webhook token")
@@ -3592,21 +3663,12 @@ async def telegram_update(request: Request, token: str = "") -> dict[str, Any]:
 		set_admin_web_login(enabled)
 		chat = message.get("chat") or {}
 		chat_id = chat.get("id") or webhook_config.get("chat_id") or webhook_config["owner_id"]
-		try:
-			telegram_api(
-				webhook_config,
-				"sendMessage",
-				{
-					"chat_id": chat_id,
-					"text": (
-						"Admin web login enabled. New sessions expire after one hour."
-						if enabled
-						else "Admin web login disabled. All Admin sessions were revoked."
-					),
-				},
-			)
-		except Exception:
-			pass
+		background_tasks.add_task(
+			send_admin_web_login_confirmation,
+			webhook_config,
+			chat_id,
+			enabled,
+		)
 		return {"ok": True, "web_login_enabled": enabled}
 	callback = update.get("callback_query") or {}
 	data = callback.get("data") or ""
@@ -3622,14 +3684,20 @@ async def telegram_update(request: Request, token: str = "") -> dict[str, Any]:
 		approved = False
 	else:
 		approved = approve_login_challenge(challenge_id, user_id)
-	edit_login_approval_message(challenge, approved, webhook_config)
 	if callback_id:
-		answer_callback(
+		background_tasks.add_task(
+			answer_callback,
 			webhook_config,
 			callback_id,
 			"Login approved. Return to the web page." if approved else "Login request expired or unauthorized.",
-			alert=not approved,
+			not approved,
 		)
+	background_tasks.add_task(
+		edit_login_approval_message,
+		challenge,
+		approved,
+		webhook_config,
+	)
 	return {"ok": True, "approved": approved}
 
 

@@ -87,6 +87,7 @@ async function startTelegram() {
 		expiresAt = new Date(result.expires_at).getTime();
 		updateCountdown();
 		countdownTimer = window.setInterval(updateCountdown, 1000);
+		void pollApproval();
 		pollTimer = window.setInterval(pollApproval, 1000);
 	} catch (reason) {
 		message =
@@ -130,7 +131,7 @@ onMount(async () => {
 			// No owner session yet.
 		}
 		message = telegramAvailable
-			? "A one-time approval will be sent to the configured Owner account."
+			? "One Telegram approval unlocks Admin for one hour."
 			: "Telegram approval is unavailable on this server.";
 		tone = telegramAvailable ? "neutral" : "warning";
 	} catch (reason) {
@@ -166,7 +167,7 @@ onDestroy(stopPolling);
 	{#if mode === "telegram"}
 		<div class="method-body">
 			<h3>Approve in Telegram</h3>
-			<p>Confirm the request from the fixed SilentFlare Owner account. The link expires automatically.</p>
+			<p>Confirm the request from the fixed SilentFlare Owner account. After one hour, request a fresh approval here.</p>
 			<button class="primary" disabled={!telegramAvailable || busy} onclick={startTelegram}>
 				<Icon icon={busy ? "material-symbols:hourglass-top-rounded" : "material-symbols:verified-user-outline-rounded"} />
 				{busy ? "Waiting for approval" : "Send approval request"}

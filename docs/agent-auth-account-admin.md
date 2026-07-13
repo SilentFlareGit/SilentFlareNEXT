@@ -131,8 +131,8 @@ Accounts is a standalone account workspace. Do not restore the public blog navba
 ## Current Admin Behavior
 
 - Admin login uses the existing bot-style owner auth surface through `SilentFlare Admin`.
-- Admin web login is disabled by default after an API restart. The fixed Telegram Owner enables it with `/allowweblogin` and disables it with `/denyweblogin`.
-- Admin sessions have a fixed one-hour lifetime. `/denyweblogin` immediately revokes every Admin session and pending Admin login challenge.
+- Admin web login starts disabled until the fixed Telegram Owner sends `/allowweblogin`. The enabled state is persisted across API restarts and remains enabled until `/denyweblogin` is sent.
+- Admin sessions have a fixed one-hour lifetime. Session expiry requires a fresh Telegram approval but does not disable web login or require another `/allowweblogin` command. `/denyweblogin` immediately revokes every Admin session and pending Admin login challenge.
 - The authenticated Admin workspace checks its session every 15 seconds and when the page becomes visible again.
 - Admin session expiry is absolute, not sliding. Ordinary bot-management sessions may still use the configured sliding `WEB_SESSION_TTL`.
 - `GET /auth/options?bot_id=SilentFlare%20Admin` exposes `web_login_enabled`. When false, Telegram and TOTP methods are reported unavailable and the Auth frontend renders only the centered `Web login is disabled` state.
@@ -151,6 +151,7 @@ Accounts is a standalone account workspace. Do not restore the public blog navba
 - Public account/session/comment responses must never expose raw audit IP values.
 - Admin responses must never include password hashes, salts, TOTP secrets, session hashes, cookies, or verification secrets.
 - Telegram approval polling must be serialized. Once an approved response is received, stop the interval before loading Admin data so overlapping requests cannot consume the already-finished challenge and replace a successful login with `Login request expired`.
+- Telegram webhook acknowledgement and message editing run as background work after approval state is recorded, so optional Bot API calls cannot block the browser from consuming an approved challenge.
 
 ## Important Admin FastAPI Endpoints
 
