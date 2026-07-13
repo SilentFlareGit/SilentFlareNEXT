@@ -46,7 +46,7 @@ shield/
     rate_limit.py         fixed, sliding, and token-bucket policies
     risk.py               configurable score and risk bands
     rules.py              list matching and JSON rule evaluation
-    security.py           HMAC headers, signed cookies, TOTP
+    security.py           HMAC headers and signed challenge cookies
   adapters/
     fastapi.py            optional header-verification helper
   migrations/
@@ -186,7 +186,7 @@ Device risk              Audit log                System settings
 
 The implemented dashboard reports daily risk events, high-risk blocks, verification decisions, active bans, highest-risk countries, top rules, and protected service status. Events, IP cache, access lists, rate policies, rules, bans, risk-model settings, and audit records have working data views. Account, device, content, session, and alert areas reserve the explicit independent API boundaries required by later phases.
 
-The console requires password plus TOTP, uses a one-hour signed HttpOnly/Secure/SameSite=Strict cookie, requires CSRF on mutations, and writes login/configuration actions to the append-only audit table. Production should additionally place the console behind Cloudflare Access, restrict source networks, rotate the independent session key, and add role tiers (`viewer`, `analyst`, `rule_admin`, `owner`). Only the owner can change global bypass or publish high-impact rules.
+The console does not issue a second password, TOTP secret, or Shield-specific administrator session. Each console request forwards only the existing `sf_bot_session` cookie to the private FastAPI `GET /auth/me` endpoint and requires `bot.id` to equal `SilentFlare Admin`. Mutations reuse that Admin session's CSRF value. When the existing Admin session expires, is revoked, or the Owner disables web login, Shield access stops immediately. Production should additionally restrict source networks and add role tiers (`viewer`, `analyst`, `rule_admin`, `owner`). Only the owner can change global bypass or publish high-impact rules.
 
 ## 10. API Route Design
 
@@ -197,9 +197,7 @@ Implemented routes:
 | `GET /__shield/health/live` | Process liveness without dependency checks |
 | `GET /__shield/health/ready` | Database readiness and active mode |
 | `POST /__shield/challenge/verify` | Verify Turnstile and issue a short, IP/UA-bound proof |
-| `POST /__shield/api/admin/login` | Password plus TOTP admin login |
-| `GET /__shield/api/admin/session` | Admin session and CSRF state |
-| `POST /__shield/api/admin/logout` | Revoke browser cookie |
+| `GET /__shield/api/admin/session` | Validate the existing SilentFlare Admin session and return its CSRF state |
 | `GET /__shield/api/admin/overview` | Dashboard aggregates |
 | `GET /__shield/api/admin/events` | Filter-ready recent risk events |
 | `GET /__shield/api/admin/intel` | Cached redacted IP intelligence |
@@ -287,8 +285,8 @@ Upgrade procedure: build a tagged image, run migrations against a backup, start 
 The committed `shield/.env.example` documents only names and placeholders:
 
 - Mode, failure policy, database path, and timeouts.
-- Independent internal HMAC and admin-session keys.
-- Admin password and Base32 TOTP secret.
+- Independent internal HMAC key.
+- Private Admin introspection URL and existing Admin cookie name; no additional Admin credential.
 - Dedicated Turnstile site/secret keys.
 - Cache-backed IP provider URL.
 - Trusted proxy CIDRs.
@@ -312,12 +310,12 @@ Never edit an applied migration. Add a new forward migration and, for destructiv
 
 ## 16. Test Strategy
 
-The included unit suite covers canonical header signing, method/path binding, TOTP verification, CIDR matching, combined scoring, nested rule conditions, migrations, and the default login rate policy.
+The included unit suite covers canonical header signing, method/path binding, delegated Admin-session validation, CIDR matching, combined scoring, nested rule conditions, migrations, and the default login rate policy.
 
 Required CI layers:
 
 1. Static: Python compilation, formatting/lint, dependency audit, secret scan, and container scan.
-2. Unit: IPv4/IPv6/CIDR, every rule operator, score boundaries, rate algorithms, TOTP windows, HMAC tampering, expiry, and redaction.
+2. Unit: IPv4/IPv6/CIDR, every rule operator, score boundaries, rate algorithms, Admin-session delegation, HMAC tampering, expiry, and redaction.
 3. Integration: fake IP provider, fake Turnstile, SQLite outage, stale cache, upstream timeout, spoofed Shield headers, signed header verification, and fail matrix.
 4. Proxy: preserve status/body/cookies/query, remove hop-by-hop headers, streaming, request size limits, and all five Host mappings.
 5. Security: admin brute-force, CSRF, cookie flags, rule global-lockout guard, SSRF host rejection, traversal, XSS in event/admin fields, replay, and audit immutability.
@@ -367,5 +365,5 @@ Add rule quality metrics, false-positive budgets, canary rules, historical basel
 - IPv4/IPv6 and CIDR inputs are validated; country/region/ASN scopes are supported.
 - Risk events and administrative actions are redacted and independently persisted.
 - Liveness, readiness, last-good rules, cache fallback, route fail policy, and Nginx public-read fallback are testable.
-- The administration console is independent, English-only, responsive, TOTP-protected, CSRF-protected, and audited.
+- The administration console is independent, English-only, responsive, protected by the existing SilentFlare Admin session, CSRF-protected, and audited.
 - The original SilentFlare website remains operational after Nginx is pointed back to its original origins and Shield is stopped.

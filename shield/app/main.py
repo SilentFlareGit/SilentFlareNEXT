@@ -10,10 +10,11 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
@@ -23,17 +24,12 @@ from .geo import GeoService, IpIntel
 from .rate_limit import RateHit, RateLimiter
 from .risk import DEFAULT_THRESHOLDS, DEFAULT_WEIGHTS, RiskResult, score_request
 from .rules import AccessListService, RequestContext, RuleDecision, RuleEngine, matches_expression
-from .security import SHIELD_HEADERS, issue_token, read_token, sign_headers, verify_totp
+from .security import SHIELD_HEADERS, issue_token, read_token, sign_headers
 
 
 ROOT = Path(__file__).resolve().parents[1]
 HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade"}
 SENSITIVE_PATHS = ("/auth/", "/accounts/register/", "/admin", "/comments/create")
-
-
-class AdminLogin(BaseModel):
-	password: str
-	totp: str = Field(pattern=r"^\d{6}$")
 
 
 class AccessListInput(BaseModel):
@@ -68,7 +64,7 @@ class BanInput(BaseModel):
 def build_services(config: Settings):
 	database = Database(config.database_path, ROOT / "migrations")
 	database.migrate()
-	key = config.internal_signing_key or config.admin_session_key or "bypass-development-key"
+	key = config.internal_signing_key or "bypass-development-key"
 	return (
 		database,
 		GeoService(database, key, config.geo_url_template, config.geo_cache_ttl, config.allow_private_geo),
@@ -124,21 +120,44 @@ def _host(request: Request) -> str:
 
 def _device_id(request: Request, ip: str) -> str:
 	cookie = request.cookies.get("sf_shield_device", "")
-	payload = read_token(cookie, settings.admin_session_key or settings.internal_signing_key) if cookie else None
+	payload = read_token(cookie, settings.internal_signing_key) if cookie else None
 	if payload and payload.get("purpose") == "device":
 		return str(payload.get("id", ""))
 	seed = f"{request.headers.get('user-agent', '')}|{request.headers.get('accept-language', '')}|{ip}"
 	return stable_hash(seed, settings.internal_signing_key)[:32]
 
 
-def _admin(request: Request, csrf: bool = False) -> str:
-	token = request.cookies.get("sf_shield_admin", "")
-	payload = read_token(token, settings.admin_session_key) if token and settings.admin_session_key else None
-	if not payload or payload.get("purpose") != "admin":
-		raise HTTPException(status_code=401, detail="Admin authentication required")
-	if csrf and not hmac.compare_digest(request.headers.get("x-csrf-token", ""), str(payload.get("csrf", ""))):
+async def _admin(request: Request, csrf: bool = False) -> tuple[str, str]:
+	session_token = request.cookies.get(settings.admin_cookie_name, "")
+	if not session_token:
+		raise HTTPException(status_code=401, detail="SilentFlare Admin authentication required")
+	try:
+		response = await request.app.state.client.get(
+			settings.admin_introspection_url,
+			headers={
+				"Accept": "application/json",
+				"Cookie": f"{settings.admin_cookie_name}={session_token}",
+				"Host": "api.silentflare.com",
+			},
+		)
+	except httpx.HTTPError as error:
+		raise HTTPException(status_code=503, detail="Admin session validation unavailable") from error
+	if response.status_code in {401, 403}:
+		raise HTTPException(status_code=response.status_code, detail="SilentFlare Admin session is not valid")
+	if response.status_code != 200:
+		raise HTTPException(status_code=503, detail="Admin session validation unavailable")
+	try:
+		payload = response.json()
+	except json.JSONDecodeError as error:
+		raise HTTPException(status_code=503, detail="Admin session validation unavailable") from error
+	if (payload.get("bot") or {}).get("id") != "SilentFlare Admin":
+		raise HTTPException(status_code=403, detail="SilentFlare Admin role required")
+	upstream_csrf = str(payload.get("csrf", ""))
+	if not upstream_csrf:
+		raise HTTPException(status_code=503, detail="Admin session validation unavailable")
+	if csrf and not hmac.compare_digest(request.headers.get("x-csrf-token", ""), upstream_csrf):
 		raise HTTPException(status_code=403, detail="CSRF validation failed")
-	return str(payload.get("sub", "shield-admin"))
+	return "SilentFlare Admin", upstream_csrf
 
 
 def _mode(database: Database) -> str:
@@ -328,7 +347,14 @@ async def readiness(request: Request):
 
 
 @app.get("/__shield/admin", include_in_schema=False)
-async def admin_page():
+async def admin_page(request: Request):
+	try:
+		await _admin(request)
+	except HTTPException as error:
+		if error.status_code not in {401, 403}:
+			raise
+		return_url = quote(str(request.url), safe="")
+		return RedirectResponse(f"https://auth.silentflare.com/?audience=admin&return_url={return_url}", status_code=302)
 	return FileResponse(ROOT / "static" / "index.html")
 
 
@@ -339,41 +365,15 @@ async def admin_asset(filename: str):
 	return FileResponse(ROOT / "static" / filename)
 
 
-@app.post("/__shield/api/admin/login")
-async def admin_login(payload: AdminLogin, request: Request):
-	if not settings.admin_password or not settings.admin_totp_secret or len(settings.admin_session_key) < 32:
-		raise HTTPException(status_code=503, detail="Shield admin authentication is not configured")
-	if not hmac.compare_digest(payload.password, settings.admin_password) or not verify_totp(settings.admin_totp_secret, payload.totp):
-		request.app.state.database.audit("anonymous", "admin.login.failed", "admin", None, {})
-		await asyncio.sleep(1)
-		raise HTTPException(status_code=401, detail="Invalid credentials")
-	csrf = uuid.uuid4().hex
-	token = issue_token({"purpose": "admin", "sub": "shield-admin", "csrf": csrf}, settings.admin_session_key, settings.admin_session_ttl)
-	response = JSONResponse({"authenticated": True, "csrfToken": csrf})
-	response.set_cookie("sf_shield_admin", token, max_age=settings.admin_session_ttl, httponly=True, secure=settings.cookie_secure, samesite="strict", path="/__shield")
-	request.app.state.database.audit("shield-admin", "admin.login.succeeded", "admin", "shield-admin", {})
-	return response
-
-
-@app.post("/__shield/api/admin/logout")
-async def admin_logout(request: Request):
-	actor = _admin(request, csrf=True)
-	response = JSONResponse({"authenticated": False})
-	response.delete_cookie("sf_shield_admin", path="/__shield")
-	request.app.state.database.audit(actor, "admin.logout", "admin", actor, {})
-	return response
-
-
 @app.get("/__shield/api/admin/session")
 async def admin_session(request: Request):
-	actor = _admin(request)
-	token = read_token(request.cookies["sf_shield_admin"], settings.admin_session_key) or {}
-	return {"authenticated": True, "actor": actor, "csrfToken": token.get("csrf"), "mode": _mode(request.app.state.database)}
+	actor, csrf = await _admin(request)
+	return {"authenticated": True, "actor": actor, "csrfToken": csrf, "mode": _mode(request.app.state.database)}
 
 
 @app.get("/__shield/api/admin/overview")
 async def admin_overview(request: Request):
-	_admin(request)
+	await _admin(request)
 	db = request.app.state.database
 	now = int(time.time())
 	day = now - 86400
@@ -386,25 +386,25 @@ async def admin_overview(request: Request):
 
 @app.get("/__shield/api/admin/events")
 async def admin_events(request: Request, limit: int = 100, minimum_score: int = 0):
-	_admin(request)
+	await _admin(request)
 	return request.app.state.database.query("SELECT id, created_at, risk_level, risk_score, host, path, method, ip_masked, country_code, asn, ip_type, matched_rules_json, reasons_json, actions_json, review_status FROM risk_events WHERE risk_score >= ? ORDER BY created_at DESC LIMIT ?", (max(0, minimum_score), min(500, max(1, limit))))
 
 
 @app.get("/__shield/api/admin/intel")
 async def admin_intel(request: Request, limit: int = 200):
-	_admin(request)
+	await _admin(request)
 	return request.app.state.database.query("SELECT ip_masked, country_code, region, city, timezone, asn, isp, organization, ip_type, is_vpn, is_proxy, is_tor, is_crawler, is_malicious, risk_score, first_seen_at, last_seen_at FROM ip_intel ORDER BY last_seen_at DESC LIMIT ?", (min(500, max(1, limit)),))
 
 
 @app.get("/__shield/api/admin/rate-policies")
 async def admin_rate_policies(request: Request):
-	_admin(request)
+	await _admin(request)
 	return request.app.state.database.query("SELECT * FROM rate_policies ORDER BY id")
 
 
 @app.get("/__shield/api/admin/settings/risk")
 async def admin_risk_settings(request: Request):
-	_admin(request)
+	await _admin(request)
 	db = request.app.state.database
 	return {
 		"weights": DEFAULT_WEIGHTS | db.setting("risk_weights", {}),
@@ -414,7 +414,7 @@ async def admin_risk_settings(request: Request):
 
 @app.put("/__shield/api/admin/settings/risk")
 async def update_risk_settings(request: Request):
-	actor = _admin(request, csrf=True)
+	actor, _ = await _admin(request, csrf=True)
 	payload = await request.json()
 	weights = payload.get("weights")
 	thresholds = payload.get("thresholds")
@@ -441,13 +441,13 @@ async def update_risk_settings(request: Request):
 
 @app.get("/__shield/api/admin/lists")
 async def admin_lists(request: Request):
-	_admin(request)
+	await _admin(request)
 	return request.app.state.database.query("SELECT * FROM access_lists ORDER BY id DESC")
 
 
 @app.post("/__shield/api/admin/lists")
 async def create_list(payload: AccessListInput, request: Request):
-	actor = _admin(request, csrf=True)
+	actor, _ = await _admin(request, csrf=True)
 	if payload.subject_type in {"ip", "cidr"}:
 		try:
 			ipaddress.ip_network(payload.subject_value, strict=False)
@@ -462,7 +462,7 @@ async def create_list(payload: AccessListInput, request: Request):
 
 @app.delete("/__shield/api/admin/lists/{item_id}")
 async def disable_list(item_id: int, request: Request):
-	actor = _admin(request, csrf=True)
+	actor, _ = await _admin(request, csrf=True)
 	request.app.state.database.execute("UPDATE access_lists SET disabled_at = ? WHERE id = ?", (int(time.time()), item_id))
 	request.app.state.database.audit(actor, "access_list.disable", "access_list", str(item_id), {})
 	return {"disabled": True}
@@ -470,7 +470,7 @@ async def disable_list(item_id: int, request: Request):
 
 @app.get("/__shield/api/admin/rules")
 async def admin_rules(request: Request):
-	_admin(request)
+	await _admin(request)
 	rows = request.app.state.database.query("SELECT * FROM rules ORDER BY priority, id")
 	for row in rows:
 		row["conditions"] = json.loads(row.pop("conditions_json"))
@@ -480,7 +480,7 @@ async def admin_rules(request: Request):
 
 @app.post("/__shield/api/admin/rules")
 async def create_rule(payload: RuleInput, request: Request):
-	actor = _admin(request, csrf=True)
+	actor, _ = await _admin(request, csrf=True)
 	test_context = RequestContext("test", "example.com", "/", "GET", "127.0.0.1")
 	try:
 		matches_expression(payload.conditions, test_context)
@@ -499,7 +499,7 @@ async def create_rule(payload: RuleInput, request: Request):
 
 @app.post("/__shield/api/admin/rules/test")
 async def test_rule(payload: RuleInput, request: Request):
-	_admin(request)
+	await _admin(request)
 	contexts = request.app.state.database.query("SELECT host, path, method, country_code, region, asn, ip_type, risk_score FROM risk_events ORDER BY created_at DESC LIMIT 500")
 	hits = 0
 	for index, row in enumerate(contexts):
@@ -511,13 +511,13 @@ async def test_rule(payload: RuleInput, request: Request):
 
 @app.get("/__shield/api/admin/bans")
 async def admin_bans(request: Request):
-	_admin(request)
+	await _admin(request)
 	return request.app.state.database.query("SELECT id, subject_type, subject_display, restriction, reason, created_by, created_at, expires_at, revoked_at, revoked_by, revoke_reason FROM bans ORDER BY id DESC LIMIT 500")
 
 
 @app.post("/__shield/api/admin/bans")
 async def create_ban(payload: BanInput, request: Request):
-	actor = _admin(request, csrf=True)
+	actor, _ = await _admin(request, csrf=True)
 	now = int(time.time())
 	subject_hash = stable_hash(payload.subject_value.lower(), settings.internal_signing_key)
 	display = mask_ip(payload.subject_value) if payload.subject_type == "ip" else payload.subject_value[:4] + "..."
@@ -528,7 +528,7 @@ async def create_ban(payload: BanInput, request: Request):
 
 @app.post("/__shield/api/admin/bans/{ban_id}/revoke")
 async def revoke_ban(ban_id: int, request: Request):
-	actor = _admin(request, csrf=True)
+	actor, _ = await _admin(request, csrf=True)
 	payload = await request.json()
 	reason = str(payload.get("reason", "Manual revocation"))[:500]
 	request.app.state.database.execute("UPDATE bans SET revoked_at = ?, revoked_by = ?, revoke_reason = ? WHERE id = ? AND revoked_at IS NULL", (int(time.time()), actor, reason, ban_id))
@@ -538,13 +538,13 @@ async def revoke_ban(ban_id: int, request: Request):
 
 @app.get("/__shield/api/admin/audit")
 async def admin_audit(request: Request, limit: int = 100):
-	_admin(request)
+	await _admin(request)
 	return request.app.state.database.query("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (min(500, max(1, limit)),))
 
 
 @app.post("/__shield/api/admin/mode")
 async def change_mode(request: Request):
-	actor = _admin(request, csrf=True)
+	actor, _ = await _admin(request, csrf=True)
 	payload = await request.json()
 	mode = str(payload.get("mode", ""))
 	if mode not in {"bypass", "observe", "enforce"}:

@@ -13,7 +13,10 @@ async function api(path, options = {}) {
 	if (options.method && options.method !== "GET") headers["X-CSRF-Token"] = state.csrf;
 	const response = await fetch(`/__shield/api/admin${path}`, { ...options, headers });
 	const payload = await response.json().catch(() => ({}));
-	if (response.status === 401) return showLogin();
+	if (response.status === 401 || response.status === 403) {
+		redirectToAdminAuth();
+		throw new Error(payload.detail || "SilentFlare Admin authentication required");
+	}
 	if (!response.ok) throw new Error(payload.detail || `Request failed (${response.status})`);
 	return payload;
 }
@@ -21,6 +24,12 @@ async function api(path, options = {}) {
 function showLogin() {
 	$("#login").hidden = false;
 	$("#workspace").hidden = true;
+	redirectToAdminAuth();
+}
+
+function redirectToAdminAuth() {
+	const returnUrl = window.location.href;
+	window.location.replace(`https://auth.silentflare.com/?audience=admin&return_url=${encodeURIComponent(returnUrl)}`);
 }
 
 function showWorkspace(session) {
@@ -121,7 +130,7 @@ const views = {
 	devices: () => placeholder("Device risk", "Minimal browser signals are pseudonymized and used only as supporting evidence alongside IP and behavior."),
 	content: () => placeholder("Content review", "Moderation decisions can be submitted through the dedicated content-evaluation API without copying Ghost content ownership."),
 	sessions: () => placeholder("Session management", "Shield records token digests only and requests revocation through a signed FastAPI webhook."),
-	admins: () => placeholder("Administrator security", "The console requires password plus TOTP, short sessions, CSRF validation, and append-only auditing."),
+	admins: () => placeholder("Administrator security", "The console inherits the existing SilentFlare Admin session, its expiry and revocation rules, CSRF validation, and append-only auditing."),
 	alerts: () => placeholder("Alerts", "High-risk event notifications are delivered through configured webhooks with redacted payloads."),
 	settings,
 };
@@ -160,24 +169,13 @@ function openEditor(kind) {
 	dialog.showModal();
 }
 
-$("#login-form").addEventListener("submit", async (event) => {
-	event.preventDefault();
-	const data = Object.fromEntries(new FormData(event.currentTarget));
-	try {
-		const response = await fetch("/__shield/api/admin/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
-		const payload = await response.json();
-		if (!response.ok) throw new Error(payload.detail || "Sign in failed");
-		showWorkspace({ ...payload, mode: "observe" });
-	} catch (error) { $("#login-error").textContent = error.message; }
-});
-
 $("#nav").addEventListener("click", (event) => {
 	const button = event.target.closest("[data-view]");
 	if (button) { loadView(button.dataset.view); $(".sidebar").classList.remove("open"); }
 });
 $("#menu").addEventListener("click", () => $(".sidebar").classList.toggle("open"));
 $("#refresh").addEventListener("click", () => loadView(state.view));
-$("#logout").addEventListener("click", async () => { await api("/logout", { method: "POST" }); showLogin(); });
+$("#back-admin").addEventListener("click", () => window.location.assign("/"));
 $("#mode").addEventListener("change", async (event) => {
 	const previous = state.mode;
 	if (event.target.value === "bypass" && !confirm("Enable global bypass mode? Shield will stop enforcing decisions.")) { event.target.value = previous; return; }

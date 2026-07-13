@@ -4,7 +4,6 @@ import base64
 import hashlib
 import hmac
 import json
-import struct
 import time
 from typing import Any
 
@@ -73,20 +72,3 @@ def read_token(token: str, key: str) -> dict[str, Any] | None:
 		return payload
 	except (ValueError, TypeError, json.JSONDecodeError):
 		return None
-
-
-def verify_totp(secret: str, code: str, now: int | None = None, window: int = 1) -> bool:
-	if not secret or not code.isdigit() or len(code) != 6:
-		return False
-	try:
-		key = base64.b32decode(secret.upper().replace(" ", "") + "=" * (-len(secret) % 8))
-	except (ValueError, TypeError):
-		return False
-	counter = int(now or time.time()) // 30
-	for offset in range(-window, window + 1):
-		digest = hmac.new(key, struct.pack(">Q", counter + offset), hashlib.sha1).digest()
-		index = digest[-1] & 0x0F
-		value = (struct.unpack(">I", digest[index : index + 4])[0] & 0x7FFFFFFF) % 1_000_000
-		if hmac.compare_digest(f"{value:06d}", code):
-			return True
-	return False

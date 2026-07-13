@@ -47,10 +47,15 @@ class Settings:
 	internal_signing_key: str = field(
 		default_factory=lambda: os.getenv("SHIELD_INTERNAL_SIGNING_KEY", "")
 	)
-	admin_password: str = field(default_factory=lambda: os.getenv("SHIELD_ADMIN_PASSWORD", ""))
-	admin_totp_secret: str = field(default_factory=lambda: os.getenv("SHIELD_ADMIN_TOTP_SECRET", ""))
-	admin_session_key: str = field(default_factory=lambda: os.getenv("SHIELD_ADMIN_SESSION_KEY", ""))
-	admin_session_ttl: int = field(default_factory=lambda: _integer("SHIELD_ADMIN_SESSION_TTL", 3600))
+	admin_introspection_url: str = field(
+		default_factory=lambda: os.getenv(
+			"SHIELD_ADMIN_INTROSPECTION_URL",
+			"http://host.docker.internal:9010/auth/me",
+		)
+	)
+	admin_cookie_name: str = field(
+		default_factory=lambda: os.getenv("SHIELD_ADMIN_COOKIE_NAME", "sf_bot_session")
+	)
 	cookie_secure: bool = field(default_factory=lambda: _boolean("SHIELD_COOKIE_SECURE", True))
 	turnstile_site_key: str = field(default_factory=lambda: os.getenv("SHIELD_TURNSTILE_SITE_KEY", ""))
 	turnstile_secret_key: str = field(default_factory=lambda: os.getenv("SHIELD_TURNSTILE_SECRET_KEY", ""))

@@ -12,7 +12,7 @@ The MVP includes:
 - A configurable 0-100 risk score, Turnstile challenge, temporary bans, and risk events.
 - A versioned JSON rule model, nested conditions, priority, simulation, actions, and hit counts.
 - Signed, spoof-resistant internal decision headers.
-- A separate English administration console with password, TOTP, CSRF protection, and append-only audit records.
+- A separate English administration console that reuses the existing SilentFlare Admin session, CSRF proof, and append-only audit records.
 - SQLite/WAL persistence, migrations, health probes, Docker Compose, and an Nginx reference configuration.
 
 The full architecture, data model, integration contract, API plan, failure matrix, and phased roadmap are in [docs/SILENTFLARE_SHIELD.md](../docs/SILENTFLARE_SHIELD.md).
@@ -59,6 +59,6 @@ docker compose config
 4. Enable enforcement for narrow rules before expanding coverage.
 5. Keep the Nginx fail-open origin route only for public blog reads.
 6. Keep login, registration, comments, Admin, CMS, and sensitive API routes fail closed.
-7. Restrict `shield.silentflare.com` with Cloudflare Access or an equivalent network policy in addition to Shield's mandatory TOTP login.
+7. Keep the existing SilentFlare Admin login gate and its Telegram/TOTP verification enabled; Shield does not issue a second administrator credential.
 
 Never expose the Shield container directly to the internet. Nginx must be the only direct peer, and Cloudflare-origin authentication should remain enabled at the outer edge.

@@ -9,15 +9,11 @@
 	</head>
 	<body>
 		<div id="login" class="login-shell">
-			<form id="login-form" class="login-panel" autocomplete="on">
+			<div class="login-panel">
 				<div class="brand-mark" aria-hidden="true">S</div>
 				<h1>SilentFlare Shield</h1>
-				<p>Security operations console</p>
-				<label>Password<input name="password" type="password" autocomplete="current-password" required /></label>
-				<label>Authenticator code<input name="totp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required /></label>
-				<button type="submit">Sign in</button>
-				<div id="login-error" class="form-error" role="alert"></div>
-			</form>
+				<p>Checking your SilentFlare Admin session…</p>
+			</div>
 		</div>
 
 		<div id="workspace" class="workspace" hidden>
@@ -49,7 +45,7 @@
 					<div class="top-actions">
 						<label class="mode-control">Mode<select id="mode"><option value="bypass">Bypass</option><option value="observe">Observe</option><option value="enforce">Enforce</option></select></label>
 						<button id="refresh" class="icon-button" type="button" aria-label="Refresh" title="Refresh">↻</button>
-						<button id="logout" class="icon-button" type="button" aria-label="Sign out" title="Sign out">⇥</button>
+						<button id="back-admin" class="icon-button" type="button" aria-label="Back to Admin" title="Back to Admin">←</button>
 					</div>
 				</header>
 				<div id="notice" class="notice" hidden></div>

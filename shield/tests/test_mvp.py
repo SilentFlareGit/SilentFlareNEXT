@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 import sqlite3
-import struct
 import tempfile
 import time
 import unittest
@@ -15,7 +11,7 @@ from app.geo import IpIntel
 from app.rate_limit import RateLimiter
 from app.risk import score_request
 from app.rules import AccessListService, RequestContext, matches_expression
-from app.security import sign_headers, verify_headers, verify_totp
+from app.security import sign_headers, verify_headers
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,16 +42,6 @@ class ShieldMvpTests(unittest.TestCase):
 		headers["x-sf-shield-signature"] = sign_headers(headers, "POST", "/auth/login/password", KEY)
 		self.assertTrue(verify_headers(headers, "POST", "/auth/login/password", KEY))
 		self.assertFalse(verify_headers(headers, "GET", "/auth/login/password", KEY))
-
-	def test_totp_verification(self):
-		secret_bytes = b"12345678901234567890"
-		secret = base64.b32encode(secret_bytes).decode()
-		now = 1_234_567_890
-		counter = now // 30
-		digest = hmac.new(secret_bytes, struct.pack(">Q", counter), hashlib.sha1).digest()
-		offset = digest[-1] & 15
-		code = f"{(struct.unpack('>I', digest[offset:offset + 4])[0] & 0x7fffffff) % 1000000:06d}"
-		self.assertTrue(verify_totp(secret, code, now=now, window=0))
 
 	def test_cidr_deny_list_matches_ipv4(self):
 		self.database.execute(
