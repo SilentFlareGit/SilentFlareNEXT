@@ -186,7 +186,9 @@ Device risk              Audit log                System settings
 
 The implemented dashboard reports daily risk events, high-risk blocks, verification decisions, active bans, highest-risk countries, top rules, and protected service status. Events, IP cache, access lists, rate policies, rules, bans, risk-model settings, and audit records have working data views. Account, device, content, session, and alert areas reserve the explicit independent API boundaries required by later phases.
 
-The primary operator experience is now the `Security` workspace inside the existing SilentFlare Admin Svelte application. It reads Shield directly through the same-origin `/__shield/api/admin/*` route while Shield continues to run as a separate process and data plane. The workspace displays real hourly traffic, high-risk and block counts, unique IPs, synchronized account posture, geographic concentration, service coverage, recent decisions, and active automated rate policies. It refreshes every 30 seconds and offers event-context actions such as six-hour IP blocking and dismissal without asking the administrator to copy a raw target value.
+The primary operator experience is now the `Security` workspace inside the existing SilentFlare Admin Svelte application. It reads Shield directly through the same-origin `/__shield/api/admin/*` route while Shield continues to run as a separate process and data plane. Its Overview, Automation, Services, Geography, and Accounts views operate on live Shield data rather than manually entered target values. Operators can tune request thresholds and cooldowns, enable or bypass protection per hostname, choose observe or enforce mode and failure policy per service, publish country/region controls from observed geography, and apply expiring account risk adjustments. Recent events retain contextual six-hour IP blocking and dismissal actions.
+
+Only a hostname whose edge route actually points to Shield is marked `connected`; a configured but unrouted hostname is `staged`. Enabling a staged service prepares its data-plane policy but does not pretend to rewrite Nginx or Cloudflare. This distinction prevents a control-plane toggle from giving a false protection signal. Rate-policy responses are applied automatically by the gateway: for example, `5 comments / 1 minute -> temporary ban / 6 hours` creates an expiring correlated-session ban when the sixth matching authenticated request is evaluated in enforce mode, with IP fallback for anonymous traffic. Repeated over-limit requests reuse the active ban instead of generating duplicate records.
 
 Account synchronization is a bounded projection rather than database coupling. A Shield background task requests the private FastAPI account snapshot every minute with a timestamped HMAC signature and upserts only a keyed account ID, an operator label, role, country code, verification/2FA/disabled flags, timestamps, activity counts, and derived risk metadata into its own database. Passwords, email addresses, raw sessions, verification data, and business-table access are excluded. A failed synchronization leaves the last successful projection available and does not interrupt gateway traffic. Opening the Admin Security workspace also performs a freshness check, while the explicit sync command forces immediate reconciliation.
 
@@ -206,6 +208,10 @@ Implemented routes:
 | `GET /__shield/api/admin/dashboard` | Live time series, account posture, event decisions, policies, and service coverage |
 | `POST /__shield/api/admin/sync/accounts` | Force a minimal authenticated FastAPI account projection refresh |
 | `POST /__shield/api/admin/events/{id}/action` | Apply a contextual IP/account block or dismiss an event without raw target input |
+| `PUT /__shield/api/admin/services/{host}` | Enable/bypass one service and set its mode and failure policy |
+| `PUT /__shield/api/admin/rate-policies/{id}` | Tune an automated threshold, window, response, and cooldown |
+| `POST/DELETE /__shield/api/admin/geo-policies...` | Publish or disable country/region controls |
+| `PUT /__shield/api/admin/accounts/{digest}/risk` | Apply, replace, or clear an expiring manual risk adjustment |
 | `GET /__shield/api/admin/events` | Filter-ready recent risk events |
 | `GET /__shield/api/admin/intel` | Cached redacted IP intelligence |
 | `GET/POST/DELETE /__shield/api/admin/lists...` | List administration |
@@ -268,7 +274,7 @@ The origin verifies exact method/path, constant-time signature equality, and a m
 | Shield process down | Nginx named-location fallback | Nginx returns 502/503 | Nginx returns 502/503 |
 | Upstream down | Bounded 502/504 | Bounded 502/504 | Bounded 502/504 |
 
-`SHIELD_FAIL_POLICY=route` implements the recommended default inside the gateway. During a database outage, Shield retains a bounded 1,000-event memory buffer and bounded per-route counters; this is intentionally ephemeral and does not pretend that persistence succeeded. Nginx supplies the process-down fallback for blog reads. Timeouts, provider cache, WAL, last-good rules, and container health/restart policies prevent a secondary dependency from holding traffic indefinitely.
+`SHIELD_FAIL_POLICY=route` supplies the fallback default. Each service can override it with `open`, `closed`, or `route`; the gateway snapshots that service policy before evaluation so it can still make the intended failure decision if a later database operation fails. During a database outage, Shield retains a bounded 1,000-event memory buffer and bounded per-route counters; this is intentionally ephemeral and does not pretend that persistence succeeded. Nginx supplies the process-down fallback for blog reads. Timeouts, provider cache, WAL, last-good rules, and container health/restart policies prevent a secondary dependency from holding traffic indefinitely.
 
 The emergency switch is the audited global `bypass` mode. The out-of-process emergency procedure is to restore the original Nginx upstream for the affected hostname and reload Nginx. Uninstalling Shield consists of restoring those routes, stopping the Compose project, and retaining/exporting the Shield data volume according to policy.
 

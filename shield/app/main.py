@@ -75,6 +75,35 @@ class EventActionInput(BaseModel):
 	duration_seconds: int = Field(default=21600, ge=300, le=2592000)
 
 
+class ServiceControlInput(BaseModel):
+	protection_enabled: bool
+	mode: str = Field(pattern=r"^(observe|enforce)$")
+	fail_policy: str = Field(default="route", pattern=r"^(open|closed|route)$")
+
+
+class GeoPolicyInput(BaseModel):
+	country_code: str = Field(min_length=2, max_length=2)
+	region: str | None = Field(default=None, max_length=120)
+	scope_host: str | None = None
+	action: str = Field(pattern=r"^(block|turnstile|read_only|block_login|block_register|block_comment|block_api|block_admin)$")
+	note: str = Field(default="", max_length=300)
+	expires_at: int | None = None
+
+
+class RatePolicyUpdate(BaseModel):
+	enabled: bool
+	limit_value: int = Field(ge=1, le=100000)
+	window_seconds: int = Field(ge=10, le=2592000)
+	action: str = Field(pattern=r"^(log|delay|turnstile|rate_limit|temporary_ban|block)$")
+	cooldown_seconds: int = Field(default=60, ge=0, le=2592000)
+
+
+class AccountRiskInput(BaseModel):
+	delta: int = Field(ge=-100, le=100)
+	reason: str = Field(min_length=3, max_length=300)
+	duration_seconds: int = Field(default=86400, ge=300, le=2592000)
+
+
 def build_services(config: Settings):
 	database = Database(config.database_path, ROOT / "migrations")
 	database.migrate()
@@ -287,12 +316,63 @@ def _mode(database: Database) -> str:
 	return mode if mode in {"bypass", "observe", "enforce"} else settings.mode
 
 
+def _service_mode(database: Database, host: str) -> str:
+	global_mode = _mode(database)
+	if global_mode == "bypass":
+		return "bypass"
+	rows = database.query("SELECT protection_enabled, mode FROM service_controls WHERE host = ? LIMIT 1", (host,))
+	if not rows:
+		return global_mode
+	if not rows[0]["protection_enabled"]:
+		return "bypass"
+	return rows[0]["mode"] if rows[0]["mode"] in {"observe", "enforce"} else global_mode
+
+
+def _service_fail_policy(database: Database, host: str) -> str:
+	rows = database.query("SELECT fail_policy FROM service_controls WHERE host = ? LIMIT 1", (host,))
+	if rows and rows[0]["fail_policy"] in {"open", "closed", "route"}:
+		return rows[0]["fail_policy"]
+	return settings.fail_policy
+
+
+def _geo_policy_action(database: Database, context: RequestContext) -> tuple[str | None, str | None]:
+	if not context.country:
+		return None, None
+	now = int(time.time())
+	rows = database.query(
+		"""SELECT id, action, country_code, region FROM geo_policies
+		WHERE enabled = 1 AND country_code = ?
+		AND (region IS NULL OR LOWER(region) = LOWER(?))
+		AND (scope_host IS NULL OR scope_host = ?)
+		AND (expires_at IS NULL OR expires_at > ?)
+		ORDER BY CASE WHEN region IS NULL THEN 1 ELSE 0 END,
+			CASE WHEN scope_host IS NULL THEN 1 ELSE 0 END, id DESC""",
+		(context.country.upper(), context.region or "", context.host, now),
+	)
+	for row in rows:
+		action = row["action"]
+		applies = (
+			action in {"block", "turnstile"}
+			or (action == "read_only" and context.method not in {"GET", "HEAD", "OPTIONS"})
+			or (action == "block_login" and context.path.startswith("/auth/login"))
+			or (action == "block_register" and context.path.startswith("/accounts/register"))
+			or (action == "block_comment" and context.path.startswith("/comments"))
+			or (action == "block_api" and context.host == "api.silentflare.com")
+			or (action == "block_admin" and context.host == "admin.silentflare.com")
+		)
+		if applies:
+			resolved = "block" if action.startswith("block_") or action == "read_only" else action
+			label = row["country_code"] + (f" / {row['region']}" if row["region"] else "")
+			return resolved, f"Geographic policy {row['id']} matched {label}: {action.replace('_', ' ')}"
+	return None, None
+
+
 def _is_sensitive(host: str, path: str, method: str) -> bool:
 	return host in {"admin.silentflare.com", "cms.silentflare.com"} or method != "GET" or any(path.startswith(prefix) for prefix in SENSITIVE_PATHS)
 
 
-def _failure_response(host: str, path: str, method: str, request_id: str) -> Response | None:
-	closed = settings.fail_policy == "closed" or (settings.fail_policy == "route" and _is_sensitive(host, path, method))
+def _failure_response(host: str, path: str, method: str, request_id: str, fail_policy: str) -> Response | None:
+	closed = fail_policy == "closed" or (fail_policy == "route" and _is_sensitive(host, path, method))
 	if closed:
 		return JSONResponse({"detail": "Security gateway temporarily unavailable", "requestId": request_id}, status_code=503, headers={"Retry-After": "5"})
 	return None
@@ -354,10 +434,11 @@ async def _read_body(request: Request) -> bytes:
 	return bytes(body)
 
 
-def _actions(mode: str, risk: RiskResult, list_status: str | None, ban: dict | None, rates: list[RateHit], rules: RuleDecision, challenge_passed: bool) -> list[str]:
+def _actions(mode: str, risk: RiskResult, list_status: str | None, ban: dict | None, rates: list[RateHit], rules: RuleDecision, challenge_passed: bool, policy_actions: list[str] | None = None) -> list[str]:
 	if mode == "bypass":
 		return ["bypass"]
 	actions = list(rules.actions)
+	actions.extend(policy_actions or [])
 	if list_status == "allow":
 		return ["allow"]
 	if ban and ban.get("restriction") == "review":
@@ -393,6 +474,32 @@ def _event(database: Database, context: RequestContext, risk: RiskResult, rules:
 			json.dumps(rules.matched_rules, separators=(",", ":")), json.dumps(risk.reasons, separators=(",", ":")),
 			json.dumps(actions, separators=(",", ":")), json.dumps(_safe_request_summary(request, body), separators=(",", ":")),
 		),
+	)
+
+
+def _automatic_ban(database: Database, context: RequestContext, hits: list[RateHit]) -> None:
+	ban_hits = [hit for hit in hits if hit.action == "temporary_ban"]
+	if not ban_hits:
+		return
+	hit = max(ban_hits, key=lambda item: max(item.retry_after, item.cooldown_seconds))
+	if hit.dimension in {"account", "session"} and context.session_id:
+		subject_type, raw_value, display = "session", context.session_id, "Correlated session"
+	elif hit.dimension == "device" and context.device_id:
+		subject_type, raw_value, display = "device", context.device_id, "Correlated device"
+	elif hit.dimension == "email" and context.email:
+		subject_type, raw_value, display = "email", context.email.lower(), "Correlated email"
+	else:
+		subject_type, raw_value, display = "ip", context.ip, mask_ip(context.ip)
+	subject_hash = stable_hash(raw_value, settings.internal_signing_key)
+	now = int(time.time())
+	expires_at = now + max(hit.retry_after, hit.cooldown_seconds, 300)
+	database.execute(
+		"""INSERT INTO bans(subject_type, subject_hash, subject_display, restriction, reason, created_by, created_at, expires_at)
+		SELECT ?, ?, ?, 'all', ?, 'shield', ?, ? WHERE NOT EXISTS (
+			SELECT 1 FROM bans WHERE subject_type = ? AND subject_hash = ? AND revoked_at IS NULL
+			AND (expires_at IS NULL OR expires_at > ?)
+		)""",
+		(subject_type, subject_hash, display, f"Automatic policy: {hit.policy_name}", now, expires_at, subject_type, subject_hash, now),
 	)
 
 
@@ -524,7 +631,11 @@ async def admin_dashboard(request: Request, range_hours: int = 24):
 		(since,),
 	)[0]
 	active_bans = db.query("SELECT COUNT(*) AS value FROM bans WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)", (now,))[0]["value"]
-	account_counts = db.query("SELECT COUNT(*) AS total, SUM(CASE WHEN risk_score >= 40 THEN 1 ELSE 0 END) AS risky FROM account_projections")[0]
+	account_counts = db.query("""SELECT COUNT(*) AS total,
+		SUM(CASE WHEN MIN(100, MAX(0, account_projections.risk_score + COALESCE(account_risk_adjustments.delta, 0))) >= 40 THEN 1 ELSE 0 END) AS risky
+		FROM account_projections LEFT JOIN account_risk_adjustments
+		ON account_risk_adjustments.account_id_hash = account_projections.account_id_hash
+		AND (account_risk_adjustments.expires_at IS NULL OR account_risk_adjustments.expires_at > ?)""", (now,))[0]
 	series_rows = db.query(
 		"""SELECT (created_at / 3600) * 3600 AS bucket, COUNT(*) AS requests,
 		SUM(CASE WHEN risk_score >= 60 THEN 1 ELSE 0 END) AS high_risk,
@@ -544,10 +655,30 @@ async def admin_dashboard(request: Request, range_hours: int = 24):
 	for event in recent:
 		event["reasons"] = json.loads(event.pop("reasons_json"))
 		event["actions"] = json.loads(event.pop("actions_json"))
-	risky_accounts = db.query("SELECT account_id_hash AS id, account_label AS label, role, country_code AS country, email_verified AS emailVerified, two_factor_enabled AS twoFactorEnabled, disabled, active_session_count AS activeSessions, comment_count AS comments, risk_score AS riskScore, risk_level AS riskLevel, risk_reasons_json AS riskReasons, last_seen_at AS lastSeenAt FROM account_projections ORDER BY risk_score DESC, last_seen_at DESC LIMIT 12")
+	risky_accounts = db.query("""SELECT account_projections.account_id_hash AS id, account_label AS label, role,
+		country_code AS country, email_verified AS emailVerified, two_factor_enabled AS twoFactorEnabled,
+		disabled, active_session_count AS activeSessions, comment_count AS comments,
+		account_projections.risk_score AS baseRisk, COALESCE(account_risk_adjustments.delta, 0) AS manualDelta,
+		account_risk_adjustments.reason AS adjustmentReason, account_risk_adjustments.expires_at AS adjustmentExpiresAt,
+		risk_reasons_json AS riskReasons, last_seen_at AS lastSeenAt
+		FROM account_projections LEFT JOIN account_risk_adjustments
+		ON account_risk_adjustments.account_id_hash = account_projections.account_id_hash
+		AND (account_risk_adjustments.expires_at IS NULL OR account_risk_adjustments.expires_at > ?)
+		ORDER BY MIN(100, MAX(0, account_projections.risk_score + COALESCE(account_risk_adjustments.delta, 0))) DESC,
+		last_seen_at DESC LIMIT 50""", (now,))
 	for account in risky_accounts:
 		account["riskReasons"] = json.loads(account["riskReasons"])
-	policies = db.query("SELECT id, name, path_pattern AS path, dimension, algorithm, limit_value AS limitValue, window_seconds AS windowSeconds, action, enabled FROM rate_policies ORDER BY id")
+		account["riskScore"] = min(100, max(0, int(account.pop("baseRisk")) + int(account["manualDelta"])))
+		account["riskLevel"] = "block" if account["riskScore"] >= 80 else "restrict" if account["riskScore"] >= 60 else "verify" if account["riskScore"] >= 40 else "observe" if account["riskScore"] >= 20 else "normal"
+		if account["manualDelta"] and account["adjustmentReason"]:
+			account["riskReasons"].insert(0, f"Manual adjustment {account['manualDelta']:+d}: {account['adjustmentReason']}")
+	policies = db.query("SELECT id, name, host, path_pattern AS path, method, dimension, algorithm, limit_value AS limitValue, window_seconds AS windowSeconds, cooldown_seconds AS cooldownSeconds, action, enabled FROM rate_policies ORDER BY id")
+	services = db.query("SELECT host, protection_enabled AS protectionEnabled, mode, fail_policy AS failPolicy, updated_at AS updatedAt FROM service_controls ORDER BY host")
+	for service in services:
+		service["connected"] = service["host"] == "api.silentflare.com"
+		service["status"] = "protected" if service["connected"] and service["protectionEnabled"] else "bypassed" if service["connected"] else "staged" if service["protectionEnabled"] else "configured"
+	geo_policies = db.query("SELECT id, country_code AS countryCode, region, scope_host AS scopeHost, action, enabled, note, created_at AS createdAt, expires_at AS expiresAt FROM geo_policies ORDER BY enabled DESC, id DESC")
+	geo_options = db.query("SELECT country_code AS countryCode, region, COUNT(*) AS observations FROM ip_intel WHERE country_code IS NOT NULL GROUP BY country_code, region ORDER BY country_code, observations DESC")
 	return {
 		"mode": _mode(db),
 		"rangeHours": range_hours,
@@ -558,7 +689,9 @@ async def admin_dashboard(request: Request, range_hours: int = 24):
 		"recentEvents": recent,
 		"riskyAccounts": risky_accounts,
 		"policies": policies,
-		"services": [{"host": host, "status": "protected" if host == "api.silentflare.com" else "configured"} for host in sorted(settings.upstreams)],
+		"services": services,
+		"geoPolicies": geo_policies,
+		"geoOptions": geo_options,
 		"sync": sync,
 		"generatedAt": now,
 	}
@@ -593,6 +726,84 @@ async def admin_event_action(event_id: str, payload: EventActionInput, request: 
 		db.execute("UPDATE risk_events SET review_status = 'actioned', reviewed_by = ?, reviewed_at = ? WHERE id = ?", (actor, now, event_id))
 	db.audit(actor, f"risk_event.{payload.action}", "risk_event", event_id, {"durationSeconds": payload.duration_seconds})
 	return {"ok": True, "eventId": event_id, "action": payload.action}
+
+
+@app.put("/__shield/api/admin/services/{host}")
+async def admin_service_control(host: str, payload: ServiceControlInput, request: Request):
+	actor, _ = await _admin(request, csrf=True)
+	host = host.lower()
+	if host not in settings.upstreams:
+		raise HTTPException(status_code=404, detail="Protected service is not configured")
+	now = int(time.time())
+	request.app.state.database.execute(
+		"""INSERT INTO service_controls(host, protection_enabled, mode, fail_policy, updated_at, updated_by)
+		VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(host) DO UPDATE SET
+		protection_enabled=excluded.protection_enabled, mode=excluded.mode,
+		fail_policy=excluded.fail_policy, updated_at=excluded.updated_at, updated_by=excluded.updated_by""",
+		(host, int(payload.protection_enabled), payload.mode, payload.fail_policy, now, actor),
+	)
+	request.app.state.database.audit(actor, "service_control.update", "service", host, payload.model_dump())
+	return {"host": host, **payload.model_dump(), "connected": host == "api.silentflare.com"}
+
+
+@app.put("/__shield/api/admin/rate-policies/{policy_id}")
+async def admin_rate_policy_update(policy_id: int, payload: RatePolicyUpdate, request: Request):
+	actor, _ = await _admin(request, csrf=True)
+	db = request.app.state.database
+	if not db.query("SELECT id FROM rate_policies WHERE id = ?", (policy_id,)):
+		raise HTTPException(status_code=404, detail="Automation policy not found")
+	db.execute("UPDATE rate_policies SET enabled = ?, limit_value = ?, window_seconds = ?, action = ?, cooldown_seconds = ? WHERE id = ?", (int(payload.enabled), payload.limit_value, payload.window_seconds, payload.action, payload.cooldown_seconds, policy_id))
+	db.audit(actor, "rate_policy.update", "rate_policy", str(policy_id), payload.model_dump())
+	return {"id": policy_id, **payload.model_dump()}
+
+
+@app.post("/__shield/api/admin/geo-policies")
+async def admin_geo_policy_create(payload: GeoPolicyInput, request: Request):
+	actor, _ = await _admin(request, csrf=True)
+	country = payload.country_code.upper()
+	if not country.isalpha():
+		raise HTTPException(status_code=422, detail="Country must be a two-letter ISO code")
+	if payload.scope_host and payload.scope_host not in settings.upstreams:
+		raise HTTPException(status_code=422, detail="Unknown service host")
+	now = int(time.time())
+	policy_id = request.app.state.database.execute(
+		"INSERT INTO geo_policies(country_code, region, scope_host, action, note, created_at, created_by, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		(country, payload.region or None, payload.scope_host or None, payload.action, payload.note, now, actor, now, payload.expires_at),
+	)
+	request.app.state.database.audit(actor, "geo_policy.create", "geo_policy", str(policy_id), payload.model_dump())
+	return {"id": policy_id}
+
+
+@app.delete("/__shield/api/admin/geo-policies/{policy_id}")
+async def admin_geo_policy_disable(policy_id: int, request: Request):
+	actor, _ = await _admin(request, csrf=True)
+	db = request.app.state.database
+	if not db.query("SELECT id FROM geo_policies WHERE id = ?", (policy_id,)):
+		raise HTTPException(status_code=404, detail="Geographic policy not found")
+	db.execute("UPDATE geo_policies SET enabled = 0, updated_at = ? WHERE id = ?", (int(time.time()), policy_id))
+	db.audit(actor, "geo_policy.disable", "geo_policy", str(policy_id), {})
+	return {"disabled": True}
+
+
+@app.put("/__shield/api/admin/accounts/{account_id_hash}/risk")
+async def admin_account_risk(account_id_hash: str, payload: AccountRiskInput, request: Request):
+	actor, _ = await _admin(request, csrf=True)
+	db = request.app.state.database
+	if not db.query("SELECT account_id_hash FROM account_projections WHERE account_id_hash = ?", (account_id_hash,)):
+		raise HTTPException(status_code=404, detail="Account projection not found")
+	if payload.delta == 0:
+		db.execute("DELETE FROM account_risk_adjustments WHERE account_id_hash = ?", (account_id_hash,))
+	else:
+		now = int(time.time())
+		db.execute(
+			"""INSERT INTO account_risk_adjustments(account_id_hash, delta, reason, created_at, created_by, expires_at)
+			VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(account_id_hash) DO UPDATE SET delta=excluded.delta,
+			reason=excluded.reason, created_at=excluded.created_at, created_by=excluded.created_by,
+			expires_at=excluded.expires_at""",
+			(account_id_hash, payload.delta, payload.reason, now, actor, now + payload.duration_seconds),
+		)
+	db.audit(actor, "account_risk.adjust", "account", account_id_hash[:12], {"delta": payload.delta, "reason": payload.reason, "durationSeconds": payload.duration_seconds})
+	return {"accountId": account_id_hash, **payload.model_dump()}
 
 
 @app.get("/__shield/api/admin/events")
@@ -802,8 +1013,10 @@ async def gateway(path: str, request: Request):
 		return JSONResponse({"detail": "Unknown protected host", "requestId": request_id}, status_code=421)
 	body = await _read_body(request)
 	mode = settings.mode
+	fail_policy = settings.fail_policy
 	try:
-		mode = _mode(request.app.state.database)
+		mode = _service_mode(request.app.state.database, host)
+		fail_policy = _service_fail_policy(request.app.state.database, host)
 		if mode == "bypass":
 			context = RequestContext(request_id, host, request.url.path, request.method, _client_ip(request))
 			return await _proxy(request, body, upstream, context, RiskResult(0, "normal", []), "bypass")
@@ -836,14 +1049,16 @@ async def gateway(path: str, request: Request):
 		risk = score_request(intel, headers, weights, thresholds, list_status, bool(rates))
 		context.risk_score = risk.score
 		rule_decision = request.app.state.rules.evaluate(context, mode)
+		geo_action, geo_reason = _geo_policy_action(request.app.state.database, context)
+		if geo_reason:
+			risk.reasons.append(geo_reason)
 		binding = stable_hash(f"{ip}|{request.headers.get('user-agent', '')}", settings.internal_signing_key)
 		challenge = read_token(request.cookies.get("sf_shield_challenge", ""), settings.internal_signing_key)
 		challenge_passed = bool(challenge and challenge.get("purpose") == "challenge" and hmac.compare_digest(str(challenge.get("binding", "")), binding))
-		actions = _actions(mode, risk, list_status, ban, rates, rule_decision, challenge_passed)
+		actions = _actions(mode, risk, list_status, ban, rates, rule_decision, challenge_passed, [geo_action] if geo_action else [])
 		_event(request.app.state.database, context, risk, rule_decision, actions, request, body)
 		if "temporary_ban" in actions and mode == "enforce":
-			now = int(time.time())
-			request.app.state.database.execute("INSERT INTO bans(subject_type, subject_hash, subject_display, restriction, reason, created_by, created_at, expires_at) VALUES ('ip', ?, ?, 'all', 'Automatic rate policy', 'shield', ?, ?)", (stable_hash(ip, settings.internal_signing_key), mask_ip(ip), now, now + max([hit.retry_after for hit in rates] or [300])))
+			_automatic_ban(request.app.state.database, context, rates)
 		if "delay" in actions:
 			await asyncio.sleep(1)
 		if "block" in actions or "temporary_ban" in actions:
@@ -856,14 +1071,14 @@ async def gateway(path: str, request: Request):
 		return await _proxy(request, body, upstream, context, risk, actions[0])
 	except sqlite3.Error:
 		context, risk, exceeded = _memory_degraded_context(request, request_id, host)
-		failure = _failure_response(host, request.url.path, request.method, request_id)
+		failure = _failure_response(host, request.url.path, request.method, request_id, fail_policy)
 		if failure:
 			return failure
-		if exceeded and settings.mode == "enforce":
+		if exceeded and mode == "enforce":
 			return JSONResponse({"detail": "Rate limit exceeded in degraded mode", "requestId": request_id}, status_code=429, headers={"Retry-After": "60"})
 		return await _proxy(request, body, upstream, context, risk, "degraded_fail_open")
 	except (OSError, ValueError, RuntimeError, httpx.HTTPError):
-		failure = _failure_response(host, request.url.path, request.method, request_id)
+		failure = _failure_response(host, request.url.path, request.method, request_id, fail_policy)
 		if failure:
 			return failure
 		return await _proxy(request, body, upstream, None, None, "fail_open")

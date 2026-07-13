@@ -13,8 +13,10 @@ from .rules import RequestContext
 class RateHit:
 	policy_id: int
 	policy_name: str
+	dimension: str
 	action: str
 	retry_after: int
+	cooldown_seconds: int
 
 
 class RateLimiter:
@@ -110,5 +112,5 @@ class RateLimiter:
 				continue
 			allowed, retry_after = self._consume(policy, self._identity(policy, context), now)
 			if not allowed:
-				hits.append(RateHit(policy["id"], policy["name"], policy["action"], retry_after))
+				hits.append(RateHit(policy["id"], policy["name"], policy["dimension"], policy["action"], retry_after, int(policy["cooldown_seconds"] or 0)))
 		return hits

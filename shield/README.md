@@ -64,4 +64,6 @@ docker compose config
 
 The Admin Security workspace automatically refreshes gateway telemetry every 30 seconds. Independently, Shield synchronizes a minimal account projection from a private timestamped and HMAC-signed FastAPI snapshot every minute. It stores stable keyed account hashes, usernames as operator labels, security posture, activity counts, and derived risk metadata only. It never copies passwords, email addresses, session tokens, verification material, or authentication secrets. Risk-event actions derive their IP or account target from the selected event, so normal operation does not require manually entering raw values.
 
+The workspace is also the live control plane. `Automation` edits rate thresholds, windows, responses, and ban cooldowns; `Services` enables or bypasses each hostname and selects observe/enforce plus fail-open/closed behavior; `Geography` creates scoped country/region actions from observed locations; and `Accounts` applies expiring risk adjustments to synchronized identities. A service is reported as connected only after its edge route actually traverses Shield. Staged controls do not silently rewrite Nginx or Cloudflare.
+
 Never expose the Shield container directly to the internet. Nginx must be the only direct peer, and Cloudflare-origin authentication should remain enabled at the outer edge.

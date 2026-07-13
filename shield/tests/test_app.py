@@ -20,7 +20,9 @@ from fastapi.testclient import TestClient
 import httpx
 
 from app.config import settings
-from app.main import app
+from app.main import _automatic_ban, app
+from app.rate_limit import RateHit
+from app.rules import RequestContext
 from app.security import verify_headers
 
 
@@ -105,6 +107,60 @@ class ShieldApplicationTests(unittest.TestCase):
 		self.assertEqual(response.status_code, 200)
 		ban = self.client.app.state.database.query("SELECT subject_hash FROM bans WHERE reason LIKE 'Created from risk event%'")[-1]
 		self.assertEqual(ban["subject_hash"], "hashed-ip")
+
+	def test_control_plane_manages_services_automation_geography_and_account_risk(self):
+		headers = {"Cookie": "sf_bot_session=valid-admin", "X-CSRF-Token": "admin-csrf"}
+		service = self.client.put(
+			"/__shield/api/admin/services/api.silentflare.com",
+			headers=headers,
+			json={"protection_enabled": True, "mode": "observe", "fail_policy": "route"},
+		)
+		self.assertEqual(service.status_code, 200)
+		policy = self.client.put(
+			"/__shield/api/admin/rate-policies/4",
+			headers=headers,
+			json={"enabled": True, "limit_value": 8, "window_seconds": 60, "action": "temporary_ban", "cooldown_seconds": 21600},
+		)
+		self.assertEqual(policy.status_code, 200)
+		geo = self.client.post(
+			"/__shield/api/admin/geo-policies",
+			headers=headers,
+			json={"country_code": "US", "scope_host": "api.silentflare.com", "action": "turnstile"},
+		)
+		self.assertEqual(geo.status_code, 200)
+		dashboard = self.client.get("/__shield/api/admin/dashboard", headers={"Cookie": "sf_bot_session=valid-admin"}).json()
+		account_id = dashboard["riskyAccounts"][0]["id"]
+		adjustment = self.client.put(
+			f"/__shield/api/admin/accounts/{account_id}/risk",
+			headers=headers,
+			json={"delta": 20, "reason": "Administrator risk escalation", "duration_seconds": 86400},
+		)
+		self.assertEqual(adjustment.status_code, 200)
+		updated = self.client.get("/__shield/api/admin/dashboard", headers={"Cookie": "sf_bot_session=valid-admin"}).json()
+		self.assertEqual(updated["policies"][3]["action"], "temporary_ban")
+		self.assertEqual(updated["geoPolicies"][0]["countryCode"], "US")
+		self.assertEqual(updated["riskyAccounts"][0]["manualDelta"], 20)
+
+	def test_automatic_account_policy_bans_correlated_session_once(self):
+		context = RequestContext(
+			request_id="automatic-ban-test",
+			host="api.silentflare.com",
+			path="/comments",
+			method="POST",
+			ip="203.0.113.22",
+			session_id="opaque-test-session",
+		)
+		hit = RateHit(4, "Comments per account", "account", "temporary_ban", 30, 21600)
+		_automatic_ban(app.state.database, context, [hit])
+		_automatic_ban(app.state.database, context, [hit])
+		rows = app.state.database.query(
+			"SELECT subject_type, subject_display, reason, expires_at FROM bans WHERE reason = ?",
+			("Automatic policy: Comments per account",),
+		)
+		self.assertEqual(len(rows), 1)
+		self.assertEqual(rows[0]["subject_type"], "session")
+		self.assertEqual(rows[0]["subject_display"], "Correlated session")
+		self.assertGreaterEqual(rows[0]["expires_at"], int(time.time()) + 21590)
 
 	def test_unknown_host_is_rejected_before_proxying(self):
 		response = self.client.get("/not-an-upstream", headers={"Host": "unlisted.example"})
