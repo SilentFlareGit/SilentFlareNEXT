@@ -17,12 +17,18 @@ for file in "${SHIELD_ENV}" "${API_ENV}" "${DEPLOY_ENV}"; do
 	fi
 done
 
-set -a
-source "${API_ENV}"
-source "${DEPLOY_ENV}"
-set +a
+read_value() {
+	local file=$1
+	local key=$2
+	local line
+	line=$(grep -m 1 "^${key}=" "${file}" || true)
+	printf '%s' "${line#*=}"
+}
 
-if [[ -z ${TURNSTILE_SECRET_KEY:-} || -z ${PUBLIC_TURNSTILE_SITE_KEY:-} ]]; then
+TURNSTILE_SECRET_VALUE=$(read_value "${API_ENV}" TURNSTILE_SECRET_KEY)
+TURNSTILE_SITE_VALUE=$(read_value "${DEPLOY_ENV}" PUBLIC_TURNSTILE_SITE_KEY)
+
+if [[ -z ${TURNSTILE_SECRET_VALUE} || -z ${TURNSTILE_SITE_VALUE} ]]; then
 	echo "Existing Turnstile configuration is incomplete; Shield enforcement cannot be configured." >&2
 	exit 1
 fi
@@ -42,8 +48,8 @@ set_value() {
 	rm -f "${temporary}"
 }
 
-set_value SHIELD_TURNSTILE_SITE_KEY "${PUBLIC_TURNSTILE_SITE_KEY}"
-set_value SHIELD_TURNSTILE_SECRET_KEY "${TURNSTILE_SECRET_KEY}"
+set_value SHIELD_TURNSTILE_SITE_KEY "${TURNSTILE_SITE_VALUE}"
+set_value SHIELD_TURNSTILE_SECRET_KEY "${TURNSTILE_SECRET_VALUE}"
 set_value SHIELD_CONNECTED_HOSTS "blog.silentflare.com,accounts.silentflare.com,api.silentflare.com,admin.silentflare.com,cms.silentflare.com"
 set_value SHIELD_MAX_BODY_BYTES "52428800"
 set_value SHIELD_ACCOUNT_SNAPSHOT_URL "http://127.0.0.1:9010/internal/shield/accounts"
