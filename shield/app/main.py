@@ -9,6 +9,7 @@ import sqlite3
 import time
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -67,6 +68,11 @@ class BanInput(BaseModel):
 	restriction: str = "all"
 	reason: str
 	expires_at: int | None = None
+
+
+class EventActionInput(BaseModel):
+	action: str = Field(pattern=r"^(block_ip|block_account|dismiss)$")
+	duration_seconds: int = Field(default=21600, ge=300, le=2592000)
 
 
 def build_services(config: Settings):
@@ -166,6 +172,92 @@ async def _admin(request: Request, csrf: bool = False) -> tuple[str, str]:
 	if csrf and not hmac.compare_digest(request.headers.get("x-csrf-token", ""), upstream_csrf):
 		raise HTTPException(status_code=403, detail="CSRF validation failed")
 	return "SilentFlare Admin", upstream_csrf
+
+
+def _timestamp(value: Any, default: int = 0) -> int:
+	if not value:
+		return default
+	try:
+		return int(datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp())
+	except (TypeError, ValueError):
+		return default
+
+
+def _account_risk(user: dict[str, Any], now: int) -> tuple[int, str, list[str]]:
+	score = 0
+	reasons: list[str] = []
+	created_at = _timestamp(user.get("created_at"), now)
+	if now - created_at < 86400:
+		score += 15
+		reasons.append("Account created within 24 hours")
+	if not user.get("email_verified_at"):
+		score += 15
+		reasons.append("Email is not verified")
+	if not user.get("totp_enabled"):
+		score += 5
+		reasons.append("Two-factor authentication is not enabled")
+	if user.get("role") == "admin" and not user.get("totp_enabled"):
+		score += 20
+		reasons.append("Privileged account has no two-factor authentication")
+	if int(user.get("active_session_count") or 0) > 5:
+		score += 10
+		reasons.append("Account has more than five active sessions")
+	if user.get("disabled_at"):
+		score += 60
+		reasons.append("Account is disabled")
+	score = min(score, 100)
+	level = "block" if score >= 80 else "restrict" if score >= 60 else "verify" if score >= 40 else "observe" if score >= 20 else "normal"
+	return score, level, reasons
+
+
+async def _sync_account_projections(request: Request, force: bool = False) -> dict[str, Any]:
+	db = request.app.state.database
+	now = int(time.time())
+	last = db.query("SELECT completed_at, record_count, status FROM sync_runs WHERE source = 'fastapi_accounts' ORDER BY id DESC LIMIT 1")
+	if not force and last and last[0]["status"] == "completed" and now - int(last[0]["completed_at"] or 0) < settings.account_sync_interval:
+		return {"status": "fresh", "recordCount": last[0]["record_count"], "completedAt": last[0]["completed_at"]}
+	run_id = db.execute("INSERT INTO sync_runs(source, started_at, status) VALUES ('fastapi_accounts', ?, 'running')", (now,))
+	session_token = request.cookies.get(settings.admin_cookie_name, "")
+	try:
+		response = await request.app.state.client.get(
+			settings.account_snapshot_url,
+			headers={"Accept": "application/json", "Cookie": f"{settings.admin_cookie_name}={session_token}", "Host": "api.silentflare.com"},
+		)
+		response.raise_for_status()
+		users = response.json().get("users", [])
+		if not isinstance(users, list):
+			raise ValueError("Account snapshot is malformed")
+
+		def write(connection):
+			connection.execute("DELETE FROM account_projections")
+			for user in users:
+				account_hash = stable_hash(str(user.get("id", "")), settings.internal_signing_key)
+				score, level, reasons = _account_risk(user, now)
+				connection.execute(
+					"""INSERT INTO account_projections(account_id_hash, account_label, role, country_code,
+					email_verified, two_factor_enabled, disabled, created_at, last_seen_at, active_session_count,
+					comment_count, risk_score, risk_level, risk_reasons_json, last_synced_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+					ON CONFLICT(account_id_hash) DO UPDATE SET account_label=excluded.account_label,
+					role=excluded.role, country_code=excluded.country_code, email_verified=excluded.email_verified,
+					two_factor_enabled=excluded.two_factor_enabled, disabled=excluded.disabled,
+					created_at=excluded.created_at, last_seen_at=excluded.last_seen_at,
+					active_session_count=excluded.active_session_count, comment_count=excluded.comment_count,
+					risk_score=excluded.risk_score, risk_level=excluded.risk_level,
+					risk_reasons_json=excluded.risk_reasons_json, last_synced_at=excluded.last_synced_at""",
+					(account_hash, str(user.get("username") or user.get("id") or "Unknown")[:100], str(user.get("role") or "user"),
+					str(user.get("display_region_code") or "")[:8], int(bool(user.get("email_verified_at"))),
+					int(bool(user.get("totp_enabled"))), int(bool(user.get("disabled_at"))),
+					_timestamp(user.get("created_at"), now), _timestamp(user.get("last_seen_at")) or None,
+					int(user.get("active_session_count") or 0), int(user.get("comment_count") or 0), score, level,
+					json.dumps(reasons, separators=(",", ":")), now),
+				)
+		db.transaction(write)
+		db.execute("UPDATE sync_runs SET completed_at = ?, status = 'completed', record_count = ? WHERE id = ?", (int(time.time()), len(users), run_id))
+		return {"status": "completed", "recordCount": len(users), "completedAt": int(time.time())}
+	except (httpx.HTTPError, ValueError, json.JSONDecodeError) as error:
+		db.execute("UPDATE sync_runs SET completed_at = ?, status = 'failed', detail = ? WHERE id = ?", (int(time.time()), type(error).__name__, run_id))
+		return {"status": "failed", "recordCount": 0, "completedAt": int(time.time())}
 
 
 def _mode(database: Database) -> str:
@@ -390,6 +482,95 @@ async def admin_overview(request: Request):
 	top_countries = db.query("SELECT COALESCE(country_code, 'Unknown') AS label, COUNT(*) AS value FROM risk_events WHERE created_at >= ? GROUP BY country_code ORDER BY value DESC LIMIT 5", (day,))
 	top_rules = db.query("SELECT name AS label, hit_count AS value FROM rules ORDER BY hit_count DESC LIMIT 5")
 	return {"mode": _mode(db), "events": counts["events"] or 0, "blocked": counts["blocked"] or 0, "challenged": counts["challenged"] or 0, "activeBans": active_bans, "topCountries": top_countries, "topRules": top_rules, "hosts": sorted(settings.upstreams)}
+
+
+@app.get("/__shield/api/admin/dashboard")
+async def admin_dashboard(request: Request, range_hours: int = 24):
+	await _admin(request)
+	db = request.app.state.database
+	range_hours = min(168, max(6, range_hours))
+	now = int(time.time())
+	since = now - range_hours * 3600
+	sync = await _sync_account_projections(request)
+	counts = db.query(
+		"""SELECT COUNT(*) AS requests,
+		SUM(CASE WHEN risk_score >= 80 OR actions_json LIKE '%block%' THEN 1 ELSE 0 END) AS blocked,
+		SUM(CASE WHEN actions_json LIKE '%turnstile%' THEN 1 ELSE 0 END) AS challenged,
+		SUM(CASE WHEN risk_score >= 60 THEN 1 ELSE 0 END) AS high_risk,
+		COUNT(DISTINCT ip_hash) AS unique_ips
+		FROM risk_events WHERE created_at >= ?""",
+		(since,),
+	)[0]
+	active_bans = db.query("SELECT COUNT(*) AS value FROM bans WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)", (now,))[0]["value"]
+	account_counts = db.query("SELECT COUNT(*) AS total, SUM(CASE WHEN risk_score >= 40 THEN 1 ELSE 0 END) AS risky FROM account_projections")[0]
+	series_rows = db.query(
+		"""SELECT (created_at / 3600) * 3600 AS bucket, COUNT(*) AS requests,
+		SUM(CASE WHEN risk_score >= 60 THEN 1 ELSE 0 END) AS high_risk,
+		SUM(CASE WHEN actions_json LIKE '%rate_limit%' OR actions_json LIKE '%temporary_ban%' THEN 1 ELSE 0 END) AS limited
+		FROM risk_events WHERE created_at >= ? GROUP BY bucket ORDER BY bucket""",
+		(since,),
+	)
+	series_map = {int(row["bucket"]): row for row in series_rows}
+	start_bucket = (since // 3600) * 3600
+	series = []
+	for bucket in range(start_bucket, (now // 3600) * 3600 + 1, 3600):
+		row = series_map.get(bucket, {})
+		series.append({"timestamp": bucket, "requests": row.get("requests", 0), "highRisk": row.get("high_risk", 0) or 0, "limited": row.get("limited", 0) or 0})
+	top_countries = db.query("SELECT COALESCE(country_code, 'Unknown') AS label, COUNT(*) AS value, ROUND(AVG(risk_score), 1) AS averageRisk FROM risk_events WHERE created_at >= ? GROUP BY country_code ORDER BY value DESC LIMIT 6", (since,))
+	top_asns = db.query("SELECT COALESCE(asn, 'Unknown') AS label, COUNT(*) AS value, MAX(risk_score) AS maximumRisk FROM risk_events WHERE created_at >= ? GROUP BY asn ORDER BY maximumRisk DESC, value DESC LIMIT 6", (since,))
+	recent = db.query("SELECT id, created_at, risk_level, risk_score, host, path, method, ip_masked, country_code, asn, ip_type, reasons_json, actions_json, review_status FROM risk_events ORDER BY created_at DESC LIMIT 12")
+	for event in recent:
+		event["reasons"] = json.loads(event.pop("reasons_json"))
+		event["actions"] = json.loads(event.pop("actions_json"))
+	risky_accounts = db.query("SELECT account_id_hash AS id, account_label AS label, role, country_code AS country, email_verified AS emailVerified, two_factor_enabled AS twoFactorEnabled, disabled, active_session_count AS activeSessions, comment_count AS comments, risk_score AS riskScore, risk_level AS riskLevel, risk_reasons_json AS riskReasons, last_seen_at AS lastSeenAt FROM account_projections ORDER BY risk_score DESC, last_seen_at DESC LIMIT 12")
+	for account in risky_accounts:
+		account["riskReasons"] = json.loads(account["riskReasons"])
+	policies = db.query("SELECT id, name, path_pattern AS path, dimension, algorithm, limit_value AS limitValue, window_seconds AS windowSeconds, action, enabled FROM rate_policies ORDER BY id")
+	return {
+		"mode": _mode(db),
+		"rangeHours": range_hours,
+		"metrics": {"requests": counts["requests"] or 0, "blocked": counts["blocked"] or 0, "challenged": counts["challenged"] or 0, "highRisk": counts["high_risk"] or 0, "uniqueIps": counts["unique_ips"] or 0, "activeBans": active_bans, "accounts": account_counts["total"] or 0, "riskyAccounts": account_counts["risky"] or 0},
+		"series": series,
+		"topCountries": top_countries,
+		"topAsns": top_asns,
+		"recentEvents": recent,
+		"riskyAccounts": risky_accounts,
+		"policies": policies,
+		"services": [{"host": host, "status": "protected" if host == "api.silentflare.com" else "configured"} for host in sorted(settings.upstreams)],
+		"sync": sync,
+		"generatedAt": now,
+	}
+
+
+@app.post("/__shield/api/admin/sync/accounts")
+async def admin_sync_accounts(request: Request):
+	actor, _ = await _admin(request, csrf=True)
+	result = await _sync_account_projections(request, force=True)
+	request.app.state.database.audit(actor, "accounts.sync", "account_projection", None, result)
+	return result
+
+
+@app.post("/__shield/api/admin/events/{event_id}/action")
+async def admin_event_action(event_id: str, payload: EventActionInput, request: Request):
+	actor, _ = await _admin(request, csrf=True)
+	db = request.app.state.database
+	rows = db.query("SELECT id, ip_hash, ip_masked, account_id_hash, review_status FROM risk_events WHERE id = ? LIMIT 1", (event_id,))
+	if not rows:
+		raise HTTPException(status_code=404, detail="Risk event not found")
+	event = rows[0]
+	now = int(time.time())
+	if payload.action == "dismiss":
+		db.execute("UPDATE risk_events SET review_status = 'dismissed', reviewed_by = ?, reviewed_at = ? WHERE id = ?", (actor, now, event_id))
+	else:
+		subject_type = "ip" if payload.action == "block_ip" else "account"
+		subject_hash = event["ip_hash"] if subject_type == "ip" else event["account_id_hash"]
+		if not subject_hash:
+			raise HTTPException(status_code=422, detail=f"Event has no correlated {subject_type}")
+		display = event["ip_masked"] if subject_type == "ip" else "Correlated account"
+		db.execute("INSERT INTO bans(subject_type, subject_hash, subject_display, restriction, reason, created_by, created_at, expires_at) VALUES (?, ?, ?, 'all', ?, ?, ?, ?)", (subject_type, subject_hash, display, f"Created from risk event {event_id}", actor, now, now + payload.duration_seconds))
+		db.execute("UPDATE risk_events SET review_status = 'actioned', reviewed_by = ?, reviewed_at = ? WHERE id = ?", (actor, now, event_id))
+	db.audit(actor, f"risk_event.{payload.action}", "risk_event", event_id, {"durationSeconds": payload.duration_seconds})
+	return {"ok": True, "eventId": event_id, "action": payload.action}
 
 
 @app.get("/__shield/api/admin/events")

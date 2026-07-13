@@ -186,6 +186,10 @@ Device risk              Audit log                System settings
 
 The implemented dashboard reports daily risk events, high-risk blocks, verification decisions, active bans, highest-risk countries, top rules, and protected service status. Events, IP cache, access lists, rate policies, rules, bans, risk-model settings, and audit records have working data views. Account, device, content, session, and alert areas reserve the explicit independent API boundaries required by later phases.
 
+The primary operator experience is now the `Security` workspace inside the existing SilentFlare Admin Svelte application. It reads Shield directly through the same-origin `/__shield/api/admin/*` route while Shield continues to run as a separate process and data plane. The workspace displays real hourly traffic, high-risk and block counts, unique IPs, synchronized account posture, geographic concentration, service coverage, recent decisions, and active automated rate policies. It refreshes every 30 seconds and offers event-context actions such as six-hour IP blocking and dismissal without asking the administrator to copy a raw target value.
+
+Account synchronization is a bounded projection rather than database coupling. After validating the existing Admin session, Shield periodically requests the existing FastAPI Admin user snapshot and upserts only a keyed account ID, an operator label, role, country code, verification/2FA/disabled flags, timestamps, activity counts, and derived risk metadata into its own database. Passwords, email addresses, raw sessions, verification data, and business-table access are excluded. A failed synchronization leaves the last successful projection available and does not interrupt gateway traffic.
+
 The console does not issue a second password, TOTP secret, or Shield-specific administrator session. Each console request forwards only the existing `sf_bot_session` cookie to the private FastAPI `GET /auth/me` endpoint and requires `bot.id` to equal `SilentFlare Admin`. Mutations reuse that Admin session's CSRF value. When the existing Admin session expires, is revoked, or the Owner disables web login, Shield access stops immediately. Production should additionally restrict source networks and add role tiers (`viewer`, `analyst`, `rule_admin`, `owner`). Only the owner can change global bypass or publish high-impact rules.
 
 ## 10. API Route Design
@@ -199,6 +203,9 @@ Implemented routes:
 | `POST /__shield/challenge/verify` | Verify Turnstile and issue a short, IP/UA-bound proof |
 | `GET /__shield/api/admin/session` | Validate the existing SilentFlare Admin session and return its CSRF state |
 | `GET /__shield/api/admin/overview` | Dashboard aggregates |
+| `GET /__shield/api/admin/dashboard` | Live time series, account posture, event decisions, policies, and service coverage |
+| `POST /__shield/api/admin/sync/accounts` | Force a minimal authenticated FastAPI account projection refresh |
+| `POST /__shield/api/admin/events/{id}/action` | Apply a contextual IP/account block or dismiss an event without raw target input |
 | `GET /__shield/api/admin/events` | Filter-ready recent risk events |
 | `GET /__shield/api/admin/intel` | Cached redacted IP intelligence |
 | `GET/POST/DELETE /__shield/api/admin/lists...` | List administration |

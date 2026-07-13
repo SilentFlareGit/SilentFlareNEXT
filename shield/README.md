@@ -13,6 +13,7 @@ The MVP includes:
 - A versioned JSON rule model, nested conditions, priority, simulation, actions, and hit counts.
 - Signed, spoof-resistant internal decision headers.
 - A separate English administration console that reuses the existing SilentFlare Admin session, CSRF proof, and append-only audit records.
+- A real Security workspace inside SilentFlare Admin with live trends, contextual event actions, automated policies, service coverage, and account-risk projections synchronized from FastAPI without sharing the business database.
 - SQLite/WAL persistence, migrations, health probes, Docker Compose, and an Nginx reference configuration.
 
 The full architecture, data model, integration contract, API plan, failure matrix, and phased roadmap are in [docs/SILENTFLARE_SHIELD.md](../docs/SILENTFLARE_SHIELD.md).
@@ -60,5 +61,7 @@ docker compose config
 5. Keep the Nginx fail-open origin route only for public blog reads.
 6. Keep login, registration, comments, Admin, CMS, and sensitive API routes fail closed.
 7. Keep the existing SilentFlare Admin login gate and its Telegram/TOTP verification enabled; Shield does not issue a second administrator credential.
+
+The Admin Security workspace automatically refreshes gateway telemetry every 30 seconds and synchronizes a minimal account projection from the authenticated FastAPI Admin API. It stores stable keyed account hashes, usernames as operator labels, security posture, activity counts, and derived risk metadata only. It never copies passwords, email addresses, session tokens, verification material, or authentication secrets. Risk-event actions derive their IP or account target from the selected event, so normal operation does not require manually entering raw values.
 
 Never expose the Shield container directly to the internet. Nginx must be the only direct peer, and Cloudflare-origin authentication should remain enabled at the outer edge.

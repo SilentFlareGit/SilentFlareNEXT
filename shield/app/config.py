@@ -56,6 +56,15 @@ class Settings:
 	admin_cookie_name: str = field(
 		default_factory=lambda: os.getenv("SHIELD_ADMIN_COOKIE_NAME", "sf_bot_session")
 	)
+	account_snapshot_url: str = field(
+		default_factory=lambda: os.getenv(
+			"SHIELD_ACCOUNT_SNAPSHOT_URL",
+			"http://host.docker.internal:9010/admin/users",
+		)
+	)
+	account_sync_interval: int = field(
+		default_factory=lambda: _integer("SHIELD_ACCOUNT_SYNC_INTERVAL", 60)
+	)
 	cookie_secure: bool = field(default_factory=lambda: _boolean("SHIELD_COOKIE_SECURE", True))
 	turnstile_site_key: str = field(default_factory=lambda: os.getenv("SHIELD_TURNSTILE_SITE_KEY", ""))
 	turnstile_secret_key: str = field(default_factory=lambda: os.getenv("SHIELD_TURNSTILE_SECRET_KEY", ""))

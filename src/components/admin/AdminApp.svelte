@@ -1,6 +1,7 @@
 <script lang="ts">
 import Icon from "@iconify/svelte";
 import { onDestroy, onMount } from "svelte";
+import ShieldDashboard from "./ShieldDashboard.svelte";
 import SiteEditor from "./SiteEditor.svelte";
 
 type UserRow = {
@@ -106,7 +107,7 @@ let csrf = $state(
 		: (sessionStorage.getItem("silentflare_admin_csrf") ?? ""),
 );
 let status = $state<AdminStatus | null>(null);
-let activeTab = $state<"users" | "comments" | "site">("users");
+let activeTab = $state<"users" | "comments" | "shield" | "site">("users");
 let users = $state<UserRow[]>([]);
 let comments = $state<CommentRow[]>([]);
 let selectedUser = $state<UserRow | null>(null);
@@ -358,7 +359,7 @@ async function logout() {
 	authenticated = false;
 	redirectToAuth();
 }
-async function switchTab(tab: "users" | "comments" | "site") {
+async function switchTab(tab: "users" | "comments" | "shield" | "site") {
 	activeTab = tab;
 	search = "";
 	if (tab === "users") await loadUsers();
@@ -384,11 +385,11 @@ onDestroy(() => {
 {#if checkingSession || !authenticated}
 	<section class="session-check"><span></span><p>Opening the secure Admin workspace...</p></section>
 {:else}
-	<header><a class="wordmark" href="https://blog.silentflare.com/"><span>S</span> SilentFlare <b>Admin</b></a><div class="header-actions"><button class="icon-button" title="Refresh" onclick={() => activeTab === "users" ? loadUsers() : activeTab === "comments" ? loadComments() : location.reload()}><Icon icon="material-symbols:refresh-rounded"/></button><button class="icon-button" title="Sign out" onclick={logout}><Icon icon="material-symbols:logout-rounded"/></button></div></header>
+	<header><a class="wordmark" href="https://blog.silentflare.com/"><span>S</span> SilentFlare <b>Admin</b></a><div class="header-actions"><button class="icon-button" title="Refresh" onclick={() => activeTab === "users" ? loadUsers() : activeTab === "comments" ? loadComments() : activeTab === "shield" ? switchTab("shield") : location.reload()}><Icon icon="material-symbols:refresh-rounded"/></button><button class="icon-button" title="Sign out" onclick={logout}><Icon icon="material-symbols:logout-rounded"/></button></div></header>
 	<div class="workspace">
-		<aside><p class="nav-label">Workspace</p><button class:active={activeTab === "users"} onclick={() => switchTab("users")}><Icon icon="material-symbols:group-outline-rounded"/>Users <span>{users.length}</span></button><button class:active={activeTab === "comments"} onclick={() => switchTab("comments")}><Icon icon="material-symbols:forum-outline-rounded"/>Comments</button><button class:active={activeTab === "site"} onclick={() => switchTab("site")}><Icon icon="material-symbols:palette-outline-rounded"/>Blog appearance</button><div class="storage"><i class:ok={status?.d1_configured}></i><div><strong>Account database</strong><small>{status?.d1_configured ? "Connected on FNS1" : "Unavailable"}</small></div></div></aside>
+		<aside><p class="nav-label">Workspace</p><button class:active={activeTab === "users"} onclick={() => switchTab("users")}><Icon icon="material-symbols:group-outline-rounded"/>Users <span>{users.length}</span></button><button class:active={activeTab === "comments"} onclick={() => switchTab("comments")}><Icon icon="material-symbols:forum-outline-rounded"/>Comments</button><button class:active={activeTab === "shield"} onclick={() => switchTab("shield")}><Icon icon="material-symbols:shield-outline-rounded"/>Security</button><button class:active={activeTab === "site"} onclick={() => switchTab("site")}><Icon icon="material-symbols:palette-outline-rounded"/>Blog appearance</button><div class="storage"><i class:ok={status?.d1_configured}></i><div><strong>Account database</strong><small>{status?.d1_configured ? "Connected on FNS1" : "Unavailable"}</small></div></div></aside>
 		<section class="content">
-			<div class="page-head"><div><p class="eyebrow">{activeTab === "users" ? "ACCOUNT DIRECTORY" : activeTab === "comments" ? "COMMENT MODERATION" : "PUBLIC BLOG"}</p><h1>{activeTab === "users" ? "Users" : activeTab === "comments" ? "Comments" : "Blog appearance"}</h1></div>{#if activeTab !== "site"}<label class="search"><Icon icon="material-symbols:search-rounded"/><input bind:value={search} placeholder="Search"/></label>{/if}</div>
+			{#if activeTab !== "shield"}<div class="page-head"><div><p class="eyebrow">{activeTab === "users" ? "ACCOUNT DIRECTORY" : activeTab === "comments" ? "COMMENT MODERATION" : "PUBLIC BLOG"}</p><h1>{activeTab === "users" ? "Users" : activeTab === "comments" ? "Comments" : "Blog appearance"}</h1></div>{#if activeTab !== "site"}<label class="search"><Icon icon="material-symbols:search-rounded"/><input bind:value={search} placeholder="Search"/></label>{/if}</div>{/if}
 			{#if actionMessage}<div class:success={actionTone === "success"} class:error={actionTone === "error"} class="notice">{actionMessage}</div>{/if}
 			{#if activeTab === "users"}
 				<div class="metrics"><div><span>Total users</span><strong>{users.length}</strong></div><div><span>Active sessions</span><strong>{users.reduce((sum, user) => sum + Number(user.active_session_count ?? 0), 0)}</strong></div><div><span>Disabled</span><strong>{disabledCount}</strong></div></div>
@@ -396,6 +397,8 @@ onDestroy(() => {
 			{:else if activeTab === "comments"}
 				<form class="filter" onsubmit={(event) => { event.preventDefault(); loadComments(); }}><input class="field" bind:value={postSlugFilter} placeholder="Filter by post slug"/><button class="secondary" type="submit">Apply filter</button></form>
 				<div class="comment-list">{#if loading}<p>Loading comments...</p>{:else}{#each visibleComments as comment}<article><div class="comment-meta"><strong>{comment.display_name || comment.username}</strong><span>{comment.email}</span><i>{comment.status}</i><time>{formatTime(comment.created_at)}</time></div><p>{comment.content}</p><footer><span><Icon icon="material-symbols:article-outline-rounded"/>{comment.post_slug}</span><span><Icon icon="material-symbols:location-on-outline-rounded"/>{comment.created_ip || "IP not recorded"}</span><button class={comment.deleted_at ? "secondary" : "danger-button"} onclick={() => commentAction(comment, comment.deleted_at ? "restore" : "delete")}>{comment.deleted_at ? "Restore" : "Delete"}</button></footer></article>{/each}{/if}</div>
+			{:else if activeTab === "shield"}
+				<ShieldDashboard {csrf} />
 			{:else}
 				<SiteEditor {apiOrigin} {csrf} {fallbackAssets} />
 			{/if}
