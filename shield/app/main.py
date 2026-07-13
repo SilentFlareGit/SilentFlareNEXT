@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import ipaddress
 import json
@@ -28,6 +29,13 @@ from .security import SHIELD_HEADERS, issue_token, read_token, sign_headers
 
 
 ROOT = Path(__file__).resolve().parents[1]
+STATIC_ROOT = ROOT / "static"
+STATIC_VERSION = hashlib.sha256(
+	b"".join((STATIC_ROOT / filename).read_bytes() for filename in ("app.css", "app.js"))
+).hexdigest()[:12]
+ADMIN_HTML = (STATIC_ROOT / "index.html").read_text(encoding="utf-8").replace(
+	"__SHIELD_ASSET_VERSION__", STATIC_VERSION
+)
 HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade"}
 SENSITIVE_PATHS = ("/auth/", "/accounts/register/", "/admin", "/comments/create")
 
@@ -355,14 +363,14 @@ async def admin_page(request: Request):
 			raise
 		return_url = quote(str(request.url), safe="")
 		return RedirectResponse(f"https://auth.silentflare.com/?audience=admin&return_url={return_url}", status_code=302)
-	return FileResponse(ROOT / "static" / "index.html")
+	return HTMLResponse(ADMIN_HTML, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/__shield/static/{filename}", include_in_schema=False)
 async def admin_asset(filename: str):
 	if filename not in {"app.css", "app.js"}:
 		raise HTTPException(status_code=404)
-	return FileResponse(ROOT / "static" / filename)
+	return FileResponse(STATIC_ROOT / filename, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/__shield/api/admin/session")

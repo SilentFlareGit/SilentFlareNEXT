@@ -121,6 +121,14 @@ class ShieldApplicationTests(unittest.TestCase):
 		self.assertEqual(response.status_code, 200)
 		self.assertIn("SilentFlare Shield", response.text)
 		self.assertNotIn('type="password"', response.text)
+		self.assertNotIn("__SHIELD_ASSET_VERSION__", response.text)
+		self.assertRegex(response.text, r'/__shield/static/app\.js\?v=[0-9a-f]{12}')
+		self.assertEqual(response.headers["cache-control"], "no-store")
+
+	def test_admin_assets_are_not_cached_across_releases(self):
+		response = self.client.get("/__shield/static/app.js")
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.headers["cache-control"], "no-store")
 
 	def test_admin_page_redirects_without_existing_admin_session(self):
 		response = self.client.get("/__shield/admin", follow_redirects=False)
