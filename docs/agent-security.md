@@ -106,6 +106,8 @@ BOT_SILENTFLARE_DB_BACKUP_TOTP_SECRET=<totp-secret>
 BOT_GHOST_DB_BACKUP_TOTP_SECRET=<totp-secret>
 ```
 
+`WEB_SESSION_TTL` applies to ordinary bot-management sessions. Admin Owner sessions are intentionally hard-coded to an absolute 3600-second lifetime and do not slide on activity. Admin web login is process-local, starts disabled after every API restart, and can only be toggled by the configured Telegram Owner through `/allowweblogin` and `/denyweblogin`; there is no environment variable that bypasses this gate.
+
 `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_D1_DATABASE_ID`, and `CLOUDFLARE_API_TOKEN` are not required for production account persistence or admin user/comment management. Production accounts/comments use the FNS1 local account database.
 
 ## Safe Secret Presence Check Pattern

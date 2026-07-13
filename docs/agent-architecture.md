@@ -74,9 +74,9 @@ GHOST_REQUEST_PROTO=https
 
 - Auth, Accounts, Admin, and Bots use `src/layouts/SubsiteLayout.astro` for shared document metadata, Roboto font loading, favicon links, Blog-derived tokens, foundations, and subsite reset styles.
 - Shared semantic colors and dimensions live in `src/styles/tokens.css`; shared subsite document behavior lives in `src/styles/subsites.css`. Prefer `--sf-*` semantic tokens over new hard-coded colors.
-- Interactive shared primitives live in `src/components/ui/`. `IdentityShell.svelte` is the standalone identity layout used by Auth and Accounts registration; it must not be replaced with the public Blog navbar or `MainGridLayout`.
+- Interactive shared primitives live in `src/components/ui/`. `IdentityShell.svelte` is the standalone identity layout used by public Auth, Accounts registration, and Admin Owner login; it must not be replaced with the public Blog navbar or `MainGridLayout`.
 - Adaptive subsites restore the saved `localStorage.theme` value before rendering. Explicit `light` and `dark` choices are supported; when no choice is stored, the initial theme follows the system preference.
-- Admin remains the exception: its `SubsiteLayout` uses `theme="light"` and must not read or apply the saved Blog theme.
+- The authenticated Admin workspace remains the exception: its `SubsiteLayout` uses `theme="light"` and must not read or apply the saved Blog theme. The Admin Owner login is rendered on adaptive `auth.silentflare.com` and supports the shared theme toggle.
 - Dark mode must update the complete semantic surface set (`--sf-page`, `--sf-surface`, `--sf-surface-subtle`, `--sf-surface-muted`, and `--sf-text`) together. Do not combine a light semantic surface with Tailwind `dark:text-*` utilities, which can produce invisible light text on a light panel.
 
 ## Coding Style

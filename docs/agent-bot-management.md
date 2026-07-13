@@ -39,7 +39,10 @@ Current product state:
 - `SilentFlare DB Backup` is the user-facing and canonical bot id. `ghost-db-backup` may still be accepted by the API only as a backwards-compatible alias.
 - `Telegram Chat Bot` is the user-facing bot id for the MessagesHelperBot service. `telegram-chat-bot` and `messages-helper-bot` may be accepted only as backwards-compatible aliases.
 - Telegram authorization creates a one-time pending challenge.
-- The fixed Owner may send `/allowweblogin` to enable Admin web login and `/denyweblogin` to disable it. Disabling immediately revokes all Admin sessions and pending Admin challenges.
+- The fixed Owner may send `/allowweblogin` to enable Admin web login and `/denyweblogin` to disable it. Commands are accepted only from the configured Owner ID, including Telegram's `/command@botname` form. Disabling immediately revokes all Admin sessions and pending Admin challenges.
+- Admin web-login state is process-local and defaults to disabled whenever `silentflare-api.service` starts or restarts. The Owner must send `/allowweblogin` again after a restart.
+- The bot replies after either command. Failure to send that optional confirmation must not undo the state change or make the webhook fail.
+- Admin sessions use the same opaque bot-session cookie family but are bound to `SilentFlare Admin`, expire absolutely after one hour, and are never sliding sessions.
 - The Telegram bot sends an inline approval button to the fixed Owner account.
 - After Owner approval, the API should edit the same Telegram message to show approval success and link expiry.
 - If Telegram `editMessageText` or `answerCallbackQuery` fails, the webhook must still return `200` after applying the approval state.
@@ -53,10 +56,11 @@ Do not generalize Owner ID or share auth across bots unless explicitly requested
 
 - `GET /health`: public health check.
 - `GET /bots`: public bot list used before login.
-- `GET /auth/me`: current session and CSRF, requires session.
+- `GET /auth/options?bot_id=...`: public auth capabilities. For `SilentFlare Admin`, it also returns `web_login_enabled` and suppresses login methods while disabled.
+- `GET /auth/me`: current session and CSRF, requires session. Disabled or revoked Admin sessions are rejected.
 - `POST /auth/telegram/start`: starts a Telegram approval challenge for a selected bot.
 - `GET /auth/telegram/status/{challenge_id}?bot_id=...`: polls approval and creates the session when approved.
-- `POST /telegram/update?token=...`: Telegram webhook receiver for inline button callbacks.
+- `POST /telegram/update?token=...`: Telegram webhook receiver for inline approval callbacks and the Owner-only `/allowweblogin` and `/denyweblogin` commands.
 - `GET /bots/{bot_id}/backup/status`: bot-scoped session required.
 - `GET /bots/{bot_id}/checks/unified`: bot-scoped session required. Returns status for API service, bot registry, Telegram auth, backup timer, backup directory, recent backup files, GitHub releases, and optional 2FA.
 - `POST /bots/{bot_id}/backup/run`: bot-scoped session and CSRF required, or server-only `X-Admin-Token` fallback.

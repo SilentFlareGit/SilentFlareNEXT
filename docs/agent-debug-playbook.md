@@ -33,6 +33,8 @@ Account/comment local smoke test:
 corepack pnpm test:smoke:account-comments
 ```
 
+This smoke test also covers the Admin Telegram web-login gate: Owner enable, fixed one-hour Admin session expiry, Owner disable, and immediate Admin session/challenge revocation.
+
 This uses a temporary local database and mocked Turnstile success. It must verify missing Turnstile returns `403` and mocked successful Turnstile can proceed through registration, login, and comment creation.
 
 Standard local validation without real Ghost:

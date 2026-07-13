@@ -20,7 +20,7 @@ Public users share one opaque API-issued session cookie across `.silentflare.com
 - Auth app: `src/components/auth/AuthApp.svelte` and `src/components/auth/panels/`.
 - Shared subsite document shell: `src/layouts/SubsiteLayout.astro`.
 - Shared identity shell: `src/components/shells/IdentityShell.svelte`.
-- Auth/registration theme command: `src/components/ui/ThemeToggle.svelte`.
+- Shared Auth, registration, Accounts, and Admin-owner-login theme command: `src/components/ui/ThemeToggle.svelte`.
 - Accounts registration shell: `src/components/account/RegistrationApp.svelte`.
 - Registration flow: `src/components/auth/panels/RegistrationPanel.svelte`; rendered only on Accounts even though it lives with shared authentication panel primitives.
 - Accounts page: `src/pages/accounts/index.astro`.
@@ -32,9 +32,9 @@ Public users share one opaque API-issued session cookie across `.silentflare.com
 
 Accounts is a standalone account workspace. Do not restore the public blog navbar/banner above it. Admin is a standalone, light-only owner workspace and must not show bot backup, chat, health-dashboard, or unrelated operational controls.
 
-## Auth Theme Behavior
+## Auth And Account Theme Behavior
 
-- Auth and Accounts registration expose one compact icon-only theme command in the top-right of `IdentityShell`.
+- Auth, Accounts registration, the authenticated Accounts workspace, and the Admin Owner login surface expose one compact icon-only theme command. The authenticated Admin management workspace remains light-only.
 - The command toggles directly between light and dark, updates the document immediately, and stores the explicit choice as `localStorage.theme` so later visits restore it before rendering.
 - The icon shows the available action: moon while light is active and sun while dark is active. Keep its tooltip and accessible label synchronized with that action.
 - The control is at least `44px` square, uses shared `--sf-*` tokens, and must remain outside the login form so changing the theme cannot submit, reset, or shift the authentication flow.
@@ -47,7 +47,10 @@ Accounts is a standalone account workspace. Do not restore the public blog navba
 - Do not add a top product bar, oversized Hero card, top-right logout icon, account-center eyebrow, or page-level protection/session badges.
 - Desktop uses a fixed-width identity/navigation column and a fluid content column. The sidebar contains avatar, display name, username, read-only region, section navigation, and a text `Sign out` command below the navigation.
 - Mobile replaces the persistent sidebar navigation with the account summary and drawer menu. Controls stack to one column, preserve at least 44 px targets, and must not create document-level horizontal scrolling.
-- Each content page keeps only a concise page title and one description above its functional cards. Public Profile, Security, Sessions, Privacy, Notifications, and Danger Zone remain separate navigation destinations.
+- Public Profile, Security, Sessions, Privacy, Notifications, and Danger Zone remain separate navigation destinations. The active functional card supplies its own concise heading; do not restore the removed page-level heading band above the card.
+- The Accounts workspace is centered in the available viewport. Its theme command aligns with the workspace edge rather than the browser edge on wide screens.
+- Profile fields include the API-owned region as a read-only field. Upload and remove-avatar commands use equal-width, single-line icon-and-text controls.
+- Do not show placeholder controls for unsupported features such as recovery codes. Sessions must render an explicit empty state when the API returns no devices.
 - Session rows must show a device icon, device/platform, region, activity timestamps, and current-session or revoke controls. `Sign out all` is a direct CSRF-protected session action and does not open an email-verification modal.
 - Danger Zone exposes only `Delete account`. Profile clearing, comment clearing, and account deactivation must not be restored to this UI.
 - The delete button is disabled until 2FA is enabled. The modal sequence is email-code request, email-code verification, current authenticator code plus exact `DELETE ACCOUNT` confirmation, then request submission.
@@ -131,6 +134,10 @@ Accounts is a standalone account workspace. Do not restore the public blog navba
 - Admin web login is disabled by default after an API restart. The fixed Telegram Owner enables it with `/allowweblogin` and disables it with `/denyweblogin`.
 - Admin sessions have a fixed one-hour lifetime. `/denyweblogin` immediately revokes every Admin session and pending Admin login challenge.
 - The authenticated Admin workspace checks its session every 15 seconds and when the page becomes visible again.
+- Admin session expiry is absolute, not sliding. Ordinary bot-management sessions may still use the configured sliding `WEB_SESSION_TTL`.
+- `GET /auth/options?bot_id=SilentFlare%20Admin` exposes `web_login_enabled`. When false, Telegram and TOTP methods are reported unavailable and the Auth frontend renders only the centered `Web login is disabled` state.
+- The disabled state must query `/auth/options` before `/auth/me`, so a deliberately disabled login page does not create a noisy expected `401` request.
+- Admin Owner login on `auth.silentflare.com` supports the shared light/dark theme and must use `--sf-*` semantic tokens. This does not change the authenticated `admin.silentflare.com` workspace, which stays light-only.
 - Admin supports Telegram bot approval and optional 2FA only.
 - If 2FA is not configured, the UI should show it as unavailable instead of presenting a usable 2FA form.
 - Admin must stay light-only and match the Blog's pale blue/white visual language.
