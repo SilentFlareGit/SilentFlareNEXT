@@ -129,6 +129,8 @@ class ShieldApplicationTests(unittest.TestCase):
 		response = self.client.get("/__shield/static/app.js")
 		self.assertEqual(response.status_code, 200)
 		self.assertEqual(response.headers["cache-control"], "no-store")
+		stylesheet = self.client.get("/__shield/static/app.css")
+		self.assertIn("[hidden] { display: none !important; }", stylesheet.text)
 
 	def test_admin_page_redirects_without_existing_admin_session(self):
 		response = self.client.get("/__shield/admin", follow_redirects=False)
