@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="robots" content="noindex,nofollow" />
+		<title>SilentFlare Shield</title>
+		<link rel="stylesheet" href="/__shield/static/app.css" />
+	</head>
+	<body>
+		<div id="login" class="login-shell">
+			<form id="login-form" class="login-panel" autocomplete="on">
+				<div class="brand-mark" aria-hidden="true">S</div>
+				<h1>SilentFlare Shield</h1>
+				<p>Security operations console</p>
+				<label>Password<input name="password" type="password" autocomplete="current-password" required /></label>
+				<label>Authenticator code<input name="totp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required /></label>
+				<button type="submit">Sign in</button>
+				<div id="login-error" class="form-error" role="alert"></div>
+			</form>
+		</div>
+
+		<div id="workspace" class="workspace" hidden>
+			<aside class="sidebar">
+				<div class="brand"><span class="brand-mark" aria-hidden="true">S</span><span>SilentFlare<br /><strong>Shield</strong></span></div>
+				<nav id="nav" aria-label="Shield sections">
+					<button class="nav-item active" data-view="overview">Overview</button>
+					<button class="nav-item" data-view="events">Risk events</button>
+					<button class="nav-item" data-view="intel">IP intelligence</button>
+					<button class="nav-item" data-view="accounts">Account risk</button>
+					<button class="nav-item" data-view="devices">Device risk</button>
+					<button class="nav-item" data-view="regions">Countries & regions</button>
+					<button class="nav-item" data-view="limits">Rate limits</button>
+					<button class="nav-item" data-view="rules">Rule engine</button>
+					<button class="nav-item" data-view="bans">Ban lists</button>
+					<button class="nav-item" data-view="content">Content review</button>
+					<button class="nav-item" data-view="sessions">Session management</button>
+					<button class="nav-item" data-view="admins">Administrator security</button>
+					<button class="nav-item" data-view="alerts">Alerts</button>
+					<button class="nav-item" data-view="audit">Audit log</button>
+					<button class="nav-item" data-view="settings">System settings</button>
+				</nav>
+			</aside>
+
+			<main>
+				<header class="topbar">
+					<button id="menu" class="icon-button" type="button" aria-label="Open navigation" title="Open navigation">☰</button>
+					<div><h1 id="view-title">Overview</h1><p id="updated">Live security posture</p></div>
+					<div class="top-actions">
+						<label class="mode-control">Mode<select id="mode"><option value="bypass">Bypass</option><option value="observe">Observe</option><option value="enforce">Enforce</option></select></label>
+						<button id="refresh" class="icon-button" type="button" aria-label="Refresh" title="Refresh">↻</button>
+						<button id="logout" class="icon-button" type="button" aria-label="Sign out" title="Sign out">⇥</button>
+					</div>
+				</header>
+				<div id="notice" class="notice" hidden></div>
+				<section id="content" class="content" aria-live="polite"></section>
+			</main>
+		</div>
+
+		<dialog id="editor"><form method="dialog" id="editor-form"><div class="dialog-head"><h2 id="editor-title">Create</h2><button value="cancel" class="icon-button" aria-label="Close" title="Close">×</button></div><div id="editor-fields"></div><div class="dialog-actions"><button value="cancel" class="secondary">Cancel</button><button id="editor-submit" value="default">Save</button></div></form></dialog>
+		<script src="/__shield/static/app.js" defer></script>
+	</body>
+</html>

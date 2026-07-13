@@ -1,0 +1,86 @@
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+
+DEFAULT_UPSTREAMS = {
+    "blog.silentflare.com": "http://host.docker.internal:4321",
+    "accounts.silentflare.com": "http://host.docker.internal:4321",
+    "api.silentflare.com": "http://host.docker.internal:9010",
+    "admin.silentflare.com": "http://host.docker.internal:4321",
+    "cms.silentflare.com": "http://host.docker.internal:2368",
+}
+
+
+def _boolean(name: str, default: bool) -> bool:
+	value = os.getenv(name)
+	return default if value is None else value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _integer(name: str, default: int) -> int:
+	try:
+		return int(os.getenv(name, str(default)))
+	except ValueError:
+		return default
+
+
+def _upstreams() -> dict[str, str]:
+	raw = os.getenv("SHIELD_UPSTREAMS_JSON")
+	if not raw:
+		return DEFAULT_UPSTREAMS.copy()
+	parsed = json.loads(raw)
+	if not isinstance(parsed, dict) or not parsed:
+		raise ValueError("SHIELD_UPSTREAMS_JSON must be a non-empty JSON object")
+	return {str(host).lower(): str(url).rstrip("/") for host, url in parsed.items()}
+
+
+@dataclass(frozen=True)
+class Settings:
+	mode: str = field(default_factory=lambda: os.getenv("SHIELD_MODE", "observe").lower())
+	fail_policy: str = field(default_factory=lambda: os.getenv("SHIELD_FAIL_POLICY", "route").lower())
+	database_path: Path = field(
+		default_factory=lambda: Path(os.getenv("SHIELD_DATABASE_PATH", "./data/shield.db"))
+	)
+	internal_signing_key: str = field(
+		default_factory=lambda: os.getenv("SHIELD_INTERNAL_SIGNING_KEY", "")
+	)
+	admin_password: str = field(default_factory=lambda: os.getenv("SHIELD_ADMIN_PASSWORD", ""))
+	admin_totp_secret: str = field(default_factory=lambda: os.getenv("SHIELD_ADMIN_TOTP_SECRET", ""))
+	admin_session_key: str = field(default_factory=lambda: os.getenv("SHIELD_ADMIN_SESSION_KEY", ""))
+	admin_session_ttl: int = field(default_factory=lambda: _integer("SHIELD_ADMIN_SESSION_TTL", 3600))
+	cookie_secure: bool = field(default_factory=lambda: _boolean("SHIELD_COOKIE_SECURE", True))
+	turnstile_site_key: str = field(default_factory=lambda: os.getenv("SHIELD_TURNSTILE_SITE_KEY", ""))
+	turnstile_secret_key: str = field(default_factory=lambda: os.getenv("SHIELD_TURNSTILE_SECRET_KEY", ""))
+	turnstile_verify_url: str = field(
+		default_factory=lambda: os.getenv(
+			"SHIELD_TURNSTILE_VERIFY_URL",
+			"https://challenges.cloudflare.com/turnstile/v0/siteverify",
+		)
+	)
+	geo_url_template: str = field(
+		default_factory=lambda: os.getenv("SHIELD_GEO_URL_TEMPLATE", "https://ipwho.is/{ip}")
+	)
+	geo_cache_ttl: int = field(default_factory=lambda: _integer("SHIELD_GEO_CACHE_TTL", 86400))
+	proxy_timeout_seconds: int = field(default_factory=lambda: _integer("SHIELD_PROXY_TIMEOUT_SECONDS", 10))
+	max_body_bytes: int = field(default_factory=lambda: _integer("SHIELD_MAX_BODY_BYTES", 4_194_304))
+	trusted_proxy_cidrs: tuple[str, ...] = field(
+		default_factory=lambda: tuple(
+			x.strip() for x in os.getenv("SHIELD_TRUSTED_PROXY_CIDRS", "127.0.0.1/32,::1/128").split(",") if x.strip()
+		)
+	)
+	upstreams: dict[str, str] = field(default_factory=_upstreams)
+	allow_private_geo: bool = field(default_factory=lambda: _boolean("SHIELD_ALLOW_PRIVATE_GEO", False))
+
+	def validate(self) -> None:
+		if self.mode not in {"bypass", "observe", "enforce"}:
+			raise ValueError("SHIELD_MODE must be bypass, observe, or enforce")
+		if self.fail_policy not in {"open", "closed", "route"}:
+			raise ValueError("SHIELD_FAIL_POLICY must be open, closed, or route")
+		if self.mode != "bypass" and len(self.internal_signing_key) < 32:
+			raise ValueError("SHIELD_INTERNAL_SIGNING_KEY must be at least 32 characters")
+
+
+settings = Settings()

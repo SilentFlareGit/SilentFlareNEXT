@@ -1,0 +1,24 @@
+services:
+  shield:
+    build:
+      context: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:9080:8080"
+    volumes:
+      - shield-data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 15s
+
+volumes:
+  shield-data:

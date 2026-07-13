@@ -11,6 +11,7 @@ This file is the lightweight entry point for AI agents and maintainers. Read onl
 | Public blog routes, Ghost Content API, layouts, content utilities, coding style | `docs/agent-architecture.md` |
 | Auth, Accounts, public sessions, profile, comments, Admin users/comments | `docs/agent-auth-account-admin.md` |
 | `/bots/`, Telegram approval, Telegram Chat Bot console, DB backup bot | `docs/agent-bot-management.md` |
+| Independent SilentFlare Shield gateway, rules, risk events, deployment | `docs/SILENTFLARE_SHIELD.md` |
 | FNS1 deployment, GitHub Actions, webhooks, production verification, rollback | `docs/agent-deployment-fns1.md` |
 | Secrets, environment-variable handling, allowed status checks | `docs/agent-security.md` |
 | Global debugging, local validation, Windows-machine caveats | `docs/agent-debug-playbook.md` |

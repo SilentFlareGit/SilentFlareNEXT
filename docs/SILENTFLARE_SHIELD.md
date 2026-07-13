@@ -1,0 +1,371 @@
+# SilentFlare Shield Architecture and MVP
+
+## 1. Repository Analysis and Boundaries
+
+SilentFlareNEXT is an Astro static renderer backed by the Ghost Content API. Ghost owns posts, tags, authors, SEO metadata, and `/content/` media. The public identity surfaces are Astro/Svelte applications, while `server/api/app.py` is the independent FastAPI authority for credentials, opaque account sessions, CSRF, profiles, comments, and Admin data actions. Production static releases and FastAPI are deployed separately on FNS1, and Nginx maps the public subdomains to their respective origins.
+
+Those boundaries make an in-repository Astro middleware or a collection of FastAPI endpoint checks the wrong design. Shield is therefore implemented under the standalone `shield/` root. It has its own process, data files, migrations, administration surface, security secrets, and deployment lifecycle. The existing application and Ghost code are unchanged.
+
+```text
+Internet client
+    |
+Cloudflare: TLS, WAF, bot signals, Turnstile edge
+    |
+Nginx: trusted client-IP normalization, timeouts, emergency fallback
+    |
+SilentFlare Shield: classify -> rate -> score -> rule -> decide -> sign
+    |
+    +--> blog/accounts/admin static Astro origin
+    +--> api FastAPI origin
+    +--> cms Ghost origin
+```
+
+Shield never reads passwords, raw TOTP secrets from the account system, Turnstile response tokens after verification, or complete session tokens. It stores keyed digests for correlation and stable user IDs only when an optional adapter supplies them. It never writes risk columns into Ghost or account tables.
+
+## 2. Recommended Technology Stack
+
+| Layer | MVP choice | Scale-out choice | Reason |
+| --- | --- | --- | --- |
+| Gateway/API | Python 3.13, FastAPI, Uvicorn, HTTPX | Multiple stateless gateway replicas | Matches the existing operational language while remaining a separate service |
+| Persistence | SQLite in WAL mode | PostgreSQL 16 | Simple FNS1 MVP, transactional rules and audit data, clean migration path |
+| Counters | SQLite transactional counters | Redis 7 cluster | Exact single-node behavior now; low-latency distributed token buckets later |
+| IP intelligence | Trusted Cloudflare headers plus cache-backed provider adapter | Multiple commercial feeds with circuit breakers | Avoids blocking on one vendor and preserves cached decisions |
+| Admin UI | Independent HTML/CSS/JavaScript application served by Shield | SvelteKit static bundle consuming the same APIs | Small attack surface for the MVP, no coupling to blog assets |
+| Edge | Cloudflare and Nginx | Cloudflare Workers prefilter where justified | Preserves origin control and supports outer-edge volumetric protection |
+| Packaging | Docker Compose | systemd-managed containers or Kubernetes | Independent start, stop, upgrade, rollback, and uninstall |
+
+## 3. Directory Structure
+
+```text
+shield/
+  app/
+    config.py             environment-only runtime configuration
+    database.py           migrations, transactions, audit helpers
+    geo.py                Cloudflare/provider IP intelligence and cache
+    main.py               gateway, admin API, challenge, proxy, health
+    rate_limit.py         fixed, sliding, and token-bucket policies
+    risk.py               configurable score and risk bands
+    rules.py              list matching and JSON rule evaluation
+    security.py           HMAC headers, signed cookies, TOTP
+  adapters/
+    fastapi.py            optional header-verification helper
+  migrations/
+    0001_initial.sql
+    0002_correlation_and_moderation.sql
+    0003_response_rate_policies.sql
+    0004_immutable_rule_versions.sql
+  nginx/
+    silentflare-shield.conf
+  static/
+    index.html
+    app.css
+    app.js
+    challenge.html
+  tests/
+    test_mvp.py
+  .env.example
+  Dockerfile
+  docker-compose.yml
+  requirements.txt
+```
+
+## 4. Independent Database Design
+
+The MVP schema is normalized around Shield-owned facts:
+
+| Table | Purpose and retention |
+| --- | --- |
+| `settings` | Version-neutral runtime values such as global mode and risk weights; secrets are forbidden |
+| `access_lists` | Scoped temporary/permanent allow and deny entries with creator, note, and expiry |
+| `rules` | Current rule definition, priority, mode, enabled state, version, and hit count |
+| `rule_versions` | Immutable rule snapshots used for history and rollback |
+| `rate_policies` | Route/dimension/algorithm budgets and escalation action |
+| `rate_counters` | Short-lived counter state; a cleanup job may remove expired windows |
+| `ip_intel` | Masked display IP, keyed IP digest, location/network attributes, first/last seen, cache expiry |
+| `device_risk` | Pseudonymous device signal summary; never a sole blocking authority |
+| `identity_relations` | Keyed IP/account/device/session digests for association counts and graph analysis |
+| `bans` | Typed restrictions, creator, reason, expiry, revocation actor, and revocation reason |
+| `risk_events` | Redacted request decision record, reasons, matched rules, actions, review state, and trace ID |
+| `content_reviews` | Content digest, signals, risk, action, and review state; not a copy of Ghost content |
+| `alert_configs` | Encrypted delivery endpoints and thresholds; production encryption key remains outside the DB |
+| `audit_log` | Append-only administrative actions protected by no-update/no-delete triggers |
+
+PostgreSQL production evolution should add row partitioning for `risk_events`, native `inet/cidr` columns, JSONB indexes, table-level audit permissions, and a separate retention worker. Redis keys should contain keyed identity digests, never raw email, API keys, or session tokens.
+
+Recommended retention is 30 days for detailed risk events, 180 days for aggregate network facts, policy-defined ban history, and at least one year for administrative audit records. Legal/privacy requirements override these defaults.
+
+## 5. Rule Engine Design
+
+Rules are ordered by ascending priority and then ID. Conditions use a typed JSON expression tree with `all` and `any` groups. Leaf operators are `eq`, `neq`, `in`, `not_in`, `contains`, `glob`, `gte`, `lte`, and `exists`.
+
+```json
+{
+  "all": [
+    {"field": "country", "op": "not_in", "value": ["TW", "US"]},
+    {"field": "ip_type", "op": "eq", "value": "datacenter"},
+    {"field": "account_age_hours", "op": "lte", "value": 24},
+    {"field": "requests_60s", "op": "gte", "value": 30}
+  ]
+}
+```
+
+Supported condition fields are host, path, method, IP/CIDR list result, ASN, country, region, IP type and flags, account status and age, email verification, 2FA state, device state, session state, user agent, rate facts, score, and time window. Fields unavailable to the MVP remain absent rather than guessed.
+
+Actions are `allow`, `block`, `log`, `delay`, `rate_limit`, `turnstile`, `email_verify`, `reauthenticate`, `revoke_session`, `read_only`, `freeze_account`, `manual_review`, `temporary_ban`, and `notify_admin`. Actions requiring business authority emit a signed decision or webhook command; Shield does not update the account database.
+
+The MVP implements ordered evaluation, enable/disable state, observe/enforce state, nested expressions, simulation against recent events, immutable version snapshots, hit counts, and a global-block guard. The next phase adds update/copy/rollback endpoints, four-eyes approval for high-impact rules, scheduled activation, and shadow comparison between versions.
+
+Before publishing a high-risk rule, the control plane must simulate at least the previous 24 hours, display matched request and known-good counts, reject an unscoped global block, store a new version, and require an owner confirmation. The previous successfully loaded rules remain in memory when parsing or loading fails.
+
+## 6. Risk Scoring Design
+
+Every evaluated request receives a bounded integer score from 0 to 100. The default additive weights are stored as code defaults and can be overridden through the `risk_weights` setting.
+
+| Signal | Default weight |
+| --- | ---: |
+| VPN | +18 |
+| Proxy | +20 |
+| Tor | +35 |
+| Data center | +15 |
+| Known malicious IP | +50 |
+| New device | +8 |
+| Automation signature | +22 |
+| Missing browser headers | +7 |
+| Abnormal Origin/Referer | +10 |
+| Rate policy exceeded | +25 |
+| Explicit deny list | force 100 |
+| Explicit allow list | force 0 and allow |
+
+Future account signals include impossible travel, new-country session use, password failures, account age, email domain quality/MX, verification state, 2FA state, multi-account correlation, refresh-token replay, and positive historical behavior. A device fingerprint can add evidence but cannot independently block.
+
+```text
+0-19   normal    allow
+20-39  observe   allow and record
+40-59  verify    require Turnstile or stronger proof
+60-79  restrict  delay, rate limit, temporary restriction, or review
+80-100 block     deny and create a high-risk event
+```
+
+Policy actions can override the score. An allow list is evaluated before score enforcement; owner-authenticated administration can still be subject to a separate non-bypassable safety policy.
+
+## 7. Gateway and Reverse Proxy Design
+
+Nginx sends the original `Host`, normalized client forwarding chain, and scheme to Shield. Shield accepts forwarding headers only from configured trusted proxy CIDRs, removes every inbound `X-SF-Shield-*` value, resolves the host through an explicit upstream map, evaluates the request, creates new signed headers, and proxies with bounded connection/read timeouts.
+
+Origins are never public listeners. Firewall rules should allow the origin ports only from localhost/container networking. This is essential: if users can reach an origin directly, Shield is advisory rather than a perimeter.
+
+The reference Nginx file demonstrates public blog read fallback and sensitive API fail-closed behavior. The actual FNS1 configuration should preserve its existing TLS and Cloudflare real-IP configuration. Nginx must be tested with `nginx -t` before reload.
+
+## 8. Minimal Integration with SilentFlareNEXT, Ghost, and FastAPI
+
+### SilentFlareNEXT
+
+No page or layout change is required for observe, allow, log, block, delay, or rate-limit decisions. The optional Turnstile browser adapter only needs to understand a `403` response with `action: "turnstile"`; ordinary HTML GET requests receive Shield's standalone challenge page. SilentFlareNEXT remains buildable and deployable with Shield removed.
+
+### Ghost
+
+Ghost remains the content owner and is treated as an upstream HTTP service. Shield does not use a Ghost Admin API key, alter Ghost core, or write moderation fields into Ghost tables. CMS administrator paths should be fail closed and use stricter rules than public `/content/` media reads.
+
+### FastAPI
+
+The optional `shield/adapters/fastapi.py` helper verifies the signed decision envelope for endpoints that need risk context. FastAPI continues to authenticate credentials, validate CSRF, issue/revoke sessions, and authorize account/admin actions. It must never treat a Shield allow decision as authentication.
+
+For account-aware scoring, FastAPI may expose a private, authenticated introspection endpoint returning only stable user ID, account age, email-verified boolean, 2FA boolean, role class, and session security epoch. Shield caches that minimal metadata. Session revocation/freeze actions are sent to a private FastAPI webhook with request ID, stable user/session digest, reason, expiry, timestamp, and HMAC signature. No business table access is granted to Shield.
+
+## 9. Administration Application Design
+
+The independent English console follows SilentFlare's pale blue/white visual language while using a denser security-operations layout. It is not embedded in the blog. The responsive navigation includes:
+
+```text
+Overview                 Countries & regions      Content review
+Risk events              Rate limits              Session management
+IP intelligence          Rule engine              Administrator security
+Account risk             Ban lists                Alerts
+Device risk              Audit log                System settings
+```
+
+The implemented dashboard reports daily risk events, high-risk blocks, verification decisions, active bans, highest-risk countries, top rules, and protected service status. Events, IP cache, access lists, rate policies, rules, bans, risk-model settings, and audit records have working data views. Account, device, content, session, and alert areas reserve the explicit independent API boundaries required by later phases.
+
+The console requires password plus TOTP, uses a one-hour signed HttpOnly/Secure/SameSite=Strict cookie, requires CSRF on mutations, and writes login/configuration actions to the append-only audit table. Production should additionally place the console behind Cloudflare Access, restrict source networks, rotate the independent session key, and add role tiers (`viewer`, `analyst`, `rule_admin`, `owner`). Only the owner can change global bypass or publish high-impact rules.
+
+## 10. API Route Design
+
+Implemented routes:
+
+| Method and path | Purpose |
+| --- | --- |
+| `GET /__shield/health/live` | Process liveness without dependency checks |
+| `GET /__shield/health/ready` | Database readiness and active mode |
+| `POST /__shield/challenge/verify` | Verify Turnstile and issue a short, IP/UA-bound proof |
+| `POST /__shield/api/admin/login` | Password plus TOTP admin login |
+| `GET /__shield/api/admin/session` | Admin session and CSRF state |
+| `POST /__shield/api/admin/logout` | Revoke browser cookie |
+| `GET /__shield/api/admin/overview` | Dashboard aggregates |
+| `GET /__shield/api/admin/events` | Filter-ready recent risk events |
+| `GET /__shield/api/admin/intel` | Cached redacted IP intelligence |
+| `GET/POST/DELETE /__shield/api/admin/lists...` | List administration |
+| `GET/POST /__shield/api/admin/rules` | Rule list and guarded create |
+| `POST /__shield/api/admin/rules/test` | Replay a rule against recent event summaries |
+| `GET /__shield/api/admin/rate-policies` | Effective rate policy list |
+| `GET/PUT /__shield/api/admin/settings/risk` | Validated, audited score weights and thresholds |
+| `GET/POST /__shield/api/admin/bans` | Ban list and creation |
+| `POST /__shield/api/admin/bans/{id}/revoke` | Audited ban revocation |
+| `GET /__shield/api/admin/audit` | Append-only audit history |
+| `POST /__shield/api/admin/mode` | Audited bypass/observe/enforce switch |
+
+Planned control/data APIs are `/rules/{id}`, `/rules/{id}/versions`, `/rules/{id}/rollback`, `/events/{id}/review`, `/correlations/{type}/{digest}`, `/content/evaluate`, `/sessions/revoke`, `/alerts/test`, `/config/versions`, and `/config/rollback`. Every mutation uses an idempotency key, optimistic version, CSRF for browser calls, and an audit entry.
+
+## 11. Signed Request Header Scheme
+
+Shield always deletes public values for these names before creating its own:
+
+```text
+X-SF-Shield-Request-ID
+X-SF-Shield-Risk-Score
+X-SF-Shield-Risk-Level
+X-SF-Shield-Country
+X-SF-Shield-ASN
+X-SF-Shield-IP-Type
+X-SF-Shield-Device-ID
+X-SF-Shield-Action
+X-SF-Shield-Timestamp
+X-SF-Shield-Signature
+```
+
+The signature is lowercase hexadecimal HMAC-SHA256 using a Shield-specific key. The canonical UTF-8 payload is:
+
+```text
+UPPERCASE_METHOD\n
+RAW_PATH_WITHOUT_QUERY\n
+x-sf-shield-request-id:<value>\n
+x-sf-shield-risk-score:<value>\n
+x-sf-shield-risk-level:<value>\n
+x-sf-shield-country:<value>\n
+x-sf-shield-asn:<value>\n
+x-sf-shield-ip-type:<value>\n
+x-sf-shield-device-id:<value>\n
+x-sf-shield-action:<value>\n
+x-sf-shield-timestamp:<unix-seconds>
+```
+
+The origin verifies exact method/path, constant-time signature equality, and a maximum 30-second timestamp skew. Network isolation prevents replay to an origin from the public internet. A future version can add a body digest and one-use request ID store for sensitive webhook commands.
+
+## 12. Bypass, Availability, and Failure Degradation
+
+| Condition | Public blog GET | Login/register/comment/API write | Admin/CMS |
+| --- | --- | --- | --- |
+| Mode `bypass` | Proxy, stripped/signed bypass header | Same | Same, with an optional non-bypassable edge policy |
+| Mode `observe` | Evaluate, record, never enforce | Evaluate, record, never enforce | Evaluate, record, never enforce |
+| Mode `enforce` | Enforce active policy | Enforce active policy | Enforce strict policy |
+| IP provider down | Cached/Cloudflare data, unknown attributes | Same; do not invent risk | Same |
+| Shield DB down | Bounded in-memory counters/events, then fail open | In-memory record plus fail closed with 503 | In-memory record plus fail closed with 503 |
+| Rule load error | Last known good in-memory rules | Last known good rules | Last known good rules |
+| Shield process down | Nginx named-location fallback | Nginx returns 502/503 | Nginx returns 502/503 |
+| Upstream down | Bounded 502/504 | Bounded 502/504 | Bounded 502/504 |
+
+`SHIELD_FAIL_POLICY=route` implements the recommended default inside the gateway. During a database outage, Shield retains a bounded 1,000-event memory buffer and bounded per-route counters; this is intentionally ephemeral and does not pretend that persistence succeeded. Nginx supplies the process-down fallback for blog reads. Timeouts, provider cache, WAL, last-good rules, and container health/restart policies prevent a secondary dependency from holding traffic indefinitely.
+
+The emergency switch is the audited global `bypass` mode. The out-of-process emergency procedure is to restore the original Nginx upstream for the affected hostname and reload Nginx. Uninstalling Shield consists of restoring those routes, stopping the Compose project, and retaining/exporting the Shield data volume according to policy.
+
+## 13. Docker Compose and Deployment
+
+`shield/docker-compose.yml` builds one non-root, read-only container, binds it to `127.0.0.1:9080`, mounts only the Shield data volume, drops Linux capabilities, and adds a liveness health check. `shield/nginx/silentflare-shield.conf` is a merge reference rather than a drop-in replacement for existing TLS configuration.
+
+Recommended FNS1 layout:
+
+```text
+/opt/silentflare/shield/current       versioned Shield source/release
+/opt/silentflare/shield/shared/.env   root-owned 0600 environment file
+/var/lib/docker/volumes/...           Shield database volume
+/etc/nginx/sites-available/...        host routing and fallback policy
+```
+
+Upgrade procedure: build a tagged image, run migrations against a backup, start the candidate on a second loopback port, check readiness and a proxy smoke request, atomically change the Nginx upstream, reload, observe, and retain the prior image/config for rollback. Shield deployment is separate from the Astro static release webhook and separate from manual FastAPI deployment.
+
+## 14. Environment Template
+
+The committed `shield/.env.example` documents only names and placeholders:
+
+- Mode, failure policy, database path, and timeouts.
+- Independent internal HMAC and admin-session keys.
+- Admin password and Base32 TOTP secret.
+- Dedicated Turnstile site/secret keys.
+- Cache-backed IP provider URL.
+- Trusted proxy CIDRs.
+- Explicit host-to-origin JSON map.
+
+The real `.env` must remain uncommitted, root-readable only, and preferably supplied by a secret manager. Values must never appear in logs or admin API responses. Production must keep `SHIELD_COOKIE_SECURE=true`.
+
+## 15. Database Migrations
+
+Migrations are ordered SQL files recorded in `schema_migrations`. Startup applies each file and its version marker in one `BEGIN IMMEDIATE` transaction under an application lock. SQLite uses WAL and foreign keys. `0001_initial.sql` creates the gateway/control tables and default policies; `0002_correlation_and_moderation.sql` adds pseudonymous relation, device, moderation, and alert structures; `0003_response_rate_policies.sql` makes 404 scanning response-aware; and `0004_immutable_rule_versions.sql` protects rule history from update or deletion.
+
+Before production migration:
+
+1. Stop writes or create a consistent SQLite online backup.
+2. Record the image and schema version without printing secrets.
+3. Apply migrations to a copy and run the test suite.
+4. Start the candidate and verify readiness.
+5. Roll back the image and database backup together if migration validation fails.
+
+Never edit an applied migration. Add a new forward migration and, for destructive evolution, a separately tested rollback procedure.
+
+## 16. Test Strategy
+
+The included unit suite covers canonical header signing, method/path binding, TOTP verification, CIDR matching, combined scoring, nested rule conditions, migrations, and the default login rate policy.
+
+Required CI layers:
+
+1. Static: Python compilation, formatting/lint, dependency audit, secret scan, and container scan.
+2. Unit: IPv4/IPv6/CIDR, every rule operator, score boundaries, rate algorithms, TOTP windows, HMAC tampering, expiry, and redaction.
+3. Integration: fake IP provider, fake Turnstile, SQLite outage, stale cache, upstream timeout, spoofed Shield headers, signed header verification, and fail matrix.
+4. Proxy: preserve status/body/cookies/query, remove hop-by-hop headers, streaming, request size limits, and all five Host mappings.
+5. Security: admin brute-force, CSRF, cookie flags, rule global-lockout guard, SSRF host rejection, traversal, XSS in event/admin fields, replay, and audit immutability.
+6. Performance: p50/p95/p99 latency, token-bucket contention, WAL growth, provider circuit breaker, and 10x bursts.
+7. Deployment: container health, graceful stop, second-port upgrade, Nginx fail-open blog read, fail-closed sensitive request, bypass, and rollback.
+
+Run the MVP checks from `shield/`:
+
+```powershell
+python -m compileall app adapters tests
+python -m unittest discover -s tests -v
+docker compose config
+```
+
+## 17. Phased Development Plan
+
+### Phase 0: Perimeter and Observation
+
+Deploy the implemented MVP on loopback, connect one hostname, keep observe mode, verify signed-header stripping, establish dashboards, tune IP cache and rate budgets, and measure added latency/error rate.
+
+### Phase 1: Narrow Enforcement
+
+Enforce explicit IP/CIDR/ASN/country lists, login/registration/comment/API frequency policies, Turnstile, temporary IP bans, and high-risk events. Add fake-provider/Turnstile integration tests and rule update/copy/rollback APIs.
+
+### Phase 2: Account, Session, and Device Adapters
+
+Add private FastAPI metadata introspection and revocation webhooks, session replay epochs, impossible-travel logic, account/device relation counts, email-domain/MX reputation, and minimal browser signal collection with consent/retention review.
+
+### Phase 3: Content and Analyst Workflow
+
+Add content evaluation for usernames/profiles/comments, URL/domain reputation, duplicate detection, sanitization signals, review queues, event merging, correlation graphs, bulk actions, false-positive recovery, and redacted exports.
+
+### Phase 4: Distributed Reliability
+
+Move persistence to PostgreSQL, counters to Redis, add gateway replicas, provider adapters with health/circuit breakers, alert delivery, config signing, owner approval workflow, immutable external audit export, backups, and disaster recovery exercises.
+
+### Phase 5: Continuous Tuning
+
+Add rule quality metrics, false-positive budgets, canary rules, historical baselines, privacy reviews, threat-feed lifecycle, quarterly key rotation, load testing, and scheduled failover/bypass drills.
+
+## MVP Acceptance Criteria
+
+- Shield can start, stop, upgrade, and be removed without modifying Astro, Ghost, or FastAPI business logic.
+- All five hosts resolve only through an explicit upstream allow map.
+- Public spoofed Shield headers are removed and replaced with a valid signed envelope.
+- Observe mode never enforces; bypass mode performs no risk decision; enforce mode applies lists, scores, rules, limits, Turnstile, and temporary bans.
+- IPv4/IPv6 and CIDR inputs are validated; country/region/ASN scopes are supported.
+- Risk events and administrative actions are redacted and independently persisted.
+- Liveness, readiness, last-good rules, cache fallback, route fail policy, and Nginx public-read fallback are testable.
+- The administration console is independent, English-only, responsive, TOTP-protected, CSRF-protected, and audited.
+- The original SilentFlare website remains operational after Nginx is pointed back to its original origins and Shield is stopped.
