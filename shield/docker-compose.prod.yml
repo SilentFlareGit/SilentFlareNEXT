@@ -4,7 +4,7 @@ services:
       context: .
     restart: unless-stopped
     env_file:
-      - .env
+      - ${SHIELD_ENV_FILE:-/opt/silentflare/shield/shared/.env}
     network_mode: host
     command:
       - uvicorn
