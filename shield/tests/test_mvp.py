@@ -79,6 +79,15 @@ class ShieldMvpTests(unittest.TestCase):
 		self.assertEqual(len(hits), 1)
 		self.assertEqual(hits[0].policy_name, "Login per IP")
 
+	def test_account_subdomain_registration_prefix_is_rate_limited(self):
+		limiter = RateLimiter(self.database, KEY)
+		context = RequestContext("request", "accounts.silentflare.com", "/accounts-api/accounts/register/complete", "POST", "203.0.113.8")
+		for _ in range(3):
+			self.assertEqual(limiter.check(context), [])
+		hits = limiter.check(context)
+		self.assertEqual(hits[0].policy_name, "Registration per IP")
+		self.assertEqual(hits[0].action, "temporary_ban")
+
 	def test_404_scanner_policy_only_counts_404_responses(self):
 		limiter = RateLimiter(self.database, KEY)
 		context = RequestContext("request", "blog.silentflare.com", "/missing", "GET", "203.0.113.8")

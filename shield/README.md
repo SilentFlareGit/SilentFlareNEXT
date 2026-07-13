@@ -14,6 +14,7 @@ The MVP includes:
 - Signed, spoof-resistant internal decision headers.
 - A separate English administration console that reuses the existing SilentFlare Admin session, CSRF proof, and append-only audit records.
 - A real Security workspace inside SilentFlare Admin with live trends, contextual event actions, automated policies, service coverage, and account-risk projections synchronized from FastAPI without sharing the business database.
+- Network intelligence, access-list and ban operations, signed account/session response commands, risk-model simulation/versioning/rollback, configurable alerts, and rolling daily reports.
 - SQLite/WAL persistence, migrations, health probes, Docker Compose, and an Nginx reference configuration.
 
 The full architecture, data model, integration contract, API plan, failure matrix, and phased roadmap are in [docs/SILENTFLARE_SHIELD.md](../docs/SILENTFLARE_SHIELD.md).
@@ -64,6 +65,8 @@ docker compose config
 
 The Admin Security workspace automatically refreshes gateway telemetry every 30 seconds. Independently, Shield synchronizes a minimal account projection from a private timestamped and HMAC-signed FastAPI snapshot every minute. It stores stable keyed account hashes, usernames as operator labels, security posture, activity counts, and derived risk metadata only. It never copies passwords, email addresses, session tokens, verification material, or authentication secrets. Risk-event actions derive their IP or account target from the selected event, so normal operation does not require manually entering raw values.
 
-The workspace is also the live control plane. `Automation` edits rate thresholds, windows, responses, and ban cooldowns; `Services` enables or bypasses each hostname and selects observe/enforce plus fail-open/closed behavior; `Geography` creates scoped country/region actions from observed locations; and `Accounts` applies expiring risk adjustments to synchronized identities. A service is reported as connected only after its edge route actually traverses Shield. Staged controls do not silently rewrite Nginx or Cloudflare.
+The workspace is also the live control plane. `Automation` edits rate thresholds, windows, responses, and ban cooldowns; `Services` enables or bypasses each hostname and selects observe/enforce plus fail-open/closed behavior; `Geography` creates scoped country/region actions from observed locations; `Network` manages observed ASN access decisions and active bans; `Accounts` applies expiring risk adjustments or sends signed re-authentication, session-revocation, review, and freeze commands; `Risk model` simulates and versions score changes; and `Operations` manages alerts and daily reports. A service is reported as connected only after its edge route actually traverses Shield. Staged controls do not silently rewrite Nginx or Cloudflare.
+
+FNS1 deployment uses the committed configs in `nginx/fns1` and the idempotent scripts in `scripts`. The internal origin listener is `127.0.0.1:9081`; this avoids a proxy loop after all five public hosts point to Shield. Only public blog reads have an Nginx fail-open route. Sensitive account, API, Admin, and CMS requests remain fail closed, while CMS connection-upgrade traffic uses a documented direct-origin exception because the HTTP gateway does not terminate WebSockets.
 
 Never expose the Shield container directly to the internet. Nginx must be the only direct peer, and Cloudflare-origin authentication should remain enabled at the outer edge.

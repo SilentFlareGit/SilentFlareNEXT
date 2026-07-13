@@ -186,11 +186,13 @@ Device risk              Audit log                System settings
 
 The implemented dashboard reports daily risk events, high-risk blocks, verification decisions, active bans, highest-risk countries, top rules, and protected service status. Events, IP cache, access lists, rate policies, rules, bans, risk-model settings, and audit records have working data views. Account, device, content, session, and alert areas reserve the explicit independent API boundaries required by later phases.
 
-The primary operator experience is now the `Security` workspace inside the existing SilentFlare Admin Svelte application. It reads Shield directly through the same-origin `/__shield/api/admin/*` route while Shield continues to run as a separate process and data plane. Its Overview, Automation, Services, Geography, and Accounts views operate on live Shield data rather than manually entered target values. Operators can tune request thresholds and cooldowns, enable or bypass protection per hostname, choose observe or enforce mode and failure policy per service, publish country/region controls from observed geography, and apply expiring account risk adjustments. Recent events retain contextual six-hour IP blocking and dismissal actions.
+The primary operator experience is now the `Security` workspace inside the existing SilentFlare Admin Svelte application. It reads Shield directly through the same-origin `/__shield/api/admin/*` route while Shield continues to run as a separate process and data plane. Its Overview, Automation, Services, Geography, Network, Accounts, Risk model, and Operations views operate on live Shield data rather than manually entered target values. Operators can tune request thresholds and cooldowns, enable or bypass protection per hostname, choose observe or enforce mode and failure policy per service, publish country/region controls from observed geography, operate ASN access lists and bans, apply expiring account risk adjustments, send signed account responses, simulate/version/roll back scoring, and configure alerts. Recent events retain contextual six-hour IP blocking and dismissal actions.
 
 Only a hostname whose edge route actually points to Shield is marked `connected`; a configured but unrouted hostname is `staged`. Enabling a staged service prepares its data-plane policy but does not pretend to rewrite Nginx or Cloudflare. This distinction prevents a control-plane toggle from giving a false protection signal. Rate-policy responses are applied automatically by the gateway: for example, `5 comments / 1 minute -> temporary ban / 6 hours` creates an expiring correlated-session ban when the sixth matching authenticated request is evaluated in enforce mode, with IP fallback for anonymous traffic. Repeated over-limit requests reuse the active ban instead of generating duplicate records.
 
 Account synchronization is a bounded projection rather than database coupling. A Shield background task requests the private FastAPI account snapshot every minute with a timestamped HMAC signature and upserts only a keyed account ID, an operator label, role, country code, verification/2FA/disabled flags, timestamps, activity counts, and derived risk metadata into its own database. Passwords, email addresses, raw sessions, verification data, and business-table access are excluded. A failed synchronization leaves the last successful projection available and does not interrupt gateway traffic. Opening the Admin Security workspace also performs a freshness check, while the explicit sync command forces immediate reconciliation.
+
+Account responses use a separate private `POST /internal/shield/respond` FastAPI contract. Shield signs the method, fixed path, timestamp, command ID, action, and stable account ID with the sync secret. FastAPI rejects stale or altered commands, stores an idempotency record, and remains the only component allowed to revoke sessions or disable an account. Shield stores only command state and its keyed account correlation; it never receives raw session tokens.
 
 The console does not issue a second password, TOTP secret, or Shield-specific administrator session. Each console request forwards only the existing `sf_bot_session` cookie to the private FastAPI `GET /auth/me` endpoint and requires `bot.id` to equal `SilentFlare Admin`. Mutations reuse that Admin session's CSRF value. When the existing Admin session expires, is revoked, or the Owner disables web login, Shield access stops immediately. Production should additionally restrict source networks and add role tiers (`viewer`, `analyst`, `rule_admin`, `owner`). Only the owner can change global bypass or publish high-impact rules.
 
@@ -212,19 +214,26 @@ Implemented routes:
 | `PUT /__shield/api/admin/rate-policies/{id}` | Tune an automated threshold, window, response, and cooldown |
 | `POST/DELETE /__shield/api/admin/geo-policies...` | Publish or disable country/region controls |
 | `PUT /__shield/api/admin/accounts/{digest}/risk` | Apply, replace, or clear an expiring manual risk adjustment |
+| `POST /__shield/api/admin/accounts/{digest}/response` | Send a signed re-authenticate, revoke-session, review, or freeze command to FastAPI |
 | `GET /__shield/api/admin/events` | Filter-ready recent risk events |
 | `GET /__shield/api/admin/intel` | Cached redacted IP intelligence |
 | `GET/POST/DELETE /__shield/api/admin/lists...` | List administration |
 | `GET/POST /__shield/api/admin/rules` | Rule list and guarded create |
 | `POST /__shield/api/admin/rules/test` | Replay a rule against recent event summaries |
 | `GET /__shield/api/admin/rate-policies` | Effective rate policy list |
-| `GET/PUT /__shield/api/admin/settings/risk` | Validated, audited score weights and thresholds |
+| `GET/PUT /__shield/api/admin/settings/risk` | Validated, audited score weights and thresholds with version creation |
+| `POST /__shield/api/admin/settings/risk/simulate` | Replay candidate weights and thresholds against up to 1,000 recent events |
+| `POST /__shield/api/admin/settings/risk/rollback/{version}` | Restore an audited risk-model version |
 | `GET/POST /__shield/api/admin/bans` | Ban list and creation |
 | `POST /__shield/api/admin/bans/{id}/revoke` | Audited ban revocation |
 | `GET /__shield/api/admin/audit` | Append-only audit history |
+| `PUT /__shield/api/admin/alerts/config` | Configure high-risk, surge, and daily-report thresholds |
+| `POST /__shield/api/admin/alerts/test` | Queue and optionally deliver a redacted test alert |
+| `POST /__shield/api/admin/alerts/{id}/dismiss` | Dismiss an operator alert |
+| `GET /__shield/api/admin/reports/daily` | Return and persist the rolling 24-hour report |
 | `POST /__shield/api/admin/mode` | Audited bypass/observe/enforce switch |
 
-Planned control/data APIs are `/rules/{id}`, `/rules/{id}/versions`, `/rules/{id}/rollback`, `/events/{id}/review`, `/correlations/{type}/{digest}`, `/content/evaluate`, `/sessions/revoke`, `/alerts/test`, `/config/versions`, and `/config/rollback`. Every mutation uses an idempotency key, optimistic version, CSRF for browser calls, and an audit entry.
+Planned control/data APIs are `/rules/{id}`, `/rules/{id}/versions`, `/rules/{id}/rollback`, `/events/{id}/review`, `/correlations/{type}/{digest}`, and `/content/evaluate`. Browser mutations require the delegated Admin CSRF proof and produce audit entries; private response commands are signed and idempotent.
 
 ## 11. Signed Request Header Scheme
 
@@ -280,7 +289,9 @@ The emergency switch is the audited global `bypass` mode. The out-of-process eme
 
 ## 13. Docker Compose and Deployment
 
-`shield/docker-compose.yml` is the portable development deployment. `shield/docker-compose.prod.yml` uses Linux host networking but overrides Uvicorn to bind only `127.0.0.1:9080`; this lets Shield reach the existing FNS1 origins that listen only on host loopback without exposing Shield publicly. Both variants run a non-root, read-only container, mount only the Shield data volume, and drop Linux capabilities. `shield/nginx/silentflare-shield.conf` is a merge reference rather than a drop-in replacement for existing TLS configuration.
+`shield/docker-compose.yml` is the portable development deployment. `shield/docker-compose.prod.yml` uses Linux host networking but overrides Uvicorn to bind only `127.0.0.1:9080`; this lets Shield reach the existing FNS1 origins without exposing Shield publicly. Both variants run a non-root, read-only container, mount only the Shield data volume, and drop Linux capabilities. `shield/nginx/silentflare-shield.conf` remains a generic merge reference. The production FNS1 files in `shield/nginx/fns1` are installable, versioned configurations.
+
+FNS1 uses an internal Nginx origin listener on `127.0.0.1:9081` for the Astro account/admin/blog renderers and Ghost HTTP traffic. Public Nginx sends the five protected Host values to Shield on `127.0.0.1:9080`; Shield then selects `9081` or FastAPI on `9010`. This prevents the routing loop that would occur if a Shield upstream pointed back to the public port. The blog has a one-second connection timeout and named fail-open origin. Accounts, API, Admin, and CMS fail closed. CMS Upgrade requests bypass the HTTP-only Shield gateway and proxy directly to Ghost; ordinary CMS HTTP traffic is still evaluated.
 
 Recommended FNS1 layout:
 
@@ -292,6 +303,16 @@ Recommended FNS1 layout:
 ```
 
 Upgrade procedure: build a tagged image, run migrations against a backup, start the candidate on a second loopback port, check readiness and a proxy smoke request, atomically change the Nginx upstream, reload, observe, and retain the prior image/config for rollback. Shield deployment is separate from the Astro static release webhook and separate from manual FastAPI deployment.
+
+The FNS1 helper sequence is:
+
+```bash
+bash shield/scripts/configure-fns1-env.sh
+bash shield/scripts/install-fns1-routing.sh
+docker compose -f shield/docker-compose.prod.yml -p silentflare-shield up -d --build
+```
+
+The environment configurator copies the existing Turnstile values on the host without printing them, connects all five hostnames, raises the CMS request-body budget to 50 MiB, and points Shield at the internal origins. The routing installer backs up every replaced file under `/etc/nginx/shield-backups`, validates with `nginx -t`, and automatically restores the backup if validation fails.
 
 ## 14. Environment Template
 
@@ -309,7 +330,7 @@ The real `.env` must remain uncommitted, root-readable only, and preferably supp
 
 ## 15. Database Migrations
 
-Migrations are ordered SQL files recorded in `schema_migrations`. Startup applies each file and its version marker in one `BEGIN IMMEDIATE` transaction under an application lock. SQLite uses WAL and foreign keys. `0001_initial.sql` creates the gateway/control tables and default policies; `0002_correlation_and_moderation.sql` adds pseudonymous relation, device, moderation, and alert structures; `0003_response_rate_policies.sql` makes 404 scanning response-aware; and `0004_immutable_rule_versions.sql` protects rule history from update or deletion.
+Migrations are ordered SQL files recorded in `schema_migrations`. Startup applies each file and its version marker in one `BEGIN IMMEDIATE` transaction under an application lock. SQLite uses WAL and foreign keys. `0001_initial.sql` creates the gateway/control tables and default policies; `0002_correlation_and_moderation.sql` adds pseudonymous relation, device, moderation, and alert structures; `0003_response_rate_policies.sql` makes 404 scanning response-aware; `0004_immutable_rule_versions.sql` protects rule history from update or deletion; `0005_account_projections.sql` and `0006_control_plane.sql` add isolated account posture and live service/geography controls; and `0007_operations_and_response.sql` adds response commands, risk-model versions, alert policy/events, daily reports, five-host observation defaults, and the six-hour automatic comment-ban response.
 
 Before production migration:
 
@@ -323,7 +344,7 @@ Never edit an applied migration. Add a new forward migration and, for destructiv
 
 ## 16. Test Strategy
 
-The included unit suite covers canonical header signing, method/path binding, delegated Admin-session validation, CIDR matching, combined scoring, nested rule conditions, migrations, and the default login rate policy.
+The included unit suite covers canonical header signing, method/path binding, delegated Admin-session validation, CIDR matching, combined scoring, nested rule conditions, migrations, the default login rate policy, contextual bans, signed response delivery, model simulation/version/rollback, alert operations, and dashboard contracts.
 
 Required CI layers:
 
@@ -345,17 +366,17 @@ docker compose config
 
 ## 17. Phased Development Plan
 
-### Phase 0: Perimeter and Observation
+### Phase 0: Perimeter and Observation (Complete)
 
 Deploy the implemented MVP on loopback, connect one hostname, keep observe mode, verify signed-header stripping, establish dashboards, tune IP cache and rate budgets, and measure added latency/error rate.
 
-### Phase 1: Narrow Enforcement
+### Phase 1: Narrow Enforcement (Complete for FNS1 MVP)
 
 Enforce explicit IP/CIDR/ASN/country lists, login/registration/comment/API frequency policies, Turnstile, temporary IP bans, and high-risk events. Add fake-provider/Turnstile integration tests and rule update/copy/rollback APIs.
 
-### Phase 2: Account, Session, and Device Adapters
+### Phase 2: Account and Session Response Adapter (Complete for FNS1 MVP)
 
-Add private FastAPI metadata introspection and revocation webhooks, session replay epochs, impossible-travel logic, account/device relation counts, email-domain/MX reputation, and minimal browser signal collection with consent/retention review.
+The private FastAPI metadata projection and signed account/session response webhook are implemented. Remaining expansion work is session replay epochs, impossible-travel logic, account/device relation counts, email-domain/MX reputation, and minimal browser signal collection with consent/retention review.
 
 ### Phase 3: Content and Analyst Workflow
 
@@ -380,3 +401,5 @@ Add rule quality metrics, false-positive budgets, canary rules, historical basel
 - Liveness, readiness, last-good rules, cache fallback, route fail policy, and Nginx public-read fallback are testable.
 - The administration console is independent, English-only, responsive, protected by the existing SilentFlare Admin session, CSRF-protected, and audited.
 - The original SilentFlare website remains operational after Nginx is pointed back to its original origins and Shield is stopped.
+- All five production hosts can traverse Shield without a public-port proxy loop, and blog reads remain available during a Shield process outage.
+- The live dashboard can operate services, geography, networks, bans, accounts, score versions, alerts, and reports without raw target-value forms.

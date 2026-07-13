@@ -7,11 +7,11 @@ from pathlib import Path
 
 
 DEFAULT_UPSTREAMS = {
-    "blog.silentflare.com": "http://host.docker.internal:4321",
-    "accounts.silentflare.com": "http://host.docker.internal:4321",
-    "api.silentflare.com": "http://host.docker.internal:9010",
-    "admin.silentflare.com": "http://host.docker.internal:4321",
-    "cms.silentflare.com": "http://host.docker.internal:2368",
+	"blog.silentflare.com": "http://host.docker.internal:4321",
+	"accounts.silentflare.com": "http://host.docker.internal:4321",
+	"api.silentflare.com": "http://host.docker.internal:9010",
+	"admin.silentflare.com": "http://host.docker.internal:4321",
+	"cms.silentflare.com": "http://host.docker.internal:2368",
 }
 
 
@@ -35,6 +35,10 @@ def _upstreams() -> dict[str, str]:
 	if not isinstance(parsed, dict) or not parsed:
 		raise ValueError("SHIELD_UPSTREAMS_JSON must be a non-empty JSON object")
 	return {str(host).lower(): str(url).rstrip("/") for host, url in parsed.items()}
+
+
+def _host_set(name: str, default: str) -> frozenset[str]:
+	return frozenset(value.strip().lower() for value in os.getenv(name, default).split(",") if value.strip())
 
 
 @dataclass(frozen=True)
@@ -62,6 +66,12 @@ class Settings:
 			"http://host.docker.internal:9010/internal/shield/accounts",
 		)
 	)
+	account_response_url: str = field(
+		default_factory=lambda: os.getenv(
+			"SHIELD_ACCOUNT_RESPONSE_URL",
+			"http://host.docker.internal:9010/internal/shield/respond",
+		)
+	)
 	sync_secret: str = field(default_factory=lambda: os.getenv("SHIELD_SYNC_SECRET", ""))
 	account_sync_interval: int = field(
 		default_factory=lambda: _integer("SHIELD_ACCOUNT_SYNC_INTERVAL", 60)
@@ -87,6 +97,10 @@ class Settings:
 		)
 	)
 	upstreams: dict[str, str] = field(default_factory=_upstreams)
+	connected_hosts: frozenset[str] = field(
+		default_factory=lambda: _host_set("SHIELD_CONNECTED_HOSTS", "api.silentflare.com")
+	)
+	alert_webhook_url: str = field(default_factory=lambda: os.getenv("SHIELD_ALERT_WEBHOOK_URL", ""))
 	allow_private_geo: bool = field(default_factory=lambda: _boolean("SHIELD_ALLOW_PRIVATE_GEO", False))
 
 	def validate(self) -> None:

@@ -83,6 +83,21 @@ $key = Join-Path $env:USERPROFILE '.ssh\hetzner_cx23'
 ssh -i $key root@167.233.129.17 'nginx -t && systemctl reload nginx'
 ```
 
+## Shield Perimeter Routing
+
+The five Shield-protected hosts use the versioned FNS1 files under `shield/nginx/fns1`. Public Nginx forwards ordinary traffic to Shield on `127.0.0.1:9080`. Shield forwards blog, accounts, Admin, and CMS HTTP traffic to the internal Nginx origin on `127.0.0.1:9081`, and API traffic to FastAPI on `127.0.0.1:9010`. Never point a Shield upstream at public port 80 or 443; that creates a proxy loop once the edge route is active.
+
+After the repository checkout has the intended commit, configure and install with:
+
+```bash
+bash /opt/silentflare/app/shield/scripts/configure-fns1-env.sh
+bash /opt/silentflare/app/shield/scripts/install-fns1-routing.sh
+```
+
+The environment script copies existing host Turnstile settings without printing them. The routing script creates timestamped backups under `/etc/nginx/shield-backups`, runs `nginx -t`, reloads only on success, and restores the previous files on error. Public blog reads have the only process-down fail-open route. Account, API, Admin, and CMS requests fail closed; CMS connection upgrades use a direct Ghost exception because the current gateway is HTTP-only.
+
+When `server/api/app.py` changes, deploy and restart FastAPI before enabling Shield account-response buttons. Then deploy/rebuild Shield so migration `0007_operations_and_response.sql` and the matching signed-command implementation become active together.
+
 ## GitHub Actions Deployment
 
 Workflow: `.github/workflows/build.yml`

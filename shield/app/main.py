@@ -9,7 +9,7 @@ import sqlite3
 import time
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -104,6 +104,25 @@ class AccountRiskInput(BaseModel):
 	duration_seconds: int = Field(default=86400, ge=300, le=2592000)
 
 
+class AccountResponseInput(BaseModel):
+	action: str = Field(pattern=r"^(reauthenticate|revoke_sessions|freeze_account|manual_review|notify_admin)$")
+	reason: str = Field(min_length=3, max_length=300)
+
+
+class RiskModelInput(BaseModel):
+	weights: dict[str, int]
+	thresholds: dict[str, int]
+	note: str = Field(default="", max_length=300)
+
+
+class AlertConfigInput(BaseModel):
+	enabled: bool
+	minimum_score: int = Field(ge=40, le=100)
+	high_risk_per_5m: int = Field(ge=1, le=100000)
+	blocked_per_5m: int = Field(ge=1, le=100000)
+	daily_report_hour: int = Field(ge=0, le=23)
+
+
 def build_services(config: Settings):
 	database = Database(config.database_path, ROOT / "migrations")
 	database.migrate()
@@ -130,10 +149,16 @@ async def lifespan(app: FastAPI):
 	app.state.degraded_counters = {}
 	app.state.degraded_events = []
 	app.state.account_sync_task = asyncio.create_task(_account_sync_loop(app))
+	app.state.operations_task = asyncio.create_task(_operations_loop(app))
 	yield
 	app.state.account_sync_task.cancel()
+	app.state.operations_task.cancel()
 	try:
 		await app.state.account_sync_task
+	except asyncio.CancelledError:
+		pass
+	try:
+		await app.state.operations_task
 	except asyncio.CancelledError:
 		pass
 	await app.state.client.aclose()
@@ -276,18 +301,18 @@ async def _sync_account_projections(application: FastAPI, session_token: str = "
 				account_hash = stable_hash(str(user.get("id", "")), settings.internal_signing_key)
 				score, level, reasons = _account_risk(user, now)
 				connection.execute(
-					"""INSERT INTO account_projections(account_id_hash, account_label, role, country_code,
+					"""INSERT INTO account_projections(account_id_hash, account_ref, account_label, role, country_code,
 					email_verified, two_factor_enabled, disabled, created_at, last_seen_at, active_session_count,
 					comment_count, risk_score, risk_level, risk_reasons_json, last_synced_at)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-					ON CONFLICT(account_id_hash) DO UPDATE SET account_label=excluded.account_label,
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+					ON CONFLICT(account_id_hash) DO UPDATE SET account_ref=excluded.account_ref, account_label=excluded.account_label,
 					role=excluded.role, country_code=excluded.country_code, email_verified=excluded.email_verified,
 					two_factor_enabled=excluded.two_factor_enabled, disabled=excluded.disabled,
 					created_at=excluded.created_at, last_seen_at=excluded.last_seen_at,
 					active_session_count=excluded.active_session_count, comment_count=excluded.comment_count,
 					risk_score=excluded.risk_score, risk_level=excluded.risk_level,
 					risk_reasons_json=excluded.risk_reasons_json, last_synced_at=excluded.last_synced_at""",
-					(account_hash, str(user.get("username") or user.get("id") or "Unknown")[:100], str(user.get("role") or "user"),
+					(account_hash, str(user.get("id") or "")[:100], str(user.get("username") or user.get("id") or "Unknown")[:100], str(user.get("role") or "user"),
 					str(user.get("display_region_code") or "")[:8], int(bool(user.get("email_verified_at"))),
 					int(bool(user.get("totp_enabled"))), int(bool(user.get("disabled_at"))),
 					_timestamp(user.get("created_at"), now), _timestamp(user.get("last_seen_at")) or None,
@@ -309,6 +334,110 @@ async def _account_sync_loop(application: FastAPI) -> None:
 		except Exception:
 			pass
 		await asyncio.sleep(max(30, settings.account_sync_interval))
+
+
+def _daily_report(database: Database) -> dict[str, Any]:
+	now = int(time.time())
+	report_date = datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%d")
+	since = now - 86400
+	counts = database.query(
+		"""SELECT COUNT(*) AS requests,
+		SUM(CASE WHEN actions_json LIKE '%block%' OR actions_json LIKE '%temporary_ban%' THEN 1 ELSE 0 END) AS blocked,
+		SUM(CASE WHEN risk_score >= 60 THEN 1 ELSE 0 END) AS high_risk,
+		COUNT(DISTINCT ip_hash) AS unique_ips FROM risk_events WHERE created_at >= ?""",
+		(since,),
+	)[0]
+	top_country = database.query("SELECT COALESCE(country_code, 'Unknown') AS value FROM risk_events WHERE created_at >= ? GROUP BY country_code ORDER BY COUNT(*) DESC LIMIT 1", (since,))
+	top_asn = database.query("SELECT COALESCE(asn, 'Unknown') AS value FROM risk_events WHERE created_at >= ? GROUP BY asn ORDER BY COUNT(*) DESC LIMIT 1", (since,))
+	report = {
+		"reportDate": report_date,
+		"requests": counts["requests"] or 0,
+		"blocked": counts["blocked"] or 0,
+		"highRisk": counts["high_risk"] or 0,
+		"uniqueIps": counts["unique_ips"] or 0,
+		"topCountry": top_country[0]["value"] if top_country else "Unknown",
+		"topAsn": top_asn[0]["value"] if top_asn else "Unknown",
+	}
+	database.execute(
+		"""INSERT INTO daily_reports(report_date, created_at, requests, blocked, high_risk, unique_ips,
+		top_country, top_asn, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(report_date) DO UPDATE SET created_at=excluded.created_at, requests=excluded.requests,
+		blocked=excluded.blocked, high_risk=excluded.high_risk, unique_ips=excluded.unique_ips,
+		top_country=excluded.top_country, top_asn=excluded.top_asn, detail_json=excluded.detail_json""",
+		(report_date, now, report["requests"], report["blocked"], report["highRisk"], report["uniqueIps"], report["topCountry"], report["topAsn"], json.dumps(report, separators=(",", ":"))),
+	)
+	return report
+
+
+def _queue_daily_report_alert(database: Database, report: dict[str, Any]) -> None:
+	config = database.query("SELECT enabled, daily_report_hour FROM alert_config WHERE id = 1")
+	now = datetime.now(timezone.utc)
+	if not config or not config[0]["enabled"] or now.hour != int(config[0]["daily_report_hour"]):
+		return
+	day_start = int(now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+	detail = (
+		f"{report['requests']} requests, {report['highRisk']} high risk, "
+		f"{report['blocked']} blocked, {report['uniqueIps']} unique sources"
+	)
+	database.execute(
+		"""INSERT INTO alert_events(created_at, kind, severity, title, detail)
+		SELECT ?, 'daily_report', 'info', ?, ? WHERE NOT EXISTS (
+			SELECT 1 FROM alert_events WHERE kind = 'daily_report' AND created_at >= ?
+		)""",
+		(int(now.timestamp()), f"Shield daily report: {report['reportDate']}", detail, day_start),
+	)
+
+
+async def _deliver_alerts(application: FastAPI) -> None:
+	if not settings.alert_webhook_url:
+		return
+	rows = application.state.database.query("SELECT id, created_at, kind, severity, title, detail FROM alert_events WHERE delivered_at IS NULL ORDER BY id LIMIT 20")
+	for row in rows:
+		try:
+			response = await application.state.client.post(settings.alert_webhook_url, json=row)
+			response.raise_for_status()
+			application.state.database.execute("UPDATE alert_events SET delivered_at = ?, delivery_detail = 'delivered' WHERE id = ?", (int(time.time()), row["id"]))
+		except httpx.HTTPError as error:
+			application.state.database.execute("UPDATE alert_events SET delivery_detail = ? WHERE id = ?", (type(error).__name__, row["id"]))
+
+
+def _aggregate_alerts(database: Database) -> None:
+	config = database.query("SELECT * FROM alert_config WHERE id = 1")
+	if not config or not config[0]["enabled"]:
+		return
+	now = int(time.time())
+	bucket = now - (now % 300)
+	counts = database.query(
+		"""SELECT SUM(CASE WHEN risk_score >= 60 THEN 1 ELSE 0 END) AS high_risk,
+		SUM(CASE WHEN actions_json LIKE '%block%' OR actions_json LIKE '%temporary_ban%' THEN 1 ELSE 0 END) AS blocked
+		FROM risk_events WHERE created_at >= ?""",
+		(now - 300,),
+	)[0]
+	for kind, value, threshold, title in (
+		("high_risk_surge", counts["high_risk"] or 0, config[0]["high_risk_per_5m"], "High-risk traffic surge"),
+		("blocked_surge", counts["blocked"] or 0, config[0]["blocked_per_5m"], "Blocked traffic surge"),
+	):
+		if value >= threshold:
+			database.execute(
+				"""INSERT INTO alert_events(created_at, kind, severity, title, detail)
+				SELECT ?, ?, 'critical', ?, ? WHERE NOT EXISTS (
+					SELECT 1 FROM alert_events WHERE kind = ? AND created_at >= ?
+				)""",
+				(now, kind, title, f"{value} events in the last five minutes (threshold {threshold})", kind, bucket),
+			)
+
+
+async def _operations_loop(application: FastAPI) -> None:
+	while True:
+		try:
+			report = _daily_report(application.state.database)
+			_queue_daily_report_alert(application.state.database, report)
+			_aggregate_alerts(application.state.database)
+			await _deliver_alerts(application)
+			application.state.database.execute("DELETE FROM rate_counters WHERE updated_at < ?", (int(time.time()) - 2592000,))
+		except Exception:
+			pass
+		await asyncio.sleep(60)
 
 
 def _mode(database: Database) -> str:
@@ -475,6 +604,14 @@ def _event(database: Database, context: RequestContext, risk: RiskResult, rules:
 			json.dumps(actions, separators=(",", ":")), json.dumps(_safe_request_summary(request, body), separators=(",", ":")),
 		),
 	)
+	config = database.query("SELECT enabled, minimum_score FROM alert_config WHERE id = 1")
+	if config and config[0]["enabled"] and risk.score >= int(config[0]["minimum_score"]):
+		database.execute(
+			"""INSERT INTO alert_events(created_at, kind, severity, title, detail, risk_event_id)
+			SELECT ?, 'high_risk_request', ?, 'High-risk request detected', ?, ?
+			WHERE NOT EXISTS (SELECT 1 FROM alert_events WHERE risk_event_id = ?)""",
+			(int(time.time()), "critical" if risk.score >= 80 else "high", f"{context.method} {context.host}{context.path} scored {risk.score}", context.request_id, context.request_id),
+		)
 
 
 def _automatic_ban(database: Database, context: RequestContext, hits: list[RateHit]) -> None:
@@ -675,10 +812,17 @@ async def admin_dashboard(request: Request, range_hours: int = 24):
 	policies = db.query("SELECT id, name, host, path_pattern AS path, method, dimension, algorithm, limit_value AS limitValue, window_seconds AS windowSeconds, cooldown_seconds AS cooldownSeconds, action, enabled FROM rate_policies ORDER BY id")
 	services = db.query("SELECT host, protection_enabled AS protectionEnabled, mode, fail_policy AS failPolicy, updated_at AS updatedAt FROM service_controls ORDER BY host")
 	for service in services:
-		service["connected"] = service["host"] == "api.silentflare.com"
+		service["connected"] = service["host"] in settings.connected_hosts
 		service["status"] = "protected" if service["connected"] and service["protectionEnabled"] else "bypassed" if service["connected"] else "staged" if service["protectionEnabled"] else "configured"
 	geo_policies = db.query("SELECT id, country_code AS countryCode, region, scope_host AS scopeHost, action, enabled, note, created_at AS createdAt, expires_at AS expiresAt FROM geo_policies ORDER BY enabled DESC, id DESC")
 	geo_options = db.query("SELECT country_code AS countryCode, region, COUNT(*) AS observations FROM ip_intel WHERE country_code IS NOT NULL GROUP BY country_code, region ORDER BY country_code, observations DESC")
+	network_intel = db.query("SELECT ip_masked AS ipMasked, country_code AS countryCode, region, city, asn, isp, organization, ip_type AS ipType, is_vpn AS isVpn, is_proxy AS isProxy, is_tor AS isTor, is_crawler AS isCrawler, is_malicious AS isMalicious, risk_score AS riskScore, first_seen_at AS firstSeenAt, last_seen_at AS lastSeenAt FROM ip_intel ORDER BY risk_score DESC, last_seen_at DESC LIMIT 100")
+	access_lists = db.query("SELECT id, kind, subject_type AS subjectType, subject_value AS subjectValue, scope_host AS scopeHost, note, created_at AS createdAt, expires_at AS expiresAt, disabled_at AS disabledAt FROM access_lists ORDER BY id DESC LIMIT 100")
+	bans = db.query("SELECT id, subject_type AS subjectType, subject_display AS subjectDisplay, restriction, reason, created_by AS createdBy, created_at AS createdAt, expires_at AS expiresAt, revoked_at AS revokedAt FROM bans ORDER BY id DESC LIMIT 100")
+	alerts = db.query("SELECT id, created_at AS createdAt, kind, severity, title, detail, status, delivered_at AS deliveredAt, delivery_detail AS deliveryDetail FROM alert_events ORDER BY id DESC LIMIT 50")
+	alert_config = db.query("SELECT enabled, minimum_score AS minimumScore, high_risk_per_5m AS highRiskPer5m, blocked_per_5m AS blockedPer5m, daily_report_hour AS dailyReportHour FROM alert_config WHERE id = 1")[0]
+	risk_model = {"weights": DEFAULT_WEIGHTS | db.setting("risk_weights", {}), "thresholds": DEFAULT_THRESHOLDS | db.setting("risk_thresholds", {}), "versions": db.query("SELECT version, created_at AS createdAt, created_by AS createdBy, note FROM risk_config_versions ORDER BY version DESC LIMIT 10")}
+	daily_report = _daily_report(db)
 	return {
 		"mode": _mode(db),
 		"rangeHours": range_hours,
@@ -692,6 +836,13 @@ async def admin_dashboard(request: Request, range_hours: int = 24):
 		"services": services,
 		"geoPolicies": geo_policies,
 		"geoOptions": geo_options,
+		"networkIntel": network_intel,
+		"accessLists": access_lists,
+		"bans": bans,
+		"alerts": alerts,
+		"alertConfig": alert_config,
+		"riskModel": risk_model,
+		"dailyReport": daily_report,
 		"sync": sync,
 		"generatedAt": now,
 	}
@@ -734,6 +885,11 @@ async def admin_service_control(host: str, payload: ServiceControlInput, request
 	host = host.lower()
 	if host not in settings.upstreams:
 		raise HTTPException(status_code=404, detail="Protected service is not configured")
+	if payload.mode == "enforce" and host not in settings.connected_hosts:
+		raise HTTPException(status_code=422, detail="This service is not connected at the edge and cannot enter enforce mode")
+	turnstile_active = request.app.state.database.query("SELECT 1 FROM rate_policies WHERE enabled = 1 AND action = 'turnstile' LIMIT 1")
+	if payload.mode == "enforce" and turnstile_active and (not settings.turnstile_site_key or not settings.turnstile_secret_key):
+		raise HTTPException(status_code=422, detail="Turnstile must be configured before enforcement")
 	now = int(time.time())
 	request.app.state.database.execute(
 		"""INSERT INTO service_controls(host, protection_enabled, mode, fail_policy, updated_at, updated_by)
@@ -743,7 +899,7 @@ async def admin_service_control(host: str, payload: ServiceControlInput, request
 		(host, int(payload.protection_enabled), payload.mode, payload.fail_policy, now, actor),
 	)
 	request.app.state.database.audit(actor, "service_control.update", "service", host, payload.model_dump())
-	return {"host": host, **payload.model_dump(), "connected": host == "api.silentflare.com"}
+	return {"host": host, **payload.model_dump(), "connected": host in settings.connected_hosts}
 
 
 @app.put("/__shield/api/admin/rate-policies/{policy_id}")
@@ -806,6 +962,35 @@ async def admin_account_risk(account_id_hash: str, payload: AccountRiskInput, re
 	return {"accountId": account_id_hash, **payload.model_dump()}
 
 
+@app.post("/__shield/api/admin/accounts/{account_id_hash}/response")
+async def admin_account_response(account_id_hash: str, payload: AccountResponseInput, request: Request):
+	actor, _ = await _admin(request, csrf=True)
+	if len(settings.sync_secret) < 32:
+		raise HTTPException(status_code=503, detail="Account response integration is not configured")
+	db = request.app.state.database
+	rows = db.query("SELECT account_ref, account_label FROM account_projections WHERE account_id_hash = ?", (account_id_hash,))
+	if not rows or not rows[0]["account_ref"]:
+		raise HTTPException(status_code=404, detail="Account response reference is unavailable; synchronize accounts first")
+	command_id = uuid.uuid4().hex
+	timestamp = str(int(time.time()))
+	canonical = f"POST\n/internal/shield/respond\n{timestamp}\n{command_id}\n{payload.action}\n{rows[0]['account_ref']}"
+	signature = hmac.new(settings.sync_secret.encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest()
+	db.execute("INSERT INTO response_commands(id, account_id_hash, action, reason, status, created_at, created_by) VALUES (?, ?, ?, ?, 'pending', ?, ?)", (command_id, account_id_hash, payload.action, payload.reason, int(time.time()), actor))
+	try:
+		response = await request.app.state.client.post(
+			settings.account_response_url,
+			headers={"Host": "api.silentflare.com", "X-SF-Shield-Timestamp": timestamp, "X-SF-Shield-Signature": signature},
+			json={"command_id": command_id, "account_id": rows[0]["account_ref"], "action": payload.action, "reason": payload.reason},
+		)
+		response.raise_for_status()
+		db.execute("UPDATE response_commands SET status = 'completed', completed_at = ?, detail = 'accepted' WHERE id = ?", (int(time.time()), command_id))
+	except httpx.HTTPError as error:
+		db.execute("UPDATE response_commands SET status = 'failed', completed_at = ?, detail = ? WHERE id = ?", (int(time.time()), type(error).__name__, command_id))
+		raise HTTPException(status_code=503, detail="Account response service is unavailable") from error
+	db.audit(actor, "account_response.execute", "account", account_id_hash[:12], {"commandId": command_id, "action": payload.action, "reason": payload.reason})
+	return {"commandId": command_id, "status": "completed", "action": payload.action}
+
+
 @app.get("/__shield/api/admin/events")
 async def admin_events(request: Request, limit: int = 100, minimum_score: int = 0):
 	await _admin(request)
@@ -831,34 +1016,102 @@ async def admin_risk_settings(request: Request):
 	return {
 		"weights": DEFAULT_WEIGHTS | db.setting("risk_weights", {}),
 		"thresholds": DEFAULT_THRESHOLDS | db.setting("risk_thresholds", {}),
+		"versions": db.query("SELECT version, created_at AS createdAt, created_by AS createdBy, note FROM risk_config_versions ORDER BY version DESC LIMIT 20"),
 	}
 
 
-@app.put("/__shield/api/admin/settings/risk")
-async def update_risk_settings(request: Request):
-	actor, _ = await _admin(request, csrf=True)
-	payload = await request.json()
-	weights = payload.get("weights")
-	thresholds = payload.get("thresholds")
-	if not isinstance(weights, dict) or set(weights) != set(DEFAULT_WEIGHTS):
+def _validated_risk_model(payload: RiskModelInput) -> tuple[dict[str, int], dict[str, int]]:
+	if set(payload.weights) != set(DEFAULT_WEIGHTS):
 		raise HTTPException(status_code=422, detail="Every risk weight is required")
-	if not isinstance(thresholds, dict) or set(thresholds) != set(DEFAULT_THRESHOLDS):
+	if set(payload.thresholds) != set(DEFAULT_THRESHOLDS):
 		raise HTTPException(status_code=422, detail="Every risk threshold is required")
-	try:
-		weights = {key: int(value) for key, value in weights.items()}
-		thresholds = {key: int(value) for key, value in thresholds.items()}
-	except (TypeError, ValueError) as error:
-		raise HTTPException(status_code=422, detail="Weights and thresholds must be integers") from error
+	weights = {key: int(value) for key, value in payload.weights.items()}
+	thresholds = {key: int(value) for key, value in payload.thresholds.items()}
 	if any(value < -100 or value > 100 for value in weights.values()):
 		raise HTTPException(status_code=422, detail="Weights must be between -100 and 100")
 	ordered = [thresholds[name] for name in ("observe", "verify", "restrict", "block")]
 	if ordered != sorted(ordered) or len(set(ordered)) != 4 or ordered[0] < 1 or ordered[-1] > 100:
 		raise HTTPException(status_code=422, detail="Thresholds must be strictly increasing between 1 and 100")
+	return weights, thresholds
+
+
+def _risk_model_simulation(database: Database, weights: dict[str, int], thresholds: dict[str, int]) -> dict[str, Any]:
+	rows = database.query("SELECT risk_score, reasons_json FROM risk_events ORDER BY created_at DESC LIMIT 1000")
+	current_weights = DEFAULT_WEIGHTS | database.setting("risk_weights", {})
+	reason_signals = {
+		"VPN network": "vpn",
+		"Proxy network": "proxy",
+		"Tor exit node": "tor",
+		"Data center network": "datacenter",
+		"Known malicious IP": "malicious_ip",
+		"Automation browser signature": "automation",
+		"Expected browser headers missing": "missing_headers",
+		"Rate policy exceeded": "rate_exceeded",
+		"Matched deny list": "deny_list",
+		"Matched allow list": "allow_list",
+	}
+	bands = {"normal": 0, "observe": 0, "verify": 0, "restrict": 0, "block": 0}
+	projected_total = 0
+	for row in rows:
+		score = int(row["risk_score"])
+		try:
+			reasons = json.loads(row["reasons_json"] or "[]")
+		except json.JSONDecodeError:
+			reasons = []
+		for reason in reasons:
+			signal = reason_signals.get(str(reason))
+			if signal:
+				score += int(weights[signal]) - int(current_weights[signal])
+		score = max(0, min(100, score))
+		projected_total += score
+		level = "normal" if score < thresholds["observe"] else "observe" if score < thresholds["verify"] else "verify" if score < thresholds["restrict"] else "restrict" if score < thresholds["block"] else "block"
+		bands[level] += 1
+	block_rate = bands["block"] / len(rows) if rows else 0
+	return {
+		"sampleSize": len(rows),
+		"bands": bands,
+		"blockRate": block_rate,
+		"projectedAverage": round(projected_total / len(rows), 1) if rows else 0,
+		"safeToPublish": len(rows) < 20 or block_rate <= 0.8,
+	}
+
+
+@app.post("/__shield/api/admin/settings/risk/simulate")
+async def simulate_risk_settings(payload: RiskModelInput, request: Request):
+	await _admin(request)
+	weights, thresholds = _validated_risk_model(payload)
+	return _risk_model_simulation(request.app.state.database, weights, thresholds)
+
+
+@app.put("/__shield/api/admin/settings/risk")
+async def update_risk_settings(payload: RiskModelInput, request: Request):
+	actor, _ = await _admin(request, csrf=True)
 	db = request.app.state.database
+	weights, thresholds = _validated_risk_model(payload)
+	simulation = _risk_model_simulation(db, weights, thresholds)
+	if not simulation["safeToPublish"]:
+		raise HTTPException(status_code=422, detail="Simulation rejected a model that would block more than 80% of sampled traffic")
+	latest = db.query("SELECT COALESCE(MAX(version), 0) AS value FROM risk_config_versions")[0]["value"]
+	version = int(latest) + 1
 	db.set_setting("risk_weights", weights, actor)
 	db.set_setting("risk_thresholds", thresholds, actor)
+	db.execute("INSERT INTO risk_config_versions(version, weights_json, thresholds_json, created_at, created_by, note) VALUES (?, ?, ?, ?, ?, ?)", (version, json.dumps(weights, separators=(",", ":")), json.dumps(thresholds, separators=(",", ":")), int(time.time()), actor, payload.note))
 	db.audit(actor, "risk_settings.update", "system", "risk", {"weights": weights, "thresholds": thresholds})
-	return {"weights": weights, "thresholds": thresholds}
+	return {"weights": weights, "thresholds": thresholds, "version": version, "simulation": simulation}
+
+
+@app.post("/__shield/api/admin/settings/risk/rollback/{version}")
+async def rollback_risk_settings(version: int, request: Request):
+	actor, _ = await _admin(request, csrf=True)
+	db = request.app.state.database
+	rows = db.query("SELECT weights_json, thresholds_json FROM risk_config_versions WHERE version = ?", (version,))
+	if not rows:
+		raise HTTPException(status_code=404, detail="Risk model version not found")
+	weights, thresholds = json.loads(rows[0]["weights_json"]), json.loads(rows[0]["thresholds_json"])
+	db.set_setting("risk_weights", weights, actor)
+	db.set_setting("risk_thresholds", thresholds, actor)
+	db.audit(actor, "risk_settings.rollback", "system", "risk", {"version": version})
+	return {"weights": weights, "thresholds": thresholds, "version": version}
 
 
 @app.get("/__shield/api/admin/lists")
@@ -962,6 +1215,42 @@ async def revoke_ban(ban_id: int, request: Request):
 async def admin_audit(request: Request, limit: int = 100):
 	await _admin(request)
 	return request.app.state.database.query("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (min(500, max(1, limit)),))
+
+
+@app.put("/__shield/api/admin/alerts/config")
+async def update_alert_config(payload: AlertConfigInput, request: Request):
+	actor, _ = await _admin(request, csrf=True)
+	now = int(time.time())
+	request.app.state.database.execute(
+		"""UPDATE alert_config SET enabled = ?, minimum_score = ?, high_risk_per_5m = ?,
+		blocked_per_5m = ?, daily_report_hour = ?, updated_at = ?, updated_by = ? WHERE id = 1""",
+		(int(payload.enabled), payload.minimum_score, payload.high_risk_per_5m, payload.blocked_per_5m, payload.daily_report_hour, now, actor),
+	)
+	request.app.state.database.audit(actor, "alert_config.update", "system", "alerts", payload.model_dump())
+	return payload.model_dump()
+
+
+@app.post("/__shield/api/admin/alerts/test")
+async def test_alert(request: Request):
+	actor, _ = await _admin(request, csrf=True)
+	alert_id = request.app.state.database.execute("INSERT INTO alert_events(created_at, kind, severity, title, detail) VALUES (?, 'test', 'info', 'Shield alert test', 'Created from SilentFlare Admin')", (int(time.time()),))
+	request.app.state.database.audit(actor, "alert.test", "alert", str(alert_id), {})
+	await _deliver_alerts(request.app)
+	return {"id": alert_id, "queued": True, "webhookConfigured": bool(settings.alert_webhook_url)}
+
+
+@app.post("/__shield/api/admin/alerts/{alert_id}/dismiss")
+async def dismiss_alert(alert_id: int, request: Request):
+	actor, _ = await _admin(request, csrf=True)
+	request.app.state.database.execute("UPDATE alert_events SET status = 'dismissed' WHERE id = ?", (alert_id,))
+	request.app.state.database.audit(actor, "alert.dismiss", "alert", str(alert_id), {})
+	return {"dismissed": True}
+
+
+@app.get("/__shield/api/admin/reports/daily")
+async def admin_daily_report(request: Request):
+	await _admin(request)
+	return _daily_report(request.app.state.database)
 
 
 @app.post("/__shield/api/admin/mode")

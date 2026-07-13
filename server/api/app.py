@@ -243,6 +243,13 @@ class UserRolePayload(BaseModel):
 	role: str
 
 
+class ShieldResponsePayload(BaseModel):
+	command_id: str
+	account_id: str
+	action: str
+	reason: str
+
+
 class SiteBackgroundPayload(BaseModel):
 	id: str
 	type: str
@@ -988,6 +995,15 @@ def ensure_account_db() -> None:
 			CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
 			CREATE INDEX IF NOT EXISTS idx_sessions_session_hash ON sessions(session_hash);
 			CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+
+			CREATE TABLE IF NOT EXISTS shield_commands (
+				id TEXT PRIMARY KEY,
+				account_id TEXT NOT NULL,
+				action TEXT NOT NULL,
+				reason TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				status TEXT NOT NULL
+			);
 			CREATE INDEX IF NOT EXISTS idx_comments_post_slug ON comments(post_slug);
 			CREATE INDEX IF NOT EXISTS idx_comments_user_id ON comments(user_id);
 			CREATE INDEX IF NOT EXISTS idx_comments_created_at ON comments(created_at);
@@ -3345,6 +3361,47 @@ def shield_account_snapshot(
 		[utc_now()],
 	)
 	return {"ok": True, "users": users, "generated_at": utc_now()}
+
+
+@app.post("/internal/shield/respond")
+def shield_account_response(
+	payload: ShieldResponsePayload,
+	x_sf_shield_timestamp: str | None = Header(default=None),
+	x_sf_shield_signature: str | None = Header(default=None),
+) -> dict[str, Any]:
+	if len(SHIELD_SYNC_SECRET) < 32:
+		raise HTTPException(status_code=503, detail="Shield response integration is not configured")
+	try:
+		timestamp = int(x_sf_shield_timestamp or "")
+	except ValueError as error:
+		raise HTTPException(status_code=401, detail="Invalid Shield response signature") from error
+	if abs(int(time.time()) - timestamp) > 60:
+		raise HTTPException(status_code=401, detail="Expired Shield response signature")
+	action = payload.action.strip().lower()
+	if action not in {"reauthenticate", "revoke_sessions", "freeze_account", "manual_review", "notify_admin"}:
+		raise HTTPException(status_code=422, detail="Unsupported Shield response action")
+	canonical = f"POST\n/internal/shield/respond\n{timestamp}\n{payload.command_id}\n{action}\n{payload.account_id}"
+	expected = hmac.new(SHIELD_SYNC_SECRET.encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest()
+	if not x_sf_shield_signature or not hmac.compare_digest(x_sf_shield_signature, expected):
+		raise HTTPException(status_code=401, detail="Invalid Shield response signature")
+	if not payload.command_id or len(payload.command_id) > 100 or len(payload.reason) > 300:
+		raise HTTPException(status_code=422, detail="Invalid Shield response command")
+	if d1_query("SELECT id FROM shield_commands WHERE id = ? LIMIT 1", [payload.command_id]):
+		return {"ok": True, "command_id": payload.command_id, "status": "already_applied"}
+	users = d1_query("SELECT id FROM users WHERE id = ? LIMIT 1", [payload.account_id])
+	if not users:
+		raise HTTPException(status_code=404, detail="Account not found")
+	now = utc_now()
+	if action in {"reauthenticate", "revoke_sessions", "freeze_account"}:
+		d1_query("DELETE FROM sessions WHERE user_id = ?", [payload.account_id])
+	if action == "freeze_account":
+		d1_query("UPDATE users SET disabled_at = ?, updated_at = ? WHERE id = ?", [now, now, payload.account_id])
+	record_security_event(payload.account_id, f"shield_{action}", payload.reason)
+	d1_query(
+		"INSERT INTO shield_commands(id, account_id, action, reason, created_at, status) VALUES (?, ?, ?, ?, ?, 'completed')",
+		[payload.command_id, payload.account_id, action, payload.reason, now],
+	)
+	return {"ok": True, "command_id": payload.command_id, "status": "completed", "action": action}
 
 
 @app.get("/admin/users/{user_id}")

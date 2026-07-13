@@ -13,6 +13,7 @@ os.environ["SHIELD_DATABASE_PATH"] = os.path.join(_temporary.name, "shield.db")
 os.environ["SHIELD_INTERNAL_SIGNING_KEY"] = "integration-signing-key-that-is-longer-than-thirty-two-characters"
 os.environ["SHIELD_ADMIN_INTROSPECTION_URL"] = "http://admin-session.test/auth/me"
 os.environ["SHIELD_ACCOUNT_SNAPSHOT_URL"] = "http://account-snapshot.test/admin/users"
+os.environ["SHIELD_ACCOUNT_RESPONSE_URL"] = "http://account-snapshot.test/internal/shield/respond"
 os.environ["SHIELD_SYNC_SECRET"] = "integration-sync-key-that-is-longer-than-thirty-two-characters"
 os.environ["SHIELD_COOKIE_SECURE"] = "false"
 
@@ -32,6 +33,7 @@ class ShieldApplicationTests(unittest.TestCase):
 		cls.client_context = TestClient(app)
 		cls.client = cls.client_context.__enter__()
 		cls.upstream_requests = []
+		cls.account_response_requests = []
 		class MockStream(httpx.AsyncByteStream):
 			def __init__(self, content):
 				self.content = content
@@ -46,6 +48,9 @@ class ShieldApplicationTests(unittest.TestCase):
 					return httpx.Response(200, json={"authenticated": True, "bot": {"id": "SilentFlare Admin"}, "csrf": "admin-csrf"})
 				return httpx.Response(401, json={"detail": "Login required"})
 			if request.url.host == "account-snapshot.test":
+				if request.url.path == "/internal/shield/respond":
+					cls.account_response_requests.append(request)
+					return httpx.Response(200, json={"ok": True, "status": "completed"})
 				return httpx.Response(200, json={"users": [{"id": "user-1", "username": "risk-user", "role": "user", "created_at": "2020-01-01T00:00:00+00:00", "email_verified_at": None, "totp_enabled": 0, "active_session_count": 2, "comment_count": 4}]})
 			if request.url.path == "/missing":
 				return httpx.Response(404, stream=MockStream(b"missing"), headers={"Content-Type": "text/plain"})
@@ -140,6 +145,63 @@ class ShieldApplicationTests(unittest.TestCase):
 		self.assertEqual(updated["policies"][3]["action"], "temporary_ban")
 		self.assertEqual(updated["geoPolicies"][0]["countryCode"], "US")
 		self.assertEqual(updated["riskyAccounts"][0]["manualDelta"], 20)
+
+	def test_account_response_is_signed_and_recorded_without_exposing_account_reference(self):
+		headers = {"Cookie": "sf_bot_session=valid-admin", "X-CSRF-Token": "admin-csrf"}
+		dashboard = self.client.get("/__shield/api/admin/dashboard", headers=headers).json()
+		account_id = dashboard["riskyAccounts"][0]["id"]
+		response = self.client.post(
+			f"/__shield/api/admin/accounts/{account_id}/response",
+			headers=headers,
+			json={"action": "revoke_sessions", "reason": "Integration test"},
+		)
+		self.assertEqual(response.status_code, 200)
+		forwarded = self.account_response_requests[-1]
+		self.assertTrue(forwarded.headers.get("x-sf-shield-signature"))
+		self.assertTrue(forwarded.headers.get("x-sf-shield-timestamp"))
+		self.assertEqual(forwarded.url.path, "/internal/shield/respond")
+		command = self.client.app.state.database.query("SELECT status, action FROM response_commands ORDER BY created_at DESC LIMIT 1")[0]
+		self.assertEqual(command, {"status": "completed", "action": "revoke_sessions"})
+		self.assertNotIn("account_ref", str(dashboard))
+
+	def test_risk_model_simulation_versioning_and_rollback(self):
+		headers = {"Cookie": "sf_bot_session=valid-admin", "X-CSRF-Token": "admin-csrf"}
+		model = self.client.get("/__shield/api/admin/settings/risk", headers=headers).json()
+		payload = {"weights": model["weights"], "thresholds": model["thresholds"], "note": "Integration version"}
+		simulation = self.client.post("/__shield/api/admin/settings/risk/simulate", headers=headers, json=payload)
+		self.assertEqual(simulation.status_code, 200)
+		self.assertIn("projectedAverage", simulation.json())
+		published = self.client.put("/__shield/api/admin/settings/risk", headers=headers, json=payload)
+		self.assertEqual(published.status_code, 200)
+		version = published.json()["version"]
+		rollback = self.client.post(f"/__shield/api/admin/settings/risk/rollback/{version}", headers=headers, json={})
+		self.assertEqual(rollback.status_code, 200)
+		self.assertEqual(rollback.json()["version"], version)
+
+	def test_alert_policy_test_alert_and_daily_report_are_operational(self):
+		headers = {"Cookie": "sf_bot_session=valid-admin", "X-CSRF-Token": "admin-csrf"}
+		config = self.client.put(
+			"/__shield/api/admin/alerts/config",
+			headers=headers,
+			json={"enabled": True, "minimum_score": 75, "high_risk_per_5m": 5, "blocked_per_5m": 7, "daily_report_hour": 4},
+		)
+		self.assertEqual(config.status_code, 200)
+		created = self.client.post("/__shield/api/admin/alerts/test", headers=headers, json={})
+		self.assertEqual(created.status_code, 200)
+		alert_id = created.json()["id"]
+		dismissed = self.client.post(f"/__shield/api/admin/alerts/{alert_id}/dismiss", headers=headers, json={})
+		self.assertEqual(dismissed.status_code, 200)
+		report = self.client.get("/__shield/api/admin/reports/daily", headers=headers)
+		self.assertEqual(report.status_code, 200)
+		self.assertIn("requests", report.json())
+
+	def test_dashboard_exposes_connected_operations_without_manual_targets(self):
+		response = self.client.get("/__shield/api/admin/dashboard", headers={"Cookie": "sf_bot_session=valid-admin"})
+		self.assertEqual(response.status_code, 200)
+		payload = response.json()
+		for key in ("networkIntel", "accessLists", "bans", "alerts", "alertConfig", "riskModel", "dailyReport"):
+			self.assertIn(key, payload)
+		self.assertTrue(next(item for item in payload["services"] if item["host"] == "api.silentflare.com")["connected"])
 
 	def test_automatic_account_policy_bans_correlated_session_once(self):
 		context = RequestContext(
