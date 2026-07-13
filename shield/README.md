@@ -15,6 +15,7 @@ The MVP includes:
 - A separate English administration console that reuses the existing SilentFlare Admin session, CSRF proof, and append-only audit records.
 - A real Security workspace inside SilentFlare Admin with live trends, contextual event actions, automated policies, service coverage, and account-risk projections synchronized from FastAPI without sharing the business database.
 - Network intelligence, access-list and ban operations, signed account/session response commands, risk-model simulation/versioning/rollback, configurable alerts, and rolling daily reports.
+- A public `shield.silentflare.com` decision portal with signed case links, stable public ban IDs, and subject/duration-specific error codes.
 - SQLite/WAL persistence, migrations, health probes, Docker Compose, and an Nginx reference configuration.
 
 The full architecture, data model, integration contract, API plan, failure matrix, and phased roadmap are in [docs/SILENTFLARE_SHIELD.md](../docs/SILENTFLARE_SHIELD.md).
@@ -70,3 +71,9 @@ The workspace is also the live control plane. `Automation` edits rate thresholds
 FNS1 deployment uses the committed configs in `nginx/fns1` and the idempotent scripts in `scripts`. The internal origin listener is `127.0.0.1:9081`; this avoids a proxy loop after all five public hosts point to Shield. Only public blog reads have an Nginx fail-open route. Sensitive account, API, Admin, and CMS requests remain fail closed, while CMS connection-upgrade traffic uses a documented direct-origin exception because the HTTP gateway does not terminate WebSockets.
 
 Never expose the Shield container directly to the internet. Nginx must be the only direct peer, and Cloudflare-origin authentication should remain enabled at the outer edge.
+
+## Public Block Contract
+
+Active bans receive a non-secret public identifier such as `SFB-0123456789ABCDEF`. Browser `GET`/`HEAD` requests that accept HTML receive a `303` redirect to `https://shield.silentflare.com/blocked` with a signed case payload. API and non-HTML requests retain a `403` JSON response and receive the same `errorCode`, `banId`, `requestId`, `supportUrl`, and `Location` header. The case URL never includes a raw IP, account identifier, email, API key, path, cookie, or ban reason.
+
+Temporary and permanent codes are unique per subject family. For example, a temporary session ban is `SF-BAN-T210`, while a permanent session ban is `SF-BAN-P210`. Policy-only blocks use the `SF-BLOCK-3xx` family and show an incident ID rather than claiming that a persistent ban exists.

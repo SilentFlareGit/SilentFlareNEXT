@@ -102,6 +102,11 @@ class Settings:
 	)
 	alert_webhook_url: str = field(default_factory=lambda: os.getenv("SHIELD_ALERT_WEBHOOK_URL", ""))
 	allow_private_geo: bool = field(default_factory=lambda: _boolean("SHIELD_ALLOW_PRIVATE_GEO", False))
+	public_url: str = field(
+		default_factory=lambda: os.getenv(
+			"SHIELD_PUBLIC_URL", "https://shield.silentflare.com"
+		).rstrip("/")
+	)
 
 	def validate(self) -> None:
 		if self.mode not in {"bypass", "observe", "enforce"}:

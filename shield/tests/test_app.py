@@ -5,6 +5,7 @@ import sqlite3
 import tempfile
 import time
 import unittest
+from urllib.parse import parse_qs, urlsplit
 
 
 _temporary = tempfile.TemporaryDirectory()
@@ -21,6 +22,7 @@ from fastapi.testclient import TestClient
 import httpx
 
 from app.config import settings
+from app.database import stable_hash
 from app.main import _automatic_ban, app
 from app.rate_limit import RateHit
 from app.rules import RequestContext
@@ -71,6 +73,85 @@ class ShieldApplicationTests(unittest.TestCase):
 
 	def test_admin_requires_authentication(self):
 		self.assertEqual(self.client.get("/__shield/api/admin/overview").status_code, 401)
+
+	def test_public_shield_portal_is_host_scoped(self):
+		home = self.client.get("/", headers={"Host": "shield.silentflare.com"})
+		self.assertEqual(home.status_code, 200)
+		self.assertIn("Shield protection is active", home.text)
+		self.assertNotIn("{{", home.text)
+		self.assertEqual(
+			self.client.get(
+				"/assets/blocked.css", headers={"Host": "shield.silentflare.com"}
+			).status_code,
+			200,
+		)
+
+	def test_active_ban_redirects_browser_to_signed_public_case(self):
+		database = self.client.app.state.database
+		now = int(time.time())
+		public_id = "SFB-0123456789ABCDEF"
+		database.set_setting("global_mode", "enforce", "test")
+		database.execute(
+			"UPDATE service_controls SET protection_enabled = 1, mode = 'enforce' WHERE host = 'blog.silentflare.com'"
+		)
+		database.execute(
+			"""INSERT INTO bans(public_id, subject_type, subject_hash, subject_display, restriction,
+			reason, created_by, created_at, expires_at) VALUES (?, 'session', ?, 'Correlated session',
+			'all', 'Portal integration test', 'test', ?, ?)""",
+			(public_id, stable_hash("blocked-session", settings.internal_signing_key), now, now + 3600),
+		)
+		try:
+			response = self.client.get(
+				"/private",
+				headers={
+					"Host": "blog.silentflare.com",
+					"Accept": "text/html",
+					"Cookie": "sf_account_session=blocked-session",
+				},
+				follow_redirects=False,
+			)
+			self.assertEqual(response.status_code, 303)
+			location = response.headers["location"]
+			parts = urlsplit(location)
+			query = parse_qs(parts.query)
+			self.assertEqual(parts.netloc, "shield.silentflare.com")
+			self.assertEqual(query["code"], ["SF-BAN-T210"])
+			self.assertEqual(query["ban"], [public_id])
+			self.assertEqual(response.headers["x-sf-shield-ban-id"], public_id)
+
+			portal = self.client.get(
+				f"{parts.path}?{parts.query}",
+				headers={"Host": "shield.silentflare.com"},
+			)
+			self.assertEqual(portal.status_code, 200)
+			self.assertIn(public_id, portal.text)
+			self.assertIn("SF-BAN-T210", portal.text)
+			self.assertIn("Access temporarily restricted", portal.text)
+
+			api_response = self.client.get(
+				"/private",
+				headers={
+					"Host": "blog.silentflare.com",
+					"Accept": "application/json",
+					"Cookie": "sf_account_session=blocked-session",
+				},
+			)
+			self.assertEqual(api_response.status_code, 403)
+			self.assertEqual(api_response.json()["errorCode"], "SF-BAN-T210")
+			self.assertEqual(api_response.json()["banId"], public_id)
+			self.assertEqual(api_response.headers["location"], api_response.json()["supportUrl"])
+
+			tampered = self.client.get(
+				f"{parts.path}?{parts.query.replace('SF-BAN-T210', 'SF-BAN-P210')}",
+				headers={"Host": "shield.silentflare.com"},
+			)
+			self.assertIn("Block case unavailable", tampered.text)
+		finally:
+			database.execute("UPDATE bans SET revoked_at = ? WHERE public_id = ?", (int(time.time()), public_id))
+			database.set_setting("global_mode", "observe", "test")
+			database.execute(
+				"UPDATE service_controls SET mode = 'observe' WHERE host = 'blog.silentflare.com'"
+			)
 
 	def test_existing_silentflare_admin_session_grants_access(self):
 		response = self.client.get(

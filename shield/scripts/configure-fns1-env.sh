@@ -54,6 +54,7 @@ set_value SHIELD_CONNECTED_HOSTS "blog.silentflare.com,accounts.silentflare.com,
 set_value SHIELD_MAX_BODY_BYTES "52428800"
 set_value SHIELD_ACCOUNT_SNAPSHOT_URL "http://127.0.0.1:9010/internal/shield/accounts"
 set_value SHIELD_ACCOUNT_RESPONSE_URL "http://127.0.0.1:9010/internal/shield/respond"
+set_value SHIELD_PUBLIC_URL "https://shield.silentflare.com"
 set_value SHIELD_UPSTREAMS_JSON '{"blog.silentflare.com":"http://127.0.0.1:9081","accounts.silentflare.com":"http://127.0.0.1:9081","api.silentflare.com":"http://127.0.0.1:9010","admin.silentflare.com":"http://127.0.0.1:9081","cms.silentflare.com":"http://127.0.0.1:9081"}'
 
 echo "Shield environment updated; secret values were not printed."

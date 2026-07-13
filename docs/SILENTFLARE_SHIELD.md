@@ -18,6 +18,8 @@ SilentFlare Shield: classify -> rate -> score -> rule -> decide -> sign
     +--> blog/accounts/admin static Astro origin
     +--> api FastAPI origin
     +--> cms Ghost origin
+
+shield.silentflare.com --> Nginx --> Shield public decision portal
 ```
 
 Shield never reads passwords, raw TOTP secrets from the account system, Turnstile response tokens after verification, or complete session tokens. It stores keyed digests for correlation and stable user IDs only when an optional adapter supplies them. It never writes risk columns into Ghost or account tables.
@@ -39,6 +41,7 @@ Shield never reads passwords, raw TOTP secrets from the account system, Turnstil
 ```text
 shield/
   app/
+    blocking.py           public ban IDs, error-code catalog, normalization
     config.py             environment-only runtime configuration
     database.py           migrations, transactions, audit helpers
     geo.py                Cloudflare/provider IP intelligence and cache
@@ -54,6 +57,10 @@ shield/
     0002_correlation_and_moderation.sql
     0003_response_rate_policies.sql
     0004_immutable_rule_versions.sql
+    0005_account_projections.sql
+    0006_control_plane.sql
+    0007_operations_and_response.sql
+    0008_public_block_cases.sql
   nginx/
     silentflare-shield.conf
   static/
@@ -61,6 +68,9 @@ shield/
     app.css
     app.js
     challenge.html
+    blocked.html
+    blocked.css
+    shield-mark.png
   tests/
     test_mvp.py
   .env.example
@@ -205,6 +215,8 @@ Implemented routes:
 | `GET /__shield/health/live` | Process liveness without dependency checks |
 | `GET /__shield/health/ready` | Database readiness and active mode |
 | `POST /__shield/challenge/verify` | Verify Turnstile and issue a short, IP/UA-bound proof |
+| `GET /` on `shield.silentflare.com` | Public Shield service landing page |
+| `GET /blocked?...` on `shield.silentflare.com` | Render a signed, non-sensitive block or ban case |
 | `GET /__shield/api/admin/session` | Validate the existing SilentFlare Admin session and return its CSRF state |
 | `GET /__shield/api/admin/overview` | Dashboard aggregates |
 | `GET /__shield/api/admin/dashboard` | Live time series, account posture, event decisions, policies, and service coverage |
@@ -234,6 +246,28 @@ Implemented routes:
 | `POST /__shield/api/admin/mode` | Audited bypass/observe/enforce switch |
 
 Planned control/data APIs are `/rules/{id}`, `/rules/{id}/versions`, `/rules/{id}/rollback`, `/events/{id}/review`, `/correlations/{type}/{digest}`, and `/content/evaluate`. Browser mutations require the delegated Admin CSRF proof and produce audit entries; private response commands are signed and idempotent.
+
+### Public Ban IDs and Error Codes
+
+Every persistent ban has a public, non-secret identifier in the form `SFB-` followed by 16 uppercase hexadecimal characters. This is the only ban identifier exposed to a blocked client. SQLite row IDs, subject hashes, raw subjects, reasons, operator identities, and audit details remain internal.
+
+| Subject | Temporary | Permanent |
+| --- | --- | --- |
+| IP | `SF-BAN-T100` | `SF-BAN-P100` |
+| CIDR network | `SF-BAN-T110` | `SF-BAN-P110` |
+| ASN | `SF-BAN-T120` | `SF-BAN-P120` |
+| Country | `SF-BAN-T130` | `SF-BAN-P130` |
+| Region | `SF-BAN-T140` | `SF-BAN-P140` |
+| Account | `SF-BAN-T200` | `SF-BAN-P200` |
+| Session | `SF-BAN-T210` | `SF-BAN-P210` |
+| Device | `SF-BAN-T220` | `SF-BAN-P220` |
+| Email | `SF-BAN-T230` | `SF-BAN-P230` |
+| Email domain | `SF-BAN-T240` | `SF-BAN-P240` |
+| API key | `SF-BAN-T250` | `SF-BAN-P250` |
+
+Non-persistent decisions use `SF-BLOCK-310` for access lists, `SF-BLOCK-320` for geography, `SF-BLOCK-330` for rules, `SF-BLOCK-340` for score thresholds, `SF-BLOCK-350` for automated policies, and `SF-BLOCK-399` as the guarded fallback.
+
+Browser `GET` and `HEAD` requests with an HTML accept header receive `303 See Other` to the public portal. API, mutation, and non-HTML requests remain `403` JSON so clients do not accidentally follow a redirect into an HTML document. Those responses still carry `Location`, `X-SF-Shield-Error-Code`, `X-SF-Shield-Ban-ID` when applicable, and `X-SF-Shield-Request-ID`. Portal parameters are HMAC-signed and contain only the code, public ban ID, request reference, originating hostname, expiry, and restriction scope. The originating path and all raw subject values are excluded.
 
 ## 11. Signed Request Header Scheme
 
@@ -291,7 +325,7 @@ The emergency switch is the audited global `bypass` mode. The out-of-process eme
 
 `shield/docker-compose.yml` is the portable development deployment. `shield/docker-compose.prod.yml` uses Linux host networking but overrides Uvicorn to bind only `127.0.0.1:9080`; this lets Shield reach the existing FNS1 origins without exposing Shield publicly. Both variants run a non-root, read-only container, mount only the Shield data volume, and drop Linux capabilities. `shield/nginx/silentflare-shield.conf` remains a generic merge reference. The production FNS1 files in `shield/nginx/fns1` are installable, versioned configurations.
 
-FNS1 uses an internal Nginx origin listener on `127.0.0.1:9081` for the Astro account/admin/blog renderers and Ghost HTTP traffic. Public Nginx sends the five protected Host values to Shield on `127.0.0.1:9080`; Shield then selects `9081` or FastAPI on `9010`. This prevents the routing loop that would occur if a Shield upstream pointed back to the public port. The blog has a one-second connection timeout and named fail-open origin. Accounts, API, Admin, and CMS fail closed. CMS Upgrade requests bypass the HTTP-only Shield gateway and proxy directly to Ghost; ordinary CMS HTTP traffic is still evaluated.
+FNS1 uses an internal Nginx origin listener on `127.0.0.1:9081` for the Astro account/admin/blog renderers and Ghost HTTP traffic. Public Nginx sends the five protected Host values to Shield on `127.0.0.1:9080`; Shield then selects `9081` or FastAPI on `9010`. This prevents the routing loop that would occur if a Shield upstream pointed back to the public port. The separate `shield.silentflare.com` Nginx host also reaches port `9080`, but it serves only explicit public portal routes and is never added to the protected-upstream map. The blog has a one-second connection timeout and named fail-open origin. Accounts, API, Admin, and CMS fail closed. CMS Upgrade requests bypass the HTTP-only Shield gateway and proxy directly to Ghost; ordinary CMS HTTP traffic is still evaluated.
 
 Recommended FNS1 layout:
 
@@ -312,7 +346,7 @@ bash shield/scripts/install-fns1-routing.sh
 docker compose -f shield/docker-compose.prod.yml -p silentflare-shield up -d --build
 ```
 
-The environment configurator copies the existing Turnstile values on the host without printing them, connects all five hostnames, raises the CMS request-body budget to 50 MiB, and points Shield at the internal origins. The routing installer backs up every replaced file under `/etc/nginx/shield-backups`, validates with `nginx -t`, and automatically restores the backup if validation fails.
+The environment configurator copies the existing Turnstile values on the host without printing them, connects all five protected hostnames, sets `SHIELD_PUBLIC_URL=https://shield.silentflare.com`, raises the CMS request-body budget to 50 MiB, and points Shield at the internal origins. The routing installer installs and enables the separate portal host, backs up every replaced file under `/etc/nginx/shield-backups`, validates with `nginx -t`, and automatically restores the backup if validation fails.
 
 ## 14. Environment Template
 
@@ -325,12 +359,13 @@ The committed `shield/.env.example` documents only names and placeholders:
 - Cache-backed IP provider URL.
 - Trusted proxy CIDRs.
 - Explicit host-to-origin JSON map.
+- Public decision-portal URL; it is not an upstream and carries no secret.
 
 The real `.env` must remain uncommitted, root-readable only, and preferably supplied by a secret manager. Values must never appear in logs or admin API responses. Production must keep `SHIELD_COOKIE_SECURE=true`.
 
 ## 15. Database Migrations
 
-Migrations are ordered SQL files recorded in `schema_migrations`. Startup applies each file and its version marker in one `BEGIN IMMEDIATE` transaction under an application lock. SQLite uses WAL and foreign keys. `0001_initial.sql` creates the gateway/control tables and default policies; `0002_correlation_and_moderation.sql` adds pseudonymous relation, device, moderation, and alert structures; `0003_response_rate_policies.sql` makes 404 scanning response-aware; `0004_immutable_rule_versions.sql` protects rule history from update or deletion; `0005_account_projections.sql` and `0006_control_plane.sql` add isolated account posture and live service/geography controls; and `0007_operations_and_response.sql` adds response commands, risk-model versions, alert policy/events, daily reports, five-host observation defaults, and the six-hour automatic comment-ban response.
+Migrations are ordered SQL files recorded in `schema_migrations`. Startup applies each file and its version marker in one `BEGIN IMMEDIATE` transaction under an application lock. SQLite uses WAL and foreign keys. `0001_initial.sql` creates the gateway/control tables and default policies; `0002_correlation_and_moderation.sql` adds pseudonymous relation, device, moderation, and alert structures; `0003_response_rate_policies.sql` makes 404 scanning response-aware; `0004_immutable_rule_versions.sql` protects rule history from update or deletion; `0005_account_projections.sql` and `0006_control_plane.sql` add isolated account posture and live service/geography controls; `0007_operations_and_response.sql` adds response commands, risk-model versions, alert policy/events, daily reports, five-host observation defaults, and the six-hour automatic comment-ban response; and `0008_public_block_cases.sql` assigns every existing and future ban a unique public case identifier without exposing the internal row ID.
 
 Before production migration:
 

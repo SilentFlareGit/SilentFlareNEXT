@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from .blocking import normalize_ban_subject
 from .database import Database, stable_hash
 
 
@@ -25,6 +26,7 @@ class RequestContext:
 	session_id: str = ""
 	device_id: str = ""
 	email: str = ""
+	api_key: str = ""
 	user_agent: str = ""
 	risk_score: int = 0
 	rate_exceeded: bool = False
@@ -44,6 +46,7 @@ class RequestContext:
 			"session_id": self.session_id,
 			"device_id": self.device_id,
 			"email": self.email,
+			"api_key": self.api_key,
 			"user_agent": self.user_agent,
 			"risk_score": self.risk_score,
 			"rate_exceeded": self.rate_exceeded,
@@ -174,32 +177,62 @@ class AccessListService:
 
 	def active_ban(self, context: RequestContext) -> dict[str, Any] | None:
 		now = int(time.time())
-		identities = {
-			"ip": stable_hash(context.ip, self.hash_key),
-			"account": stable_hash(context.account_id, self.hash_key) if context.account_id else "",
-			"session": stable_hash(context.session_id, self.hash_key) if context.session_id else "",
-			"device": stable_hash(context.device_id, self.hash_key) if context.device_id else "",
-			"email": stable_hash(context.email.lower(), self.hash_key) if context.email else "",
-		}
-		for subject_type, subject_hash in identities.items():
-			if not subject_hash:
+		email_domain = context.email.rsplit("@", 1)[-1] if "@" in context.email else ""
+		identities = (
+			("account", context.account_id),
+			("session", context.session_id),
+			("device", context.device_id),
+			("email", context.email),
+			("api_key", context.api_key),
+			("ip", context.ip),
+			("asn", context.asn),
+			("region", context.region),
+			("country", context.country),
+			("email_domain", email_domain),
+		)
+
+		def applies(row: dict[str, Any]) -> bool:
+			restriction = row["restriction"]
+			return (
+				restriction == "all"
+				or (restriction == "login" and (context.path.startswith("/auth/login/") or context.host == "admin.silentflare.com"))
+				or (restriction == "register" and context.path.startswith("/accounts/register/"))
+				or (restriction == "comment" and context.path.startswith("/comments"))
+				or (restriction == "api" and context.host == "api.silentflare.com")
+				or (restriction == "read_only" and context.method not in {"GET", "HEAD", "OPTIONS"})
+				or (restriction == "review" and context.method not in {"GET", "HEAD", "OPTIONS"})
+			)
+
+		for subject_type, value in identities:
+			if not value:
+				continue
+			try:
+				normalized = normalize_ban_subject(subject_type, value)
+			except ValueError:
 				continue
 			rows = self.database.query(
 				"""SELECT * FROM bans WHERE subject_type = ? AND subject_hash = ? AND revoked_at IS NULL
 				AND (expires_at IS NULL OR expires_at > ?) ORDER BY id DESC LIMIT 1""",
-				(subject_type, subject_hash, now),
+				(subject_type, stable_hash(normalized, self.hash_key), now),
 			)
 			for row in rows:
-				restriction = row["restriction"]
-				applies = (
-					restriction == "all"
-					or (restriction == "login" and (context.path.startswith("/auth/login/") or context.host == "admin.silentflare.com"))
-					or (restriction == "register" and context.path.startswith("/accounts/register/"))
-					or (restriction == "comment" and context.path.startswith("/comments"))
-					or (restriction == "api" and context.host == "api.silentflare.com")
-					or (restriction == "read_only" and context.method not in {"GET", "HEAD", "OPTIONS"})
-					or (restriction == "review" and context.method not in {"GET", "HEAD", "OPTIONS"})
-				)
-				if applies:
+				if applies(row):
 					return row
+
+		try:
+			address = ipaddress.ip_address(context.ip)
+		except ValueError:
+			return None
+		rows = self.database.query(
+			"""SELECT * FROM bans WHERE subject_type = 'cidr' AND revoked_at IS NULL
+			AND (expires_at IS NULL OR expires_at > ?) ORDER BY id DESC""",
+			(now,),
+		)
+		for row in rows:
+			try:
+				matched = address in ipaddress.ip_network(row["subject_display"], strict=False)
+			except ValueError:
+				continue
+			if matched and applies(row):
+				return row
 		return None

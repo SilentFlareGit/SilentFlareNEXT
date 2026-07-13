@@ -87,6 +87,8 @@ ssh -i $key root@167.233.129.17 'nginx -t && systemctl reload nginx'
 
 The five Shield-protected hosts use the versioned FNS1 files under `shield/nginx/fns1`. Public Nginx forwards ordinary traffic to Shield on `127.0.0.1:9080`. Shield forwards blog, accounts, Admin, and CMS HTTP traffic to the internal Nginx origin on `127.0.0.1:9081`, and API traffic to FastAPI on `127.0.0.1:9010`. Never point a Shield upstream at public port 80 or 443; that creates a proxy loop once the edge route is active.
 
+`shield.silentflare.com` is the separate public decision portal. Its versioned Nginx host is `shield/nginx/fns1/silentflare-shield-portal.conf`; it proxies only to Shield on `127.0.0.1:9080` and must not be added to `SHIELD_UPSTREAMS_JSON` or `SHIELD_CONNECTED_HOSTS`. The routing installer enables this host and rolls it back with the other Shield routes if `nginx -t` fails.
+
 After the repository checkout has the intended commit, configure and install with:
 
 ```bash

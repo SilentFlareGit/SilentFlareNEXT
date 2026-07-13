@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import html
 import ipaddress
 import json
 import sqlite3
@@ -12,7 +13,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlencode, urlparse
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -20,6 +21,16 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
+from .blocking import (
+	ERROR_DESCRIPTIONS,
+	ban_error_code,
+	ban_subject_display,
+	new_public_ban_id,
+	normalize_ban_subject,
+	safe_error_code,
+	safe_event_id,
+	safe_public_ban_id,
+)
 from .config import Settings, settings
 from .database import Database, mask_ip, stable_hash
 from .geo import GeoService, IpIntel
@@ -37,8 +48,24 @@ STATIC_VERSION = hashlib.sha256(
 ADMIN_HTML = (STATIC_ROOT / "index.html").read_text(encoding="utf-8").replace(
 	"__SHIELD_ASSET_VERSION__", STATIC_VERSION
 )
+BLOCK_ASSET_VERSION = hashlib.sha256(
+	(STATIC_ROOT / "blocked.css").read_bytes()
+).hexdigest()[:12]
+BLOCK_HTML = (STATIC_ROOT / "blocked.html").read_text(encoding="utf-8").replace(
+	"__BLOCK_ASSET_VERSION__", BLOCK_ASSET_VERSION
+)
 HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade"}
 SENSITIVE_PATHS = ("/auth/", "/accounts/register/", "/admin", "/comments/create")
+BLOCK_CASE_FIELDS = ("code", "ban", "ref", "origin", "until", "scope")
+BLOCK_SCOPE_LABELS = {
+	"all": "All access",
+	"login": "Sign-in",
+	"register": "Registration",
+	"comment": "Comments",
+	"api": "API access",
+	"read_only": "Write operations",
+	"review": "Operations requiring review",
+}
 
 
 class AccessListInput(BaseModel):
@@ -199,6 +226,16 @@ def _device_id(request: Request, ip: str) -> str:
 		return str(payload.get("id", ""))
 	seed = f"{request.headers.get('user-agent', '')}|{request.headers.get('accept-language', '')}|{ip}"
 	return stable_hash(seed, settings.internal_signing_key)[:32]
+
+
+def _api_key(request: Request) -> str:
+	value = request.headers.get("x-api-key", "").strip()
+	if value:
+		return value[:1024]
+	authorization = request.headers.get("authorization", "").strip()
+	if authorization.lower().startswith("bearer "):
+		return authorization[7:1031]
+	return ""
 
 
 async def _admin(request: Request, csrf: bool = False) -> tuple[str, str]:
@@ -547,6 +584,184 @@ def _email_from_body(body: bytes, content_type: str) -> str:
 		return ""
 
 
+def _block_case_signature(values: dict[str, str]) -> str:
+	canonical = "\n".join(values.get(field, "") for field in BLOCK_CASE_FIELDS)
+	return hmac.new(
+		settings.internal_signing_key.encode("utf-8"),
+		canonical.encode("utf-8"),
+		hashlib.sha256,
+	).hexdigest()
+
+
+def _ban_public_id(database: Database, ban: dict[str, Any]) -> str:
+	public_id = safe_public_ban_id(str(ban.get("public_id") or ""))
+	if public_id:
+		return public_id
+	for _attempt in range(3):
+		candidate = new_public_ban_id()
+		try:
+			database.execute(
+				"UPDATE bans SET public_id = ? WHERE id = ? AND public_id IS NULL",
+				(candidate, ban["id"]),
+			)
+		except sqlite3.IntegrityError:
+			continue
+		rows = database.query("SELECT public_id FROM bans WHERE id = ?", (ban["id"],))
+		if rows:
+			public_id = safe_public_ban_id(str(rows[0].get("public_id") or ""))
+			if public_id:
+				ban["public_id"] = public_id
+				return public_id
+	raise RuntimeError("Unable to allocate a public ban identifier")
+
+
+def _block_case_url(
+	request_id: str,
+	host: str,
+	error_code: str,
+	ban: dict[str, Any] | None,
+	database: Database,
+) -> tuple[str, str]:
+	public_ban_id = _ban_public_id(database, ban) if ban else ""
+	values = {
+		"code": safe_error_code(error_code),
+		"ban": public_ban_id,
+		"ref": request_id,
+		"origin": host if host in settings.upstreams else "",
+		"until": str(ban.get("expires_at") or "") if ban else "",
+		"scope": str(ban.get("restriction") or "all") if ban else "all",
+	}
+	values["sig"] = _block_case_signature(values)
+	return f"{settings.public_url}/blocked?{urlencode(values)}", public_ban_id
+
+
+def _block_error_code(
+	ban: dict[str, Any] | None,
+	list_status: str | None,
+	geo_reason: str | None,
+	rules: RuleDecision,
+	risk: RiskResult,
+	actions: list[str],
+) -> str:
+	if ban:
+		return ban_error_code(ban)
+	if list_status == "deny":
+		return "SF-BLOCK-310"
+	if geo_reason:
+		return "SF-BLOCK-320"
+	if rules.matched_rules:
+		return "SF-BLOCK-330"
+	if risk.level == "block":
+		return "SF-BLOCK-340"
+	if "temporary_ban" in actions:
+		return "SF-BLOCK-350"
+	return "SF-BLOCK-399"
+
+
+def _blocked_response(
+	request: Request,
+	request_id: str,
+	host: str,
+	error_code: str,
+	ban: dict[str, Any] | None,
+) -> Response:
+	case_url, public_ban_id = _block_case_url(
+		request_id,
+		host,
+		error_code,
+		ban,
+		request.app.state.database,
+	)
+	headers = {
+		"Cache-Control": "no-store",
+		"Location": case_url,
+		"Referrer-Policy": "no-referrer",
+		"X-SF-Shield-Error-Code": error_code,
+		"X-SF-Shield-Request-ID": request_id,
+	}
+	if public_ban_id:
+		headers["X-SF-Shield-Ban-ID"] = public_ban_id
+	if request.method in {"GET", "HEAD"} and "text/html" in request.headers.get("accept", ""):
+		return RedirectResponse(case_url, status_code=303, headers=headers)
+	return JSONResponse(
+		{
+			"detail": "Request blocked by SilentFlare Shield",
+			"errorCode": error_code,
+			"banId": public_ban_id or None,
+			"requestId": request_id,
+			"supportUrl": case_url,
+		},
+		status_code=403,
+		headers=headers,
+	)
+
+
+def _portal_headers() -> dict[str, str]:
+	return {
+		"Cache-Control": "no-store",
+		"Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+		"Referrer-Policy": "no-referrer",
+		"X-Content-Type-Options": "nosniff",
+	}
+
+
+def _render_block_portal(request: Request, generic: bool = False) -> HTMLResponse:
+	values = {field: str(request.query_params.get(field, "")) for field in BLOCK_CASE_FIELDS}
+	signature = str(request.query_params.get("sig", ""))
+	valid = bool(signature) and hmac.compare_digest(signature, _block_case_signature(values))
+	if generic or not valid:
+		page_values = {
+			"PAGE_TITLE": "Shield protection is active" if generic else "Block case unavailable",
+			"DESCRIPTION": "SilentFlare Shield is online and protecting connected services." if generic else "This case link is incomplete, expired, or has been modified.",
+			"ERROR_CODE": "SF-BLOCK-399",
+			"CASE_LABEL": "Reference ID",
+			"CASE_LABEL_LOWER": "reference ID",
+			"CASE_ID": "No active case" if generic else "Unavailable",
+			"STATUS": "Operational" if generic else "Unverified",
+			"SERVICE": "SilentFlare Shield",
+			"SCOPE": "Security gateway",
+			"EXPIRY": "No restriction is represented by this page.",
+			"REQUEST_REFERENCE": "none",
+			"SEVERITY": "neutral",
+		}
+	else:
+		error_code = safe_error_code(values["code"])
+		ban_id = safe_public_ban_id(values["ban"])
+		request_id = safe_event_id(values["ref"])
+		origin = values["origin"] if values["origin"] in settings.upstreams else "SilentFlare service"
+		scope = BLOCK_SCOPE_LABELS.get(values["scope"], "Protected access")
+		until = int(values["until"]) if values["until"].isdigit() else None
+		if ban_id and until is None:
+			status, title, expiry, severity = "Permanent", "Access permanently restricted", "No automatic expiry", "permanent"
+		elif ban_id:
+			status, title, expiry, severity = (
+				"Temporary",
+				"Access temporarily restricted",
+				datetime.fromtimestamp(until, timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if until else "Pending review",
+				"temporary",
+			)
+		else:
+			status, title, expiry, severity = "Blocked", "Request blocked", "This decision applies to the referenced request.", "neutral"
+		page_values = {
+			"PAGE_TITLE": title,
+			"DESCRIPTION": ERROR_DESCRIPTIONS[error_code],
+			"ERROR_CODE": error_code,
+			"CASE_LABEL": "Ban ID" if ban_id else "Incident ID",
+			"CASE_LABEL_LOWER": "ban ID" if ban_id else "incident ID",
+			"CASE_ID": ban_id or (f"SFE-{request_id[:16].upper()}" if request_id else "Unavailable"),
+			"STATUS": status,
+			"SERVICE": origin,
+			"SCOPE": scope,
+			"EXPIRY": expiry,
+			"REQUEST_REFERENCE": request_id or "unavailable",
+			"SEVERITY": severity,
+		}
+	page = BLOCK_HTML
+	for key, value in page_values.items():
+		page = page.replace(f"{{{{{key}}}}}", html.escape(str(value)))
+	return HTMLResponse(page, headers=_portal_headers())
+
+
 async def _read_body(request: Request) -> bytes:
 	declared = request.headers.get("content-length")
 	if declared:
@@ -620,23 +835,25 @@ def _automatic_ban(database: Database, context: RequestContext, hits: list[RateH
 		return
 	hit = max(ban_hits, key=lambda item: max(item.retry_after, item.cooldown_seconds))
 	if hit.dimension in {"account", "session"} and context.session_id:
-		subject_type, raw_value, display = "session", context.session_id, "Correlated session"
+		subject_type, raw_value = "session", context.session_id
 	elif hit.dimension == "device" and context.device_id:
-		subject_type, raw_value, display = "device", context.device_id, "Correlated device"
+		subject_type, raw_value = "device", context.device_id
 	elif hit.dimension == "email" and context.email:
-		subject_type, raw_value, display = "email", context.email.lower(), "Correlated email"
+		subject_type, raw_value = "email", context.email
 	else:
-		subject_type, raw_value, display = "ip", context.ip, mask_ip(context.ip)
-	subject_hash = stable_hash(raw_value, settings.internal_signing_key)
+		subject_type, raw_value = "ip", context.ip
+	normalized = normalize_ban_subject(subject_type, raw_value)
+	display = ban_subject_display(subject_type, normalized)
+	subject_hash = stable_hash(normalized, settings.internal_signing_key)
 	now = int(time.time())
 	expires_at = now + max(hit.retry_after, hit.cooldown_seconds, 300)
 	database.execute(
-		"""INSERT INTO bans(subject_type, subject_hash, subject_display, restriction, reason, created_by, created_at, expires_at)
-		SELECT ?, ?, ?, 'all', ?, 'shield', ?, ? WHERE NOT EXISTS (
+		"""INSERT INTO bans(public_id, subject_type, subject_hash, subject_display, restriction, reason, created_by, created_at, expires_at)
+		SELECT ?, ?, ?, ?, 'all', ?, 'shield', ?, ? WHERE NOT EXISTS (
 			SELECT 1 FROM bans WHERE subject_type = ? AND subject_hash = ? AND revoked_at IS NULL
 			AND (expires_at IS NULL OR expires_at > ?)
 		)""",
-		(subject_type, subject_hash, display, f"Automatic policy: {hit.policy_name}", now, expires_at, subject_type, subject_hash, now),
+		(new_public_ban_id(), subject_type, subject_hash, display, f"Automatic policy: {hit.policy_name}", now, expires_at, subject_type, subject_hash, now),
 	)
 
 
@@ -686,9 +903,14 @@ async def _proxy(request: Request, body: bytes, upstream: str, context: RequestC
 				)
 				if "temporary_ban" in actions:
 					expires_at = now + max(hit.retry_after for hit in response_hits)
+					normalized_ip = normalize_ban_subject("ip", context.ip)
+					subject_hash = stable_hash(normalized_ip, settings.internal_signing_key)
 					request.app.state.database.execute(
-						"INSERT INTO bans(subject_type, subject_hash, subject_display, restriction, reason, created_by, created_at, expires_at) VALUES ('ip', ?, ?, 'all', 'Automatic 404 scan policy', 'shield', ?, ?)",
-						(stable_hash(context.ip, settings.internal_signing_key), mask_ip(context.ip), now, expires_at),
+						"""INSERT INTO bans(public_id, subject_type, subject_hash, subject_display, restriction, reason, created_by, created_at, expires_at)
+						SELECT ?, 'ip', ?, ?, 'all', 'Automatic 404 scan policy', 'shield', ?, ?
+						WHERE NOT EXISTS (SELECT 1 FROM bans WHERE subject_type = 'ip' AND subject_hash = ?
+						AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?))""",
+						(new_public_ban_id(), subject_hash, ban_subject_display("ip", normalized_ip), now, expires_at, subject_hash, now),
 					)
 		except sqlite3.Error:
 			request.app.state.degraded_events.append({"createdAt": int(time.time()), "requestId": context.request_id, "host": context.host, "path": context.path, "method": context.method, "ipMasked": mask_ip(context.ip), "riskScore": 0, "reason": "response_telemetry_database_unavailable"})
@@ -818,7 +1040,7 @@ async def admin_dashboard(request: Request, range_hours: int = 24):
 	geo_options = db.query("SELECT country_code AS countryCode, region, COUNT(*) AS observations FROM ip_intel WHERE country_code IS NOT NULL GROUP BY country_code, region ORDER BY country_code, observations DESC")
 	network_intel = db.query("SELECT ip_masked AS ipMasked, country_code AS countryCode, region, city, asn, isp, organization, ip_type AS ipType, is_vpn AS isVpn, is_proxy AS isProxy, is_tor AS isTor, is_crawler AS isCrawler, is_malicious AS isMalicious, risk_score AS riskScore, first_seen_at AS firstSeenAt, last_seen_at AS lastSeenAt FROM ip_intel ORDER BY risk_score DESC, last_seen_at DESC LIMIT 100")
 	access_lists = db.query("SELECT id, kind, subject_type AS subjectType, subject_value AS subjectValue, scope_host AS scopeHost, note, created_at AS createdAt, expires_at AS expiresAt, disabled_at AS disabledAt FROM access_lists ORDER BY id DESC LIMIT 100")
-	bans = db.query("SELECT id, subject_type AS subjectType, subject_display AS subjectDisplay, restriction, reason, created_by AS createdBy, created_at AS createdAt, expires_at AS expiresAt, revoked_at AS revokedAt FROM bans ORDER BY id DESC LIMIT 100")
+	bans = db.query("SELECT id, public_id AS publicId, subject_type AS subjectType, subject_display AS subjectDisplay, restriction, reason, created_by AS createdBy, created_at AS createdAt, expires_at AS expiresAt, revoked_at AS revokedAt FROM bans ORDER BY id DESC LIMIT 100")
 	alerts = db.query("SELECT id, created_at AS createdAt, kind, severity, title, detail, status, delivered_at AS deliveredAt, delivery_detail AS deliveryDetail FROM alert_events ORDER BY id DESC LIMIT 50")
 	alert_config = db.query("SELECT enabled, minimum_score AS minimumScore, high_risk_per_5m AS highRiskPer5m, blocked_per_5m AS blockedPer5m, daily_report_hour AS dailyReportHour FROM alert_config WHERE id = 1")[0]
 	risk_model = {"weights": DEFAULT_WEIGHTS | db.setting("risk_weights", {}), "thresholds": DEFAULT_THRESHOLDS | db.setting("risk_thresholds", {}), "versions": db.query("SELECT version, created_at AS createdAt, created_by AS createdBy, note FROM risk_config_versions ORDER BY version DESC LIMIT 10")}
@@ -873,7 +1095,7 @@ async def admin_event_action(event_id: str, payload: EventActionInput, request: 
 		if not subject_hash:
 			raise HTTPException(status_code=422, detail=f"Event has no correlated {subject_type}")
 		display = event["ip_masked"] if subject_type == "ip" else "Correlated account"
-		db.execute("INSERT INTO bans(subject_type, subject_hash, subject_display, restriction, reason, created_by, created_at, expires_at) VALUES (?, ?, ?, 'all', ?, ?, ?, ?)", (subject_type, subject_hash, display, f"Created from risk event {event_id}", actor, now, now + payload.duration_seconds))
+		db.execute("INSERT INTO bans(public_id, subject_type, subject_hash, subject_display, restriction, reason, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, 'all', ?, ?, ?, ?)", (new_public_ban_id(), subject_type, subject_hash, display, f"Created from risk event {event_id}", actor, now, now + payload.duration_seconds))
 		db.execute("UPDATE risk_events SET review_status = 'actioned', reviewed_by = ?, reviewed_at = ? WHERE id = ?", (actor, now, event_id))
 	db.audit(actor, f"risk_event.{payload.action}", "risk_event", event_id, {"durationSeconds": payload.duration_seconds})
 	return {"ok": True, "eventId": event_id, "action": payload.action}
@@ -1187,18 +1409,23 @@ async def test_rule(payload: RuleInput, request: Request):
 @app.get("/__shield/api/admin/bans")
 async def admin_bans(request: Request):
 	await _admin(request)
-	return request.app.state.database.query("SELECT id, subject_type, subject_display, restriction, reason, created_by, created_at, expires_at, revoked_at, revoked_by, revoke_reason FROM bans ORDER BY id DESC LIMIT 500")
+	return request.app.state.database.query("SELECT id, public_id, subject_type, subject_display, restriction, reason, created_by, created_at, expires_at, revoked_at, revoked_by, revoke_reason FROM bans ORDER BY id DESC LIMIT 500")
 
 
 @app.post("/__shield/api/admin/bans")
 async def create_ban(payload: BanInput, request: Request):
 	actor, _ = await _admin(request, csrf=True)
 	now = int(time.time())
-	subject_hash = stable_hash(payload.subject_value.lower(), settings.internal_signing_key)
-	display = mask_ip(payload.subject_value) if payload.subject_type == "ip" else payload.subject_value[:4] + "..."
-	id_value = request.app.state.database.execute("INSERT INTO bans(subject_type, subject_hash, subject_display, restriction, reason, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (payload.subject_type, subject_hash, display, payload.restriction, payload.reason, actor, now, payload.expires_at))
+	try:
+		normalized = normalize_ban_subject(payload.subject_type, payload.subject_value)
+	except ValueError as error:
+		raise HTTPException(status_code=422, detail=str(error)) from None
+	public_id = new_public_ban_id()
+	subject_hash = stable_hash(normalized, settings.internal_signing_key)
+	display = ban_subject_display(payload.subject_type, normalized)
+	id_value = request.app.state.database.execute("INSERT INTO bans(public_id, subject_type, subject_hash, subject_display, restriction, reason, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (public_id, payload.subject_type, subject_hash, display, payload.restriction, payload.reason, actor, now, payload.expires_at))
 	request.app.state.database.audit(actor, "ban.create", "ban", str(id_value), {"subjectType": payload.subject_type, "restriction": payload.restriction, "reason": payload.reason})
-	return {"id": id_value}
+	return {"id": id_value, "publicId": public_id}
 
 
 @app.post("/__shield/api/admin/bans/{ban_id}/revoke")
@@ -1293,6 +1520,39 @@ def _challenge_response(request: Request, request_id: str, retry_after: int = 0)
 	return HTMLResponse(page, status_code=403, headers={"X-SF-Shield-Request-ID": request_id})
 
 
+def _is_public_portal(request: Request) -> bool:
+	return _host(request) == (urlparse(settings.public_url).hostname or "")
+
+
+@app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
+async def public_portal_home(request: Request):
+	if not _is_public_portal(request):
+		return await gateway("", request)
+	return _render_block_portal(request, generic=True)
+
+
+@app.api_route("/blocked", methods=["GET", "HEAD"], include_in_schema=False)
+async def public_block_case(request: Request):
+	if not _is_public_portal(request):
+		return await gateway("blocked", request)
+	return _render_block_portal(request)
+
+
+@app.api_route("/assets/{filename}", methods=["GET", "HEAD"], include_in_schema=False)
+async def public_portal_asset(filename: str, request: Request):
+	if not _is_public_portal(request):
+		return await gateway(f"assets/{filename}", request)
+	if filename not in {"blocked.css", "shield-mark.png"}:
+		raise HTTPException(status_code=404)
+	return FileResponse(
+		STATIC_ROOT / filename,
+		headers={
+			"Cache-Control": "public, max-age=86400, immutable",
+			"X-Content-Type-Options": "nosniff",
+		},
+	)
+
+
 @app.api_route("/{path:path}", methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
 async def gateway(path: str, request: Request):
 	request_id = uuid.uuid4().hex
@@ -1327,6 +1587,7 @@ async def gateway(path: str, request: Request):
 			session_id=request.cookies.get("sf_account_session", ""),
 			device_id=_device_id(request, ip),
 			email=_email_from_body(body, request.headers.get("content-type", "")),
+			api_key=_api_key(request),
 			user_agent=request.headers.get("user-agent", ""),
 		)
 		list_status, _list_match = request.app.state.access.match(context)
@@ -1348,10 +1609,12 @@ async def gateway(path: str, request: Request):
 		_event(request.app.state.database, context, risk, rule_decision, actions, request, body)
 		if "temporary_ban" in actions and mode == "enforce":
 			_automatic_ban(request.app.state.database, context, rates)
+			ban = request.app.state.access.active_ban(context)
 		if "delay" in actions:
 			await asyncio.sleep(1)
 		if "block" in actions or "temporary_ban" in actions:
-			return JSONResponse({"detail": "Request blocked by SilentFlare Shield", "requestId": request_id}, status_code=403, headers={"X-SF-Shield-Request-ID": request_id})
+			error_code = _block_error_code(ban, list_status, geo_reason, rule_decision, risk, actions)
+			return _blocked_response(request, request_id, host, error_code, ban)
 		if "turnstile" in actions and not challenge_passed:
 			return _challenge_response(request, request_id, max([hit.retry_after for hit in rates] or [0]))
 		if "rate_limit" in actions:

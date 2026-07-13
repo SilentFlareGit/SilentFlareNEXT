@@ -6,6 +6,7 @@ import time
 import unittest
 from pathlib import Path
 
+from app.blocking import ban_error_code, normalize_ban_subject
 from app.database import Database
 from app.geo import IpIntel
 from app.rate_limit import RateLimiter
@@ -52,6 +53,31 @@ class ShieldMvpTests(unittest.TestCase):
 		status, row = AccessListService(self.database, KEY).match(context)
 		self.assertEqual(status, "deny")
 		self.assertEqual(row["subject_type"], "cidr")
+
+	def test_ban_error_codes_distinguish_subject_and_duration(self):
+		self.assertEqual(
+			ban_error_code({"subject_type": "country", "expires_at": None}),
+			"SF-BAN-P130",
+		)
+		self.assertEqual(
+			ban_error_code({"subject_type": "device", "expires_at": int(time.time()) + 60}),
+			"SF-BAN-T220",
+		)
+		self.assertEqual(normalize_ban_subject("asn", "64512"), "AS64512")
+		self.assertEqual(normalize_ban_subject("cidr", "203.0.113.9/24"), "203.0.113.0/24")
+
+	def test_cidr_ban_matches_address_without_storing_each_ip(self):
+		now = int(time.time())
+		self.database.execute(
+			"""INSERT INTO bans(public_id, subject_type, subject_hash, subject_display, restriction,
+			reason, created_by, created_at) VALUES ('SFB-ABCDEF0123456789', 'cidr', 'not-used-for-range',
+			'203.0.113.0/24', 'all', 'Network restriction', 'test', ?)""",
+			(now,),
+		)
+		context = RequestContext("request", "blog.silentflare.com", "/", "GET", "203.0.113.44")
+		ban = AccessListService(self.database, KEY).active_ban(context)
+		self.assertIsNotNone(ban)
+		self.assertEqual(ban["public_id"], "SFB-ABCDEF0123456789")
 
 	def test_risk_score_combines_network_and_automation_signals(self):
 		intel = IpIntel("203.0.113.8", ip_type="datacenter", is_vpn=True, is_proxy=True)

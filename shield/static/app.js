@@ -99,7 +99,7 @@ async function rules() {
 
 async function bans() {
 	const rows = await api("/bans");
-	return `<div class="table-toolbar"><span>${rows.length} ban records</span><button data-action="new-ban">Create ban</button></div><div class="table-wrap">${rows.length ? `<table><thead><tr><th>Subject</th><th>Restriction</th><th>Reason</th><th>Created</th><th>Expiry</th><th>Status</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${e(row.subject_type)}: ${e(row.subject_display)}</td><td>${e(row.restriction)}</td><td>${e(row.reason)}</td><td>${e(formatTime(row.created_at))}</td><td>${e(formatTime(row.expires_at))}</td><td>${row.revoked_at ? "Revoked" : `<button class="danger" data-revoke-ban="${row.id}">Revoke</button>`}</td></tr>`).join("")}</tbody></table>` : '<div class="empty">No bans recorded</div>'}</div>`;
+	return `<div class="table-toolbar"><span>${rows.length} ban records</span><button data-action="new-ban">Create ban</button></div><div class="table-wrap">${rows.length ? `<table><thead><tr><th>Subject</th><th>Ban ID</th><th>Restriction</th><th>Reason</th><th>Created</th><th>Expiry</th><th>Status</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${e(row.subject_type)}: ${e(row.subject_display)}</td><td><code>${e(row.public_id || "Pending")}</code></td><td>${e(row.restriction)}</td><td>${e(row.reason)}</td><td>${e(formatTime(row.created_at))}</td><td>${e(formatTime(row.expires_at))}</td><td>${row.revoked_at ? "Revoked" : `<button class="danger" data-revoke-ban="${row.id}">Revoke</button>`}</td></tr>`).join("")}</tbody></table>` : '<div class="empty">No bans recorded</div>'}</div>`;
 }
 
 async function audit() {
