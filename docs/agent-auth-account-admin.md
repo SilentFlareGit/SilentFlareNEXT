@@ -164,6 +164,7 @@ Accounts is a standalone account workspace. Do not restore the public blog navba
 - `GET /admin/comments`: list comments with username, display name, email, post slug, moderation state, timestamps, content, and available creation IP audit data.
 - `POST /admin/comments/{comment_id}/delete`: soft-delete a comment.
 - `POST /admin/comments/{comment_id}/restore`: restore a soft-deleted comment.
+- `GET /internal/shield/accounts`: private timestamped HMAC-signed projection feed for Shield. It returns only stable account IDs, operator labels, coarse security posture, and activity counts; it never returns email addresses, credentials, raw sessions, verification data, or IP audit values.
 
 ## Runtime And Migration Context
 

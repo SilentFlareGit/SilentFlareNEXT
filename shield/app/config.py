@@ -59,9 +59,10 @@ class Settings:
 	account_snapshot_url: str = field(
 		default_factory=lambda: os.getenv(
 			"SHIELD_ACCOUNT_SNAPSHOT_URL",
-			"http://host.docker.internal:9010/admin/users",
+			"http://host.docker.internal:9010/internal/shield/accounts",
 		)
 	)
+	sync_secret: str = field(default_factory=lambda: os.getenv("SHIELD_SYNC_SECRET", ""))
 	account_sync_interval: int = field(
 		default_factory=lambda: _integer("SHIELD_ACCOUNT_SYNC_INTERVAL", 60)
 	)

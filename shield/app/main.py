@@ -100,7 +100,13 @@ async def lifespan(app: FastAPI):
 	app.state.client = httpx.AsyncClient(timeout=settings.proxy_timeout_seconds, follow_redirects=False)
 	app.state.degraded_counters = {}
 	app.state.degraded_events = []
+	app.state.account_sync_task = asyncio.create_task(_account_sync_loop(app))
 	yield
+	app.state.account_sync_task.cancel()
+	try:
+		await app.state.account_sync_task
+	except asyncio.CancelledError:
+		pass
 	await app.state.client.aclose()
 
 
@@ -210,18 +216,25 @@ def _account_risk(user: dict[str, Any], now: int) -> tuple[int, str, list[str]]:
 	return score, level, reasons
 
 
-async def _sync_account_projections(request: Request, force: bool = False) -> dict[str, Any]:
-	db = request.app.state.database
+async def _sync_account_projections(application: FastAPI, session_token: str = "", force: bool = False) -> dict[str, Any]:
+	db = application.state.database
 	now = int(time.time())
 	last = db.query("SELECT completed_at, record_count, status FROM sync_runs WHERE source = 'fastapi_accounts' ORDER BY id DESC LIMIT 1")
 	if not force and last and last[0]["status"] == "completed" and now - int(last[0]["completed_at"] or 0) < settings.account_sync_interval:
 		return {"status": "fresh", "recordCount": last[0]["record_count"], "completedAt": last[0]["completed_at"]}
 	run_id = db.execute("INSERT INTO sync_runs(source, started_at, status) VALUES ('fastapi_accounts', ?, 'running')", (now,))
-	session_token = request.cookies.get(settings.admin_cookie_name, "")
 	try:
-		response = await request.app.state.client.get(
+		headers = {"Accept": "application/json", "Host": "api.silentflare.com"}
+		if settings.sync_secret:
+			timestamp = str(int(time.time()))
+			message = f"GET\n/internal/shield/accounts\n{timestamp}"
+			headers["X-SF-Shield-Timestamp"] = timestamp
+			headers["X-SF-Shield-Signature"] = hmac.new(settings.sync_secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
+		elif session_token:
+			headers["Cookie"] = f"{settings.admin_cookie_name}={session_token}"
+		response = await application.state.client.get(
 			settings.account_snapshot_url,
-			headers={"Accept": "application/json", "Cookie": f"{settings.admin_cookie_name}={session_token}", "Host": "api.silentflare.com"},
+			headers=headers,
 		)
 		response.raise_for_status()
 		users = response.json().get("users", [])
@@ -258,6 +271,15 @@ async def _sync_account_projections(request: Request, force: bool = False) -> di
 	except (httpx.HTTPError, ValueError, json.JSONDecodeError) as error:
 		db.execute("UPDATE sync_runs SET completed_at = ?, status = 'failed', detail = ? WHERE id = ?", (int(time.time()), type(error).__name__, run_id))
 		return {"status": "failed", "recordCount": 0, "completedAt": int(time.time())}
+
+
+async def _account_sync_loop(application: FastAPI) -> None:
+	while True:
+		try:
+			await _sync_account_projections(application, force=True)
+		except Exception:
+			pass
+		await asyncio.sleep(max(30, settings.account_sync_interval))
 
 
 def _mode(database: Database) -> str:
@@ -491,7 +513,7 @@ async def admin_dashboard(request: Request, range_hours: int = 24):
 	range_hours = min(168, max(6, range_hours))
 	now = int(time.time())
 	since = now - range_hours * 3600
-	sync = await _sync_account_projections(request)
+	sync = await _sync_account_projections(request.app, request.cookies.get(settings.admin_cookie_name, ""))
 	counts = db.query(
 		"""SELECT COUNT(*) AS requests,
 		SUM(CASE WHEN risk_score >= 80 OR actions_json LIKE '%block%' THEN 1 ELSE 0 END) AS blocked,
@@ -545,7 +567,7 @@ async def admin_dashboard(request: Request, range_hours: int = 24):
 @app.post("/__shield/api/admin/sync/accounts")
 async def admin_sync_accounts(request: Request):
 	actor, _ = await _admin(request, csrf=True)
-	result = await _sync_account_projections(request, force=True)
+	result = await _sync_account_projections(request.app, request.cookies.get(settings.admin_cookie_name, ""), force=True)
 	request.app.state.database.audit(actor, "accounts.sync", "account_projection", None, result)
 	return result
 

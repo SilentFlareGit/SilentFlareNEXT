@@ -13,6 +13,7 @@ os.environ["SHIELD_DATABASE_PATH"] = os.path.join(_temporary.name, "shield.db")
 os.environ["SHIELD_INTERNAL_SIGNING_KEY"] = "integration-signing-key-that-is-longer-than-thirty-two-characters"
 os.environ["SHIELD_ADMIN_INTROSPECTION_URL"] = "http://admin-session.test/auth/me"
 os.environ["SHIELD_ACCOUNT_SNAPSHOT_URL"] = "http://account-snapshot.test/admin/users"
+os.environ["SHIELD_SYNC_SECRET"] = "integration-sync-key-that-is-longer-than-thirty-two-characters"
 os.environ["SHIELD_COOKIE_SECURE"] = "false"
 
 from fastapi.testclient import TestClient

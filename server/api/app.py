@@ -90,6 +90,7 @@ ACCOUNT_SESSION_COOKIE = os.getenv("ACCOUNT_SESSION_COOKIE_NAME", "sf_account_se
 ACCOUNT_SESSION_SECRET = os.getenv("SESSION_SECRET") or os.getenv("ACCOUNT_SESSION_SECRET", "")
 ACCOUNT_COOKIE_DOMAIN = os.getenv("ACCOUNT_COOKIE_DOMAIN", "")
 ACCOUNT_DB_PATH = Path(os.getenv("ACCOUNT_DB_PATH", "/opt/silentflare/api/account.db"))
+SHIELD_SYNC_SECRET = os.getenv("SHIELD_SYNC_SECRET", "")
 ACCOUNT_AVATAR_DIR = Path(
 	os.getenv("ACCOUNT_AVATAR_DIR", "/opt/silentflare/api/uploads/avatars")
 )
@@ -3308,6 +3309,42 @@ def admin_users(request: Request) -> dict[str, Any]:
 		[utc_now()],
 	)
 	return {"ok": True, "users": users, **admin_data_status()}
+
+
+@app.get("/internal/shield/accounts")
+def shield_account_snapshot(
+	x_sf_shield_timestamp: str | None = Header(default=None),
+	x_sf_shield_signature: str | None = Header(default=None),
+) -> dict[str, Any]:
+	if len(SHIELD_SYNC_SECRET) < 32:
+		raise HTTPException(status_code=503, detail="Shield synchronization is not configured")
+	try:
+		timestamp = int(x_sf_shield_timestamp or "")
+	except ValueError as error:
+		raise HTTPException(status_code=401, detail="Invalid Shield synchronization signature") from error
+	if abs(int(time.time()) - timestamp) > 60:
+		raise HTTPException(status_code=401, detail="Expired Shield synchronization signature")
+	message = f"GET\n/internal/shield/accounts\n{timestamp}"
+	expected = hmac.new(SHIELD_SYNC_SECRET.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
+	if not x_sf_shield_signature or not hmac.compare_digest(x_sf_shield_signature, expected):
+		raise HTTPException(status_code=401, detail="Invalid Shield synchronization signature")
+	users = d1_query(
+		"""
+		SELECT users.id, users.username, users.role, users.display_region_code,
+			users.email_verified_at, users.totp_enabled, users.created_at,
+			users.last_seen_at, users.disabled_at,
+			COUNT(DISTINCT comments.id) AS comment_count,
+			COUNT(DISTINCT sessions.id) AS active_session_count
+		FROM users
+		LEFT JOIN comments ON comments.user_id = users.id
+		LEFT JOIN sessions ON sessions.user_id = users.id AND sessions.expires_at > ?
+		GROUP BY users.id
+		ORDER BY users.created_at DESC
+		LIMIT 500
+		""",
+		[utc_now()],
+	)
+	return {"ok": True, "users": users, "generated_at": utc_now()}
 
 
 @app.get("/admin/users/{user_id}")
