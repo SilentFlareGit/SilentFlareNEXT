@@ -39,6 +39,7 @@ Current product state:
 - `SilentFlare DB Backup` is the user-facing and canonical bot id. `ghost-db-backup` may still be accepted by the API only as a backwards-compatible alias.
 - `Telegram Chat Bot` is the user-facing bot id for the MessagesHelperBot service. `telegram-chat-bot` and `messages-helper-bot` may be accepted only as backwards-compatible aliases.
 - Telegram authorization creates a one-time pending challenge.
+- The fixed Owner may send `/allowweblogin` to enable Admin web login and `/denyweblogin` to disable it. Disabling immediately revokes all Admin sessions and pending Admin challenges.
 - The Telegram bot sends an inline approval button to the fixed Owner account.
 - After Owner approval, the API should edit the same Telegram message to show approval success and link expiry.
 - If Telegram `editMessageText` or `answerCallbackQuery` fails, the webhook must still return `200` after applying the approval state.

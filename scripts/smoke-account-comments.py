@@ -9,6 +9,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+import time
 import types
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -339,6 +340,27 @@ def main() -> None:
 		if "password_hash" in detail["user"] or "totp_secret" in detail["user"]:
 			raise AssertionError("admin detail exposed authentication secrets")
 
+		module.telegram_api = lambda *_args, **_kwargs: {"ok": True}
+		allow_result = asyncio.run(module.telegram_update(
+			StubRequest(body=json.dumps({"message": {
+				"text": "/allowweblogin",
+				"from": {"id": 8737100423},
+				"chat": {"id": 8737100423},
+			}}).encode("utf-8")),
+			"test-webhook-secret",
+		))
+		if not allow_result.get("web_login_enabled"):
+			raise AssertionError("Owner command did not enable Admin web login")
+		admin_response = StubResponse()
+		module.create_session(admin_response, module.ADMIN_AUTH_ID)
+		admin_session_id = next(
+			key for key, value in module.SESSIONS.items()
+			if value.get("bot_id") == module.ADMIN_AUTH_ID
+		)
+		admin_remaining = module.SESSIONS[admin_session_id]["expires_at"] - time.time()
+		if not 3590 <= admin_remaining <= 3600:
+			raise AssertionError("Admin session does not have a fixed one-hour lifetime")
+
 		challenge = module.create_login_challenge(module.ADMIN_AUTH_ID, "smoke-client")
 		module.edit_login_approval_message = lambda *_args, **_kwargs: None
 		module.answer_callback = lambda *_args, **_kwargs: None
@@ -352,6 +374,20 @@ def main() -> None:
 		))
 		if not telegram_result.get("approved"):
 			raise AssertionError("shared Telegram bot could not approve the admin challenge")
+		deny_result = asyncio.run(module.telegram_update(
+			StubRequest(body=json.dumps({"message": {
+				"text": "/denyweblogin",
+				"from": {"id": 8737100423},
+				"chat": {"id": 8737100423},
+			}}).encode("utf-8")),
+			"test-webhook-secret",
+		))
+		if deny_result.get("web_login_enabled") is not False:
+			raise AssertionError("Owner command did not disable Admin web login")
+		if any(item.get("bot_id") == module.ADMIN_AUTH_ID for item in module.SESSIONS.values()):
+			raise AssertionError("Disabling web login did not revoke Admin sessions")
+		if any(item.get("bot_id") == module.ADMIN_AUTH_ID for item in module.LOGIN_CHALLENGES.values()):
+			raise AssertionError("Disabling web login did not revoke Admin challenges")
 
 		secret = module.generate_totp_secret()
 		module.d1_query(

@@ -1,6 +1,6 @@
 <script lang="ts">
 import Icon from "@iconify/svelte";
-import { onMount } from "svelte";
+import { onDestroy, onMount } from "svelte";
 import SiteEditor from "./SiteEditor.svelte";
 
 type UserRow = {
@@ -118,6 +118,7 @@ let search = $state("");
 let postSlugFilter = $state("");
 let loading = $state(false);
 let actionMessage = $state("");
+let sessionCheckTimer: number | undefined;
 let actionTone = $state<"neutral" | "error" | "success">("neutral");
 
 const visibleUsers = $derived(
@@ -173,7 +174,8 @@ async function api<T>(
 	});
 	const body = (await response.json().catch(() => ({}))) as { detail?: string };
 	if (!response.ok) {
-		if (response.status === 401) redirectToAuth();
+		if (response.status === 401 || body.detail === "Web login is disabled")
+			redirectToAuth();
 		throw new Error(body.detail ?? `API ${response.status}`);
 	}
 	return body as T;
@@ -208,6 +210,19 @@ async function checkExistingSession() {
 		redirectToAuth();
 	} finally {
 		checkingSession = false;
+	}
+}
+async function verifyAdminSession() {
+	if (!authenticated || document.visibilityState === "hidden") return;
+	try {
+		const session = await api<{ bot: { id: string } }>("/auth/me");
+		if (session.bot?.id !== ADMIN_BOT_ID)
+			throw new Error("Invalid Admin session");
+	} catch {
+		authenticated = false;
+		csrf = "";
+		sessionStorage.removeItem("silentflare_admin_csrf");
+		redirectToAuth();
 	}
 }
 async function loadUsers() {
@@ -351,6 +366,17 @@ async function switchTab(tab: "users" | "comments" | "site") {
 }
 onMount(() => {
 	void checkExistingSession();
+	sessionCheckTimer = window.setInterval(
+		() => void verifyAdminSession(),
+		15_000,
+	);
+	const handleVisibility = () => void verifyAdminSession();
+	document.addEventListener("visibilitychange", handleVisibility);
+	return () =>
+		document.removeEventListener("visibilitychange", handleVisibility);
+});
+onDestroy(() => {
+	if (sessionCheckTimer) window.clearInterval(sessionCheckTimer);
 });
 </script>
 

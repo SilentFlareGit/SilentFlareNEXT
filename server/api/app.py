@@ -79,6 +79,7 @@ API_ENV_FILE = Path(os.getenv("API_ENV_FILE", "/opt/silentflare/api/api.env"))
 CONSOLE_AUTH_ID = "console"
 CONSOLE_TOTP_SECRET = os.getenv("BOT_CONSOLE_TOTP_SECRET", os.getenv("WEB_TOTP_SECRET", ""))
 WEB_SESSION_TTL = int(os.getenv("WEB_SESSION_TTL", "43200"))
+ADMIN_SESSION_TTL = 3600
 WEB_COOKIE_SECURE = os.getenv("WEB_COOKIE_SECURE", "1") != "0"
 WEB_LOGIN_ATTEMPTS = int(os.getenv("WEB_LOGIN_ATTEMPTS", "5"))
 WEB_LOGIN_WINDOW_SECONDS = int(os.getenv("WEB_LOGIN_WINDOW_SECONDS", "900"))
@@ -180,6 +181,7 @@ BOTS = [
 AUTH_TARGETS = [*BOTS, ADMIN_AUTH_BOT]
 
 SESSIONS: dict[str, dict[str, Any]] = {}
+ADMIN_WEB_LOGIN_ENABLED = False
 LOGIN_CHALLENGES: dict[str, dict[str, Any]] = {}
 LOGIN_FAILURES: dict[str, list[float]] = {}
 
@@ -427,12 +429,16 @@ def cleanup_sessions() -> None:
 
 def create_session(response: Response, bot_id: str) -> dict[str, str]:
 	cleanup_sessions()
+	normalized_bot_id = normalize_bot_id(bot_id)
+	if normalized_bot_id == ADMIN_AUTH_ID and not ADMIN_WEB_LOGIN_ENABLED:
+		raise HTTPException(status_code=403, detail="Web login is disabled")
+	session_ttl = ADMIN_SESSION_TTL if normalized_bot_id == ADMIN_AUTH_ID else WEB_SESSION_TTL
 	session_id = secrets.token_urlsafe(32)
 	csrf = secrets.token_urlsafe(32)
 	SESSIONS[session_id] = {
-		"bot_id": bot_id,
+		"bot_id": normalized_bot_id,
 		"csrf": csrf,
-		"expires_at": time.time() + WEB_SESSION_TTL,
+		"expires_at": time.time() + session_ttl,
 		"login_epoch": WEB_LOGIN_SESSION_EPOCH,
 	}
 	response.set_cookie(
@@ -441,11 +447,11 @@ def create_session(response: Response, bot_id: str) -> dict[str, str]:
 		httponly=True,
 		secure=WEB_COOKIE_SECURE,
 		samesite="none" if WEB_COOKIE_SECURE else "lax",
-		max_age=WEB_SESSION_TTL,
+		max_age=session_ttl,
 		path="/",
 		domain=BOT_COOKIE_DOMAIN or None,
 	)
-	return {"bot_id": bot_id, "csrf": csrf}
+	return {"bot_id": normalized_bot_id, "csrf": csrf}
 
 
 def normalize_bot_id(bot_id: str) -> str:
@@ -474,8 +480,25 @@ def get_session(request: Request) -> dict[str, Any]:
 	session = SESSIONS.get(session_id)
 	if not session:
 		raise HTTPException(status_code=401, detail="Login required")
-	session["expires_at"] = time.time() + WEB_SESSION_TTL
+	if session.get("bot_id") == ADMIN_AUTH_ID and not ADMIN_WEB_LOGIN_ENABLED:
+		SESSIONS.pop(session_id, None)
+		raise HTTPException(status_code=403, detail="Web login is disabled")
+	if session.get("bot_id") != ADMIN_AUTH_ID:
+		session["expires_at"] = time.time() + WEB_SESSION_TTL
 	return session
+
+
+def set_admin_web_login(enabled: bool) -> None:
+	global ADMIN_WEB_LOGIN_ENABLED
+	ADMIN_WEB_LOGIN_ENABLED = enabled
+	if enabled:
+		return
+	for session_id, session in list(SESSIONS.items()):
+		if session.get("bot_id") == ADMIN_AUTH_ID:
+			SESSIONS.pop(session_id, None)
+	for challenge_id, challenge in list(LOGIN_CHALLENGES.items()):
+		if challenge.get("bot_id") == ADMIN_AUTH_ID:
+			LOGIN_CHALLENGES.pop(challenge_id, None)
 
 
 def require_session(
@@ -2849,6 +2872,7 @@ def health() -> dict[str, Any]:
 @app.get("/auth/options")
 def auth_options(bot_id: str = "") -> dict[str, Any]:
 	target = ensure_bot(bot_id) if bot_id else None
+	web_login_enabled = target is None or target["id"] != ADMIN_AUTH_ID or ADMIN_WEB_LOGIN_ENABLED
 	telegram_ready = (
 		bool(telegram_auth_config(target["id"])["token"])
 		if target
@@ -2856,10 +2880,11 @@ def auth_options(bot_id: str = "") -> dict[str, Any]:
 	)
 	return {
 		"methods": {
-			"telegram": telegram_ready,
-			"totp": bool(console_totp_secret()),
+			"telegram": telegram_ready and web_login_enabled,
+			"totp": bool(console_totp_secret()) and web_login_enabled,
 		},
 		"owner_id": TELEGRAM_OWNER_ID,
+		"web_login_enabled": web_login_enabled,
 	}
 
 
@@ -2883,6 +2908,8 @@ def auth_login(
 ) -> dict[str, Any]:
 	check_login_rate_limit(request)
 	bot = ensure_bot(str(payload.bot_id or ""))
+	if bot["id"] == ADMIN_AUTH_ID and not ADMIN_WEB_LOGIN_ENABLED:
+		raise HTTPException(status_code=403, detail="Web login is disabled")
 	try:
 		verify_console_login(payload)
 	except HTTPException:
@@ -2902,6 +2929,8 @@ def auth_login(
 def auth_telegram_start(payload: TelegramStartPayload, request: Request) -> dict[str, Any]:
 	check_login_rate_limit(request)
 	bot = ensure_bot(str(payload.bot_id or ""))
+	if bot["id"] == ADMIN_AUTH_ID and not ADMIN_WEB_LOGIN_ENABLED:
+		raise HTTPException(status_code=403, detail="Web login is disabled")
 	ensure_telegram_auth_bot(bot)
 	challenge = create_login_challenge(bot["id"], client_key(request))
 	try:
@@ -2934,6 +2963,9 @@ def auth_telegram_status(
 	response: Response,
 ) -> dict[str, Any]:
 	bot = ensure_bot(bot_id)
+	if bot["id"] == ADMIN_AUTH_ID and not ADMIN_WEB_LOGIN_ENABLED:
+		LOGIN_CHALLENGES.pop(challenge_id, None)
+		raise HTTPException(status_code=403, detail="Web login is disabled")
 	challenge = get_login_challenge(challenge_id, bot["id"], client_key(request))
 	if challenge["status"] != "approved":
 		return {"ok": True, "status": "pending"}
@@ -3450,6 +3482,38 @@ async def telegram_update(request: Request, token: str = "") -> dict[str, Any]:
 	if not webhook_config:
 		raise HTTPException(status_code=401, detail="Invalid webhook token")
 	update = await request.json()
+	message = update.get("message") or {}
+	message_text = str(message.get("text") or "").strip()
+	command = (
+		message_text.split(maxsplit=1)[0].split("@", 1)[0].lower()
+		if message_text
+		else ""
+	)
+	if command in {"/allowweblogin", "/denyweblogin"}:
+		from_user = message.get("from") or {}
+		user_id = int(from_user.get("id") or 0)
+		if user_id != int(webhook_config["owner_id"]):
+			return {"ok": True}
+		enabled = command == "/allowweblogin"
+		set_admin_web_login(enabled)
+		chat = message.get("chat") or {}
+		chat_id = chat.get("id") or webhook_config.get("chat_id") or webhook_config["owner_id"]
+		try:
+			telegram_api(
+				webhook_config,
+				"sendMessage",
+				{
+					"chat_id": chat_id,
+					"text": (
+						"Admin web login enabled. New sessions expire after one hour."
+						if enabled
+						else "Admin web login disabled. All Admin sessions were revoked."
+					),
+				},
+			)
+		except Exception:
+			pass
+		return {"ok": True, "web_login_enabled": enabled}
 	callback = update.get("callback_query") or {}
 	data = callback.get("data") or ""
 	if not data.startswith("sf_login:"):

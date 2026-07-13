@@ -128,6 +128,9 @@ Accounts is a standalone account workspace. Do not restore the public blog navba
 ## Current Admin Behavior
 
 - Admin login uses the existing bot-style owner auth surface through `SilentFlare Admin`.
+- Admin web login is disabled by default after an API restart. The fixed Telegram Owner enables it with `/allowweblogin` and disables it with `/denyweblogin`.
+- Admin sessions have a fixed one-hour lifetime. `/denyweblogin` immediately revokes every Admin session and pending Admin login challenge.
+- The authenticated Admin workspace checks its session every 15 seconds and when the page becomes visible again.
 - Admin supports Telegram bot approval and optional 2FA only.
 - If 2FA is not configured, the UI should show it as unavailable instead of presenting a usable 2FA form.
 - Admin must stay light-only and match the Blog's pale blue/white visual language.
