@@ -33,6 +33,12 @@ Invoke-RestMethod http://127.0.0.1:9080/__shield/health/live
 Invoke-RestMethod http://127.0.0.1:9080/__shield/health/ready
 ```
 
+On the Linux origin host, use the production Compose file so Shield can reach services bound to host loopback while Shield itself remains loopback-only:
+
+```bash
+docker compose -f docker-compose.prod.yml -p silentflare-shield up -d --build
+```
+
 For local HTTP-only console testing, set `SHIELD_COOKIE_SECURE=false`. Production must use HTTPS and `SHIELD_COOKIE_SECURE=true`.
 
 ## Validation

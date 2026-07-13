@@ -269,7 +269,7 @@ The emergency switch is the audited global `bypass` mode. The out-of-process eme
 
 ## 13. Docker Compose and Deployment
 
-`shield/docker-compose.yml` builds one non-root, read-only container, binds it to `127.0.0.1:9080`, mounts only the Shield data volume, drops Linux capabilities, and adds a liveness health check. `shield/nginx/silentflare-shield.conf` is a merge reference rather than a drop-in replacement for existing TLS configuration.
+`shield/docker-compose.yml` is the portable development deployment. `shield/docker-compose.prod.yml` uses Linux host networking but overrides Uvicorn to bind only `127.0.0.1:9080`; this lets Shield reach the existing FNS1 origins that listen only on host loopback without exposing Shield publicly. Both variants run a non-root, read-only container, mount only the Shield data volume, and drop Linux capabilities. `shield/nginx/silentflare-shield.conf` is a merge reference rather than a drop-in replacement for existing TLS configuration.
 
 Recommended FNS1 layout:
 
