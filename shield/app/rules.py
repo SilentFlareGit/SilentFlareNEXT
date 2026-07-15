@@ -20,6 +20,7 @@ class RequestContext:
 	ip: str
 	country: str = ""
 	region: str = ""
+	region_code: str = ""
 	asn: str = ""
 	ip_type: str = "unknown"
 	account_id: str = ""
@@ -40,6 +41,7 @@ class RequestContext:
 			"ip": self.ip,
 			"country": self.country,
 			"region": self.region,
+			"region_code": self.region_code,
 			"asn": self.asn,
 			"ip_type": self.ip_type,
 			"account_id": self.account_id,

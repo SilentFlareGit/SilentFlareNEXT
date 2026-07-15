@@ -26,7 +26,7 @@ from starlette.requests import Request
 
 from app.config import settings
 from app.database import stable_hash
-from app.main import _automatic_ban, _client_identity, _cloudflare_edge, _entity_subjects, _reconcile_entity_bans, _record_entity_signals, _resolve_account, app
+from app.main import _apply_geo_policy_risk, _automatic_ban, _client_identity, _cloudflare_edge, _entity_subjects, _geo_policy_action, _reconcile_entity_bans, _record_entity_signals, _resolve_account, app
 from app.rate_limit import RateHit
 from app.risk import RiskResult
 from app.rules import RequestContext, RuleDecision
@@ -330,6 +330,100 @@ class ShieldApplicationTests(unittest.TestCase):
 		self.assertEqual(updated["policies"][3]["action"], "temporary_ban")
 		self.assertEqual(updated["geoPolicies"][0]["countryCode"], "US")
 		self.assertEqual(updated["riskyAccounts"][0]["manualDelta"], 20)
+
+	def test_geography_catalog_restriction_scores_request_and_roots_at_100(self):
+		headers = {"Cookie": "sf_bot_session=valid-admin", "X-CSRF-Token": "admin-csrf"}
+		catalog = self.client.get(
+			"/__shield/api/admin/geography/restrictions",
+			headers=headers,
+		)
+		self.assertEqual(catalog.status_code, 200)
+		countries = catalog.json()["countries"]
+		self.assertEqual(len(countries), 249)
+		self.assertTrue({"TW", "US"}.issubset({country["code"] for country in countries}))
+
+		regions = self.client.get(
+			"/__shield/api/admin/geography/restrictions?country_code=US",
+			headers=headers,
+		)
+		self.assertEqual(regions.status_code, 200)
+		self.assertIn("US-CA", {region["code"] for region in regions.json()["regions"]})
+
+		restriction = {
+			"country_code": "US",
+			"region_code": "US-CA",
+			"restricted": True,
+			"reason": "Integration regional restriction",
+		}
+		created = self.client.put(
+			"/__shield/api/admin/geography/restrictions",
+			headers=headers,
+			json=restriction,
+		)
+		self.assertEqual(created.status_code, 200)
+		subjects = {}
+		try:
+			context = RequestContext(
+				request_id="geography-restriction-request",
+				host="blog.silentflare.com",
+				path="/restricted-region",
+				method="GET",
+				ip="203.0.113.221",
+				country="US",
+				region="California",
+				region_code="CA",
+				account_id="geography-account",
+			)
+			action, reason = _geo_policy_action(app.state.database, context)
+			self.assertEqual(action, "block")
+			risk = RiskResult(15, "observe", [])
+			_apply_geo_policy_risk(context, risk, reason)
+			self.assertEqual((risk.score, risk.level, context.risk_score), (100, "block", 100))
+
+			subjects = _entity_subjects(app.state.entities, context)
+			_record_entity_signals(
+				app.state.entities,
+				context,
+				risk,
+				[],
+				RuleDecision(),
+				subjects,
+				{},
+			)
+			self.assertGreater(app.state.entities.process_signal_queue(), 0)
+			for subject in subjects.values():
+				ledger = app.state.entities.detail(int(subject["id"]))["ledger"]
+				entry = next(
+					item for item in ledger if item["reasonCode"] == "GEOGRAPHY_RESTRICTION"
+				)
+				self.assertEqual(entry["scoreAfter"], 100)
+		finally:
+			for subject in subjects.values():
+				current_score = int(
+					app.state.entities.detail(int(subject["id"]))["currentScore"]
+				)
+				if current_score:
+					app.state.entities.adjust(
+						int(subject["id"]),
+						-current_score,
+						reason_code="TEST_CLEANUP",
+						reason="Integration geography score cleanup",
+						source="test",
+						actor="test-suite",
+					)
+			restriction["restricted"] = False
+			restriction["reason"] = "Integration restriction cleanup"
+			restored = self.client.put(
+				"/__shield/api/admin/geography/restrictions",
+				headers=headers,
+				json=restriction,
+			)
+			self.assertEqual(restored.status_code, 200)
+
+		audit = app.state.database.query(
+			"SELECT action FROM audit_log WHERE target_id = 'US-CA' ORDER BY id DESC LIMIT 1"
+		)
+		self.assertEqual(audit[0]["action"], "geo_restriction.update")
 
 	def test_account_response_is_signed_and_recorded_without_exposing_account_reference(self):
 		headers = {"Cookie": "sf_bot_session=valid-admin", "X-CSRF-Token": "admin-csrf"}

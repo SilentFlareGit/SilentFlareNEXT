@@ -17,6 +17,7 @@ from typing import Any
 from urllib.parse import quote, urlparse
 
 import httpx
+import pycountry
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -99,10 +100,18 @@ class ServiceControlInput(BaseModel):
 class GeoPolicyInput(BaseModel):
 	country_code: str = Field(min_length=2, max_length=2)
 	region: str | None = Field(default=None, max_length=120)
+	region_code: str | None = Field(default=None, max_length=16)
 	scope_host: str | None = None
 	action: str = Field(pattern=r"^(block|turnstile|read_only|block_login|block_register|block_comment|block_api|block_admin)$")
 	note: str = Field(default="", max_length=300)
 	expires_at: int | None = None
+
+
+class GeoRestrictionInput(BaseModel):
+	country_code: str = Field(min_length=2, max_length=2)
+	region_code: str | None = Field(default=None, max_length=16)
+	restricted: bool
+	reason: str = Field(min_length=3, max_length=300)
 
 
 class RatePolicyUpdate(BaseModel):
@@ -839,15 +848,20 @@ def _geo_policy_action(database: Database, context: RequestContext) -> tuple[str
 	if not context.country:
 		return None, None
 	now = int(time.time())
+	region_code = context.region_code.strip().upper()
+	full_region_code = (
+		region_code if "-" in region_code else f"{context.country.upper()}-{region_code}"
+	) if region_code else ""
 	rows = database.query(
-		"""SELECT id, action, country_code, region FROM geo_policies
+		"""SELECT id, action, country_code, region, region_code AS regionCode FROM geo_policies
 		WHERE enabled = 1 AND country_code = ?
-		AND (region IS NULL OR LOWER(region) = LOWER(?))
+		AND (region IS NULL OR LOWER(region) = LOWER(?)
+			OR (region_code IS NOT NULL AND UPPER(region_code) IN (?, ?)))
 		AND (scope_host IS NULL OR scope_host = ?)
 		AND (expires_at IS NULL OR expires_at > ?)
 		ORDER BY CASE WHEN region IS NULL THEN 1 ELSE 0 END,
 			CASE WHEN scope_host IS NULL THEN 1 ELSE 0 END, id DESC""",
-		(context.country.upper(), context.region or "", context.host, now),
+		(context.country.upper(), context.region or "", region_code, full_region_code, context.host, now),
 	)
 	for row in rows:
 		action = row["action"]
@@ -863,8 +877,20 @@ def _geo_policy_action(database: Database, context: RequestContext) -> tuple[str
 		if applies:
 			resolved = "block" if action.startswith("block_") or action == "read_only" else action
 			label = row["country_code"] + (f" / {row['region']}" if row["region"] else "")
+			if action == "block":
+				context.extra["geo_restriction_policy_id"] = int(row["id"])
+				context.extra["geo_restriction_label"] = label
 			return resolved, f"Geographic policy {row['id']} matched {label}: {action.replace('_', ' ')}"
 	return None, None
+
+
+def _apply_geo_policy_risk(context: RequestContext, risk: RiskResult, reason: str | None) -> None:
+	if reason:
+		risk.reasons.append(reason)
+	if context.extra.get("geo_restriction_policy_id"):
+		risk.score = 100
+		risk.level = "block"
+		context.risk_score = 100
 
 
 def _is_sensitive(host: str, path: str, method: str) -> bool:
@@ -1284,6 +1310,12 @@ def _record_entity_signals(
 			)
 
 	reasons = set(risk.reasons)
+	geo_policy_id = context.extra.get("geo_restriction_policy_id")
+	if geo_policy_id:
+		reference = f"geo-policy:{geo_policy_id}:{int(time.time()) // 3600}"
+		label = str(context.extra.get("geo_restriction_label") or context.country)
+		signal("ip", 100, "GEOGRAPHY_RESTRICTION", f"Restricted geography matched: {label}", 86400, 1, reference)
+		signal("account", 100, "GEOGRAPHY_RESTRICTION", f"Restricted geography matched: {label}", 86400, 1, reference)
 	if "VPN network" in reasons:
 		signal_roots(weighted("vpn", 0.5), "VPN_NETWORK", "VPN network observed", 86400, account_ratio=0.2)
 	if "Proxy network" in reasons:
@@ -1571,7 +1603,7 @@ async def admin_dashboard(request: Request, range_hours: int = 24):
 	for service in services:
 		service["connected"] = service["host"] in settings.connected_hosts
 		service["status"] = "protected" if service["connected"] and service["protectionEnabled"] else "bypassed" if service["connected"] else "staged" if service["protectionEnabled"] else "configured"
-	geo_policies = db.query("SELECT id, country_code AS countryCode, region, scope_host AS scopeHost, action, enabled, note, created_at AS createdAt, expires_at AS expiresAt FROM geo_policies ORDER BY enabled DESC, id DESC")
+	geo_policies = db.query("SELECT id, country_code AS countryCode, region, region_code AS regionCode, scope_host AS scopeHost, action, enabled, note, created_at AS createdAt, expires_at AS expiresAt FROM geo_policies ORDER BY enabled DESC, id DESC")
 	geo_options = db.query("SELECT country_code AS countryCode, region, COUNT(*) AS observations FROM ip_intel WHERE country_code IS NOT NULL GROUP BY country_code, region ORDER BY country_code, observations DESC")
 	network_intel = db.query("SELECT ip_masked AS ipMasked, country_code AS countryCode, region, city, asn, isp, organization, ip_type AS ipType, is_vpn AS isVpn, is_proxy AS isProxy, is_tor AS isTor, is_crawler AS isCrawler, is_malicious AS isMalicious, risk_score AS riskScore, first_seen_at AS firstSeenAt, last_seen_at AS lastSeenAt FROM ip_intel ORDER BY risk_score DESC, last_seen_at DESC LIMIT 100")
 	access_lists = db.query("SELECT id, kind, subject_type AS subjectType, subject_value AS subjectValue, scope_host AS scopeHost, note, created_at AS createdAt, expires_at AS expiresAt, disabled_at AS disabledAt FROM access_lists ORDER BY id DESC LIMIT 100")
@@ -1830,8 +1862,8 @@ async def admin_geo_policy_create(payload: GeoPolicyInput, request: Request):
 		raise HTTPException(status_code=422, detail="Unknown service host")
 	now = int(time.time())
 	policy_id = request.app.state.database.execute(
-		"INSERT INTO geo_policies(country_code, region, scope_host, action, note, created_at, created_by, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		(country, payload.region or None, payload.scope_host or None, payload.action, payload.note, now, actor, now, payload.expires_at),
+		"INSERT INTO geo_policies(country_code, region, region_code, scope_host, action, note, created_at, created_by, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		(country, payload.region or None, payload.region_code or None, payload.scope_host or None, payload.action, payload.note, now, actor, now, payload.expires_at),
 	)
 	request.app.state.database.audit(actor, "geo_policy.create", "geo_policy", str(policy_id), payload.model_dump())
 	return {"id": policy_id}
@@ -1846,6 +1878,182 @@ async def admin_geo_policy_disable(policy_id: int, request: Request):
 	db.execute("UPDATE geo_policies SET enabled = 0, updated_at = ? WHERE id = ?", (int(time.time()), policy_id))
 	db.audit(actor, "geo_policy.disable", "geo_policy", str(policy_id), {})
 	return {"disabled": True}
+
+
+def _active_geo_restrictions(database: Database) -> list[dict[str, Any]]:
+	return database.query(
+		"""SELECT id, country_code AS countryCode, region, region_code AS regionCode,
+		created_at AS createdAt, created_by AS createdBy, note
+		FROM geo_policies WHERE enabled = 1 AND action = 'block' AND scope_host IS NULL
+		AND (expires_at IS NULL OR expires_at > ?)
+		ORDER BY id DESC""",
+		(int(time.time()),),
+	)
+
+
+@app.get("/__shield/api/admin/geography/restrictions")
+async def admin_geo_restrictions(request: Request, country_code: str = ""):
+	await _admin(request)
+	db = request.app.state.database
+	policies = _active_geo_restrictions(db)
+	country_policies: dict[str, dict[str, Any]] = {}
+	region_policy_counts: dict[str, int] = {}
+	for policy in policies:
+		code = str(policy["countryCode"] or "").upper()
+		if not policy.get("region") and not policy.get("regionCode"):
+			country_policies.setdefault(code, policy)
+		else:
+			region_policy_counts[code] = region_policy_counts.get(code, 0) + 1
+	observations = {
+		str(row["countryCode"] or "").upper(): int(row["observations"] or 0)
+		for row in db.query(
+			"""SELECT country_code AS countryCode, COUNT(*) AS observations
+			FROM ip_intel WHERE provenance_status = 'verified' AND country_code <> ''
+			GROUP BY country_code"""
+		)
+	}
+	countries = []
+	for country in sorted(pycountry.countries, key=lambda item: item.name.casefold()):
+		policy = country_policies.get(country.alpha_2)
+		regions = pycountry.subdivisions.get(country_code=country.alpha_2) or []
+		countries.append(
+			{
+				"code": country.alpha_2,
+				"name": country.name,
+				"restricted": bool(policy),
+				"policyId": int(policy["id"]) if policy else None,
+				"regionCount": len(regions),
+				"restrictedRegionCount": region_policy_counts.get(country.alpha_2, 0),
+				"observations": observations.get(country.alpha_2, 0),
+			}
+		)
+	requested_code = country_code.strip().upper()
+	regions_payload: list[dict[str, Any]] = []
+	if requested_code:
+		country = pycountry.countries.get(alpha_2=requested_code)
+		if not country:
+			raise HTTPException(status_code=422, detail="Unknown ISO country code")
+		policy_by_code: dict[str, dict[str, Any]] = {}
+		policy_by_name: dict[str, dict[str, Any]] = {}
+		for policy in policies:
+			if str(policy["countryCode"] or "").upper() != requested_code:
+				continue
+			if policy.get("regionCode"):
+				policy_by_code.setdefault(str(policy["regionCode"]).upper(), policy)
+			if policy.get("region"):
+				policy_by_name.setdefault(str(policy["region"]).casefold(), policy)
+		observed_regions: dict[str, int] = {}
+		for row in db.query(
+			"""SELECT region, region_code AS regionCode, COUNT(*) AS observations
+			FROM ip_intel WHERE provenance_status = 'verified' AND country_code = ?
+			GROUP BY region, region_code""",
+			(requested_code,),
+		):
+			count = int(row["observations"] or 0)
+			if row.get("regionCode"):
+				code = str(row["regionCode"]).upper()
+				observed_regions[code] = observed_regions.get(code, 0) + count
+				observed_regions[f"{requested_code}-{code}"] = observed_regions.get(f"{requested_code}-{code}", 0) + count
+			if row.get("region"):
+				name = str(row["region"]).casefold()
+				observed_regions[name] = observed_regions.get(name, 0) + count
+		for subdivision in sorted(
+			pycountry.subdivisions.get(country_code=requested_code) or [],
+			key=lambda item: item.name.casefold(),
+		):
+			policy = policy_by_code.get(subdivision.code.upper()) or policy_by_code.get(
+				subdivision.code.rsplit("-", 1)[-1].upper()
+			) or policy_by_name.get(subdivision.name.casefold())
+			regions_payload.append(
+				{
+					"code": subdivision.code,
+					"name": subdivision.name,
+					"type": subdivision.type,
+					"restricted": bool(policy),
+					"policyId": int(policy["id"]) if policy else None,
+					"observations": max(
+						observed_regions.get(subdivision.code.upper(), 0),
+						observed_regions.get(subdivision.code.rsplit("-", 1)[-1].upper(), 0),
+						observed_regions.get(subdivision.name.casefold(), 0),
+					),
+				}
+			)
+	return {"countries": countries, "regions": regions_payload, "generatedAt": int(time.time())}
+
+
+@app.put("/__shield/api/admin/geography/restrictions")
+async def admin_geo_restriction_update(payload: GeoRestrictionInput, request: Request):
+	actor, _ = await _admin(request, csrf=True)
+	db = request.app.state.database
+	country_code = payload.country_code.strip().upper()
+	country = pycountry.countries.get(alpha_2=country_code)
+	if not country:
+		raise HTTPException(status_code=422, detail="Unknown ISO country code")
+	region_code: str | None = None
+	region_name: str | None = None
+	if payload.region_code:
+		region_code = payload.region_code.strip().upper()
+		if "-" not in region_code:
+			region_code = f"{country_code}-{region_code}"
+		subdivision = pycountry.subdivisions.get(code=region_code)
+		if not subdivision or subdivision.country_code != country_code:
+			raise HTTPException(status_code=422, detail="Unknown ISO subdivision code")
+		region_name = subdivision.name
+	now = int(time.time())
+	if region_code:
+		active = db.query(
+			"""SELECT id FROM geo_policies WHERE enabled = 1 AND action = 'block'
+			AND country_code = ? AND scope_host IS NULL
+			AND (UPPER(region_code) = ? OR LOWER(region) = LOWER(?))
+			AND (expires_at IS NULL OR expires_at > ?) ORDER BY id DESC""",
+			(country_code, region_code, region_name, now),
+		)
+	else:
+		active = db.query(
+			"""SELECT id FROM geo_policies WHERE enabled = 1 AND action = 'block'
+			AND country_code = ? AND region IS NULL AND region_code IS NULL
+			AND scope_host IS NULL AND (expires_at IS NULL OR expires_at > ?) ORDER BY id DESC""",
+			(country_code, now),
+		)
+	policy_id = int(active[0]["id"]) if active else None
+	if payload.restricted and policy_id:
+		db.execute(
+			"UPDATE geo_policies SET note = ?, updated_at = ? WHERE id = ?",
+			(payload.reason, now, policy_id),
+		)
+	elif payload.restricted:
+		policy_id = db.execute(
+			"""INSERT INTO geo_policies(country_code, region, region_code, scope_host,
+			action, enabled, note, created_at, created_by, updated_at)
+			VALUES (?, ?, ?, NULL, 'block', 1, ?, ?, ?, ?)""",
+			(country_code, region_name, region_code, payload.reason, now, actor, now),
+		)
+	elif active:
+		ids = [int(row["id"]) for row in active]
+		placeholders = ",".join("?" for _ in ids)
+		db.execute(
+			f"UPDATE geo_policies SET enabled = 0, note = ?, updated_at = ? WHERE id IN ({placeholders})",
+			(payload.reason, now, *ids),
+		)
+	db.audit(
+		actor,
+		"geo_restriction.update",
+		"geo_restriction",
+		region_code or country_code,
+		{
+			"countryCode": country_code,
+			"regionCode": region_code,
+			"restricted": payload.restricted,
+			"reason": payload.reason,
+		},
+	)
+	return {
+		"ok": True,
+		"countryCode": country_code,
+		"regionCode": region_code,
+		"restricted": payload.restricted,
+		"policyId": policy_id if payload.restricted else None,
+	}
 
 
 @app.put("/__shield/api/admin/accounts/{account_id_hash}/risk")
@@ -2519,6 +2727,7 @@ async def gateway(path: str, request: Request):
 			ip=ip,
 			country=intel.country_code,
 			region=intel.region,
+			region_code=intel.region_code,
 			asn=intel.asn,
 			ip_type=intel.ip_type,
 			session_id=session_token,
@@ -2558,8 +2767,7 @@ async def gateway(path: str, request: Request):
 			rule_decision.actions = ["log"]
 			risk.reasons.append("Administrator rule exemption")
 		geo_action, geo_reason = _geo_policy_action(request.app.state.database, context)
-		if geo_reason:
-			risk.reasons.append(geo_reason)
+		_apply_geo_policy_risk(context, risk, geo_reason)
 		binding = stable_hash(f"{ip}|{request.headers.get('user-agent', '')}", settings.internal_signing_key)
 		challenge = read_token(request.cookies.get("sf_shield_challenge", ""), settings.internal_signing_key)
 		challenge_passed = bool(challenge and challenge.get("purpose") == "challenge" and hmac.compare_digest(str(challenge.get("binding", "")), binding))

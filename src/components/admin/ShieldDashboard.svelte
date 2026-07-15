@@ -2,6 +2,7 @@
 import Icon from "@iconify/svelte";
 import { onMount } from "svelte";
 import ShieldEntityExplorer from "./ShieldEntityExplorer.svelte";
+import ShieldGeoRestrictions from "./ShieldGeoRestrictions.svelte";
 
 type Factor = {
 	key: string;
@@ -31,7 +32,9 @@ type Site = {
 };
 
 let { csrf }: { csrf: string } = $props();
-let activeView = $state<"subjects" | "factors" | "sites">("subjects");
+let activeView = $state<"subjects" | "factors" | "geography" | "sites">(
+	"subjects",
+);
 let factors = $state<Factor[]>([]);
 let sites = $state<Site[]>([]);
 let version = $state(0);
@@ -96,7 +99,9 @@ async function loadSites() {
 	}
 }
 
-async function selectView(view: "subjects" | "factors" | "sites") {
+async function selectView(
+	view: "subjects" | "factors" | "geography" | "sites",
+) {
 	activeView = view;
 	if (view === "factors" && factors.length === 0) await loadFactors();
 	if (view === "sites" && sites.length === 0) await loadSites();
@@ -202,7 +207,7 @@ onMount(() => {
 			<h1>Security</h1>
 		</div>
 		<div class="header-status">
-			{#if activeView !== "subjects"}
+			{#if activeView === "factors" || activeView === "sites"}
 				<button class="icon-button" title="Refresh workspace" aria-label="Refresh workspace" onclick={refresh} disabled={loading}>
 					<Icon icon="material-symbols:refresh-rounded" />
 				</button>
@@ -218,6 +223,10 @@ onMount(() => {
 		<button class:active={activeView === "factors"} onclick={() => selectView("factors")}>
 			<Icon icon="material-symbols:tune-rounded" />
 			<span>Risk factors</span>
+		</button>
+		<button class:active={activeView === "geography"} onclick={() => selectView("geography")}>
+			<Icon icon="material-symbols:public-off-outline-rounded" />
+			<span>Geography</span>
 		</button>
 		<button class:active={activeView === "sites"} onclick={() => selectView("sites")}>
 			<Icon icon="material-symbols:domain-verification-outline-rounded" />
@@ -275,6 +284,8 @@ onMount(() => {
 				</form>
 			{/if}
 		</section>
+	{:else if activeView === "geography"}
+		<ShieldGeoRestrictions {csrf} />
 	{:else}
 		<section class="workspace sites-workspace">
 			<header class="workspace-header"><div><h2>Site protection</h2><p>{sites.filter((site) => site.enabled).length} of {sites.length} protected</p></div></header>
@@ -335,7 +346,7 @@ onMount(() => {
 	button:disabled { cursor: not-allowed; opacity: .55; }
 	.icon-button { display: inline-grid; place-items: center; width: 2.75rem; min-width: 2.75rem; border: 1px solid #d0dbe4; background: #fff; color: #50687c; }
 	.icon-button :global(svg), .icon-command :global(svg) { width: 1.2rem; height: 1.2rem; }
-	.workspace-tabs { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid #cad7e1; margin-bottom: 1rem; }
+	.workspace-tabs { display: grid; grid-template-columns: repeat(2, 1fr); border-bottom: 1px solid #cad7e1; margin-bottom: 1rem; }
 	.workspace-tabs button { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: .4rem; min-width: 0; border: 0; border-radius: 0; background: transparent; color: #617588; padding: .7rem .4rem; font-weight: 700; }
 	.workspace-tabs button::after { position: absolute; right: 0; bottom: -1px; left: 0; height: .1875rem; background: transparent; content: ""; }
 	.workspace-tabs button.active { color: #197cbd; }
