@@ -87,18 +87,19 @@ ssh -i $key root@167.233.129.17 'nginx -t && systemctl reload nginx'
 
 The five Shield-protected hosts use the versioned FNS1 files under `shield/nginx/fns1`. Public Nginx forwards ordinary traffic to Shield on `127.0.0.1:9080`. Shield forwards blog, accounts, Admin, and CMS HTTP traffic to the internal Nginx origin on `127.0.0.1:9081`, and API traffic to FastAPI on `127.0.0.1:9010`. Never point a Shield upstream at public port 80 or 443; that creates a proxy loop once the edge route is active.
 
-`shield.silentflare.com` is the separate public decision portal. Its versioned Nginx host is `shield/nginx/fns1/silentflare-shield-portal.conf`; it proxies only to Shield on `127.0.0.1:9080` and must not be added to `SHIELD_UPSTREAMS_JSON` or `SHIELD_CONNECTED_HOSTS`. The routing installer enables this host and rolls it back with the other Shield routes if `nginx -t` fails.
+`shield.silentflare.com` is the separate public decision portal. Its versioned Nginx host is `shield/nginx/fns1/silentflare-shield-portal.conf`; it proxies only to the portal role on `127.0.0.1:9083` and must not be added to `SHIELD_UPSTREAMS_JSON` or `SHIELD_CONNECTED_HOSTS`. Admin Shield APIs and assets use the control role on `127.0.0.1:9082`; ordinary protected traffic uses the gateway on `127.0.0.1:9080`. The worker has no listening port. The routing installer enables these routes and rolls them back together if `nginx -t` fails.
 
 After the repository checkout has the intended commit, configure and install with:
 
 ```bash
 bash /opt/silentflare/app/shield/scripts/configure-fns1-env.sh
+bash -lc 'docker compose -f /opt/silentflare/app/shield/docker-compose.split.prod.yml -p silentflare-shield up -d --build --remove-orphans'
 bash /opt/silentflare/app/shield/scripts/install-fns1-routing.sh
 ```
 
 The environment script copies existing host Turnstile settings without printing them. The routing script creates timestamped backups under `/etc/nginx/shield-backups`, runs `nginx -t`, reloads only on success, and restores the previous files on error. Public blog reads have the only process-down fail-open route. Account, API, Admin, and CMS requests fail closed; CMS connection upgrades use a direct Ghost exception because the current gateway is HTTP-only.
 
-When `server/api/app.py` changes, deploy and restart FastAPI before enabling Shield account-response buttons. Then deploy/rebuild Shield so migration `0007_operations_and_response.sql` and the matching signed-command implementation become active together.
+When `server/api/app.py` changes, deploy and restart FastAPI before enabling Shield account-response buttons. Then deploy/rebuild Shield so the signed-command implementation and Shield migrations are active together. Shield 2.0 requires migrations `0009_entity_risk_ledger.sql` and `0010_risk_signal_queue.sql`; retain an online SQLite backup before applying them.
 
 ## GitHub Actions Deployment
 
