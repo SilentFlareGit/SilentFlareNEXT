@@ -343,11 +343,19 @@ def main() -> None:
 		if patched_profile["user"]["displayRegion"] != "Shanghai, China":
 			raise AssertionError("profile PATCH bypassed IP-derived region")
 
-		module.comment_create(
-			module.CommentCreatePayload(postSlug="smoke-post", content="Smoke comment", turnstileToken="comment-ok"),
+		created_comment = module.comment_create(
+			module.CommentCreatePayload(postSlug="smoke-post", content="**Smoke comment**", turnstileToken="comment-ok"),
 			StubRequest({module.ACCOUNT_SESSION_COOKIE: cookie}, {"cf-connecting-ip": "8.8.4.4"}),
 			session["csrf"],
 		)
+		updated_comment = module.comment_update(
+			created_comment["comment"]["id"],
+			module.CommentUpdatePayload(content="**Updated smoke comment**\n\n- item"),
+			StubRequest({module.ACCOUNT_SESSION_COOKIE: cookie}),
+			session["csrf"],
+		)
+		if updated_comment["comment"]["content"] != "**Updated smoke comment**\n\n- item":
+			raise AssertionError("comment Markdown update was not persisted")
 
 		module.require_admin_console_session = lambda *_args, **_kwargs: {"bot_id": module.ADMIN_AUTH_ID}
 		admin_users = module.admin_users(StubRequest())["users"]

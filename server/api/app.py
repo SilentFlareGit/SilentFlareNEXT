@@ -461,6 +461,10 @@ class CommentCreatePayload(BaseModel):
 	turnstileToken: str | None = None
 
 
+class CommentUpdatePayload(BaseModel):
+	content: str
+
+
 def cleanup_sessions() -> None:
 	now = time.time()
 	expired = [
@@ -3255,6 +3259,42 @@ def comment_delete(
 		[now, now, comment_id],
 	)
 	return {"ok": True}
+
+
+@app.patch("/comments/{comment_id}")
+def comment_update(
+	comment_id: str,
+	payload: CommentUpdatePayload,
+	request: Request,
+	x_csrf_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+	user = require_account_csrf(request, x_csrf_token)
+	rows = d1_query(
+		"SELECT id, user_id, status, deleted_at FROM comments WHERE id = ? LIMIT 1",
+		[comment_id],
+	)
+	if not rows or rows[0].get("deleted_at") or rows[0].get("status") != "published":
+		raise HTTPException(status_code=404, detail="Comment not found")
+	if rows[0]["user_id"] != user["id"] and user.get("role") != "admin":
+		raise HTTPException(status_code=403, detail="Comment edit is not allowed")
+	content = normalize_comment_content(payload.content)
+	now = utc_now()
+	d1_query(
+		"UPDATE comments SET content = ?, updated_at = ? WHERE id = ?",
+		[content, now, comment_id],
+	)
+	updated = d1_query(
+		"""
+		SELECT comments.id, comments.post_slug, comments.user_id, comments.parent_id,
+			users.username, comments.content, comments.created_at, comments.updated_at
+		FROM comments
+		INNER JOIN users ON users.id = comments.user_id
+		WHERE comments.id = ?
+		LIMIT 1
+		""",
+		[comment_id],
+	)[0]
+	return {"ok": True, "comment": comment_payload(updated)}
 
 
 def default_site_settings() -> dict[str, Any]:

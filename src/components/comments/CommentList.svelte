@@ -7,15 +7,17 @@ let {
 	comments,
 	currentUser,
 	onDeleted,
+	onUpdated,
 }: {
 	comments: CommentRecord[];
 	currentUser: CurrentUser | null;
 	onDeleted: () => void;
+	onUpdated: () => void;
 } = $props();
 </script>
 
 <div class="flex flex-col gap-3">
 	{#each comments as comment (comment.id)}
-		<CommentItem {comment} {currentUser} {onDeleted} />
+		<CommentItem {comment} {currentUser} {onDeleted} {onUpdated} />
 	{/each}
 </div>

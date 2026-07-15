@@ -126,6 +126,7 @@ Accounts is a standalone account workspace. Do not restore the public blog navba
 - Legacy `POST /account/auth/register` and `POST /account/auth/login` return `410`; do not re-enable them.
 - `GET /comments?postSlug=...`: public comment list for a Ghost post slug.
 - `POST /comments/create`: authenticated public-user comment creation with Turnstile and CSRF.
+- `PATCH /comments/{comment_id}`: authenticated Markdown source update with CSRF for the author or a local `admin` role user.
 - `DELETE /comments/{comment_id}`: authenticated public-user soft delete with CSRF for the author or a local `admin` role user.
 
 ## Current Admin Behavior

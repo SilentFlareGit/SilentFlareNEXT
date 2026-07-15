@@ -53,12 +53,11 @@ onMount(() => {
 <section class="card-base mb-4 px-6 py-6 md:px-9" aria-labelledby="comments-title">
 	<div class="mb-5 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
 		<div>
-			<p class="text-xs font-bold uppercase tracking-[0.16em] text-30">Discussion</p>
-			<h2 id="comments-title" class="mt-1 text-2xl font-bold text-90">Comments</h2>
+			<h2 id="comments-title" class="text-2xl font-bold text-90">Discussion</h2>
+			<p class="mt-1 text-sm text-50">{comments.length} {comments.length === 1 ? "comment" : "comments"}</p>
 		</div>
-		<button class="btn-plain min-h-11 rounded-lg px-3 font-medium active:scale-95" type="button" onclick={() => void loadComments()}>
-			<Icon icon="material-symbols:refresh-rounded" class="mr-2 text-[1.25rem]" />
-			Refresh
+		<button class="btn-plain h-11 w-11 rounded-lg active:scale-95" type="button" title="Refresh comments" aria-label="Refresh comments" onclick={() => void loadComments()}>
+			<Icon icon="material-symbols:refresh-rounded" class="text-[1.25rem]" />
 		</button>
 	</div>
 
@@ -86,7 +85,7 @@ onMount(() => {
 		</div>
 
 		{#if comments.length > 0}
-			<CommentList {comments} currentUser={user} onDeleted={() => void loadComments()} />
+			<CommentList {comments} currentUser={user} onDeleted={() => void loadComments()} onUpdated={() => void loadComments()} />
 		{:else}
 			<div class="rounded-xl border border-[var(--line-divider)] px-4 py-8 text-center">
 				<p class="font-medium text-75">No comments yet.</p>
