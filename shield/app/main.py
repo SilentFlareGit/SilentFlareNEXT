@@ -33,7 +33,7 @@ from .domain.risk_codes import is_public_risk_code, risk_code_for
 from .entity_risk import EntityRiskService, entity_level
 from .geo import GeoService, IpIntel
 from .rate_limit import RateHit, RateLimiter
-from .risk import DEFAULT_THRESHOLDS, DEFAULT_WEIGHTS, RiskResult, score_request
+from .risk import DEFAULT_THRESHOLDS, DEFAULT_WEIGHTS, RISK_FACTOR_CATALOG, RiskResult, score_request
 from .rules import AccessListService, RequestContext, RuleDecision, RuleEngine, matches_expression
 from .security import SHIELD_HEADERS, issue_token, read_token, sign_headers
 
@@ -126,6 +126,16 @@ class RiskModelInput(BaseModel):
 	weights: dict[str, int]
 	thresholds: dict[str, int]
 	note: str = Field(default="", max_length=300)
+
+
+class RiskFactorsInput(BaseModel):
+	weights: dict[str, int]
+	reason: str = Field(min_length=3, max_length=300)
+
+
+class SiteProtectionInput(BaseModel):
+	enabled: bool
+	reason: str = Field(min_length=3, max_length=300)
 
 
 class AlertConfigInput(BaseModel):
@@ -289,29 +299,34 @@ def _timestamp(value: Any, default: int = 0) -> int:
 		return default
 
 
-def _account_risk(user: dict[str, Any], now: int) -> tuple[int, str, list[str]]:
+def _account_risk(
+	user: dict[str, Any],
+	now: int,
+	weights: dict[str, int] | None = None,
+) -> tuple[int, str, list[str]]:
+	values = DEFAULT_WEIGHTS | (weights or {})
 	score = 0
 	reasons: list[str] = []
 	created_at = _timestamp(user.get("created_at"), now)
 	if now - created_at < 86400:
-		score += 15
+		score += values["new_account"]
 		reasons.append("Account created within 24 hours")
 	if not user.get("email_verified_at"):
-		score += 15
+		score += values["unverified_email"]
 		reasons.append("Email is not verified")
 	if not user.get("totp_enabled"):
-		score += 5
+		score += values["no_2fa"]
 		reasons.append("Two-factor authentication is not enabled")
 	if user.get("role") == "admin" and not user.get("totp_enabled"):
-		score += 20
+		score += values["privileged_no_2fa"]
 		reasons.append("Privileged account has no two-factor authentication")
 	if int(user.get("active_session_count") or 0) > 5:
-		score += 10
+		score += values["many_sessions"]
 		reasons.append("Account has more than five active sessions")
 	if user.get("disabled_at"):
-		score += 60
+		score += values["disabled_account"]
 		reasons.append("Account is disabled")
-	score = min(score, 100)
+	score = max(0, min(score, 100))
 	level = "block" if score >= 80 else "restrict" if score >= 60 else "verify" if score >= 40 else "observe" if score >= 20 else "normal"
 	return score, level, reasons
 
@@ -319,6 +334,7 @@ def _account_risk(user: dict[str, Any], now: int) -> tuple[int, str, list[str]]:
 async def _sync_account_projections(application: FastAPI, session_token: str = "", force: bool = False) -> dict[str, Any]:
 	db = application.state.database
 	now = int(time.time())
+	weights = db.setting("risk_weights", {})
 	last = db.query("SELECT completed_at, record_count, status FROM sync_runs WHERE source = 'fastapi_accounts' ORDER BY id DESC LIMIT 1")
 	if not force and last and last[0]["status"] == "completed" and now - int(last[0]["completed_at"] or 0) < settings.account_sync_interval:
 		return {"status": "fresh", "recordCount": last[0]["record_count"], "completedAt": last[0]["completed_at"]}
@@ -345,7 +361,7 @@ async def _sync_account_projections(application: FastAPI, session_token: str = "
 			connection.execute("DELETE FROM account_projections")
 			for user in users:
 				account_hash = stable_hash(str(user.get("id", "")), settings.internal_signing_key)
-				score, level, reasons = _account_risk(user, now)
+				score, level, reasons = _account_risk(user, now, weights)
 				connection.execute(
 					"""INSERT INTO account_projections(account_id_hash, account_ref, account_label, role, country_code,
 					email_verified, two_factor_enabled, disabled, created_at, last_seen_at, active_session_count,
@@ -370,7 +386,7 @@ async def _sync_account_projections(application: FastAPI, session_token: str = "
 			account_ref = str(user.get("id") or "")
 			if not account_ref:
 				continue
-			score, _level, reasons = _account_risk(user, now)
+			score, _level, reasons = _account_risk(user, now, weights)
 			posture = stable_hash(
 				json.dumps(
 					{
@@ -1113,8 +1129,19 @@ def _record_entity_signals(
 	rates: list[RateHit],
 	rules: RuleDecision,
 	subjects: dict[str, dict[str, Any]],
+	weights: dict[str, int],
 ) -> None:
+	values = DEFAULT_WEIGHTS | weights
+
+	def weighted(key: str, ratio: float = 1) -> int:
+		value = int(round(values[key] * ratio))
+		if value == 0 and values[key] != 0:
+			return 1 if values[key] > 0 else -1
+		return value
+
 	def signal(subject_type: str, delta: int, code: str, reason: str, duration: int, steps: int = 4) -> None:
+		if delta == 0:
+			return
 		try:
 			address = ipaddress.ip_address(context.ip)
 			cidr = str(ipaddress.ip_network(f"{address}/{24 if address.version == 4 else 48}", strict=False))
@@ -1145,21 +1172,21 @@ def _record_entity_signals(
 
 	reasons = set(risk.reasons)
 	if rates:
-		signal("ip", 10, "RATE_LIMIT_EXCEEDED", rates[0].policy_name, 86400)
-		signal("cidr", 3, "RATE_LIMIT_EXCEEDED", rates[0].policy_name, 43200)
-		signal("session", 8, "RATE_LIMIT_EXCEEDED", rates[0].policy_name, 43200)
-		signal("account", 8, "RATE_LIMIT_EXCEEDED", rates[0].policy_name, 43200)
+		signal("ip", weighted("rate_exceeded", 0.4), "RATE_LIMIT_EXCEEDED", rates[0].policy_name, 86400)
+		signal("cidr", weighted("rate_exceeded", 0.12), "RATE_LIMIT_EXCEEDED", rates[0].policy_name, 43200)
+		signal("session", weighted("rate_exceeded", 0.32), "RATE_LIMIT_EXCEEDED", rates[0].policy_name, 43200)
+		signal("account", weighted("rate_exceeded", 0.32), "RATE_LIMIT_EXCEEDED", rates[0].policy_name, 43200)
 	if "Automation browser signature" in reasons:
-		signal("device", 18, "AUTOMATION_SIGNATURE", "Automation browser signature", 43200)
-		signal("ip", 8, "AUTOMATION_SIGNATURE", "Automation browser signature", 43200)
+		signal("device", weighted("automation", 0.82), "AUTOMATION_SIGNATURE", "Automation browser signature", 43200)
+		signal("ip", weighted("automation", 0.36), "AUTOMATION_SIGNATURE", "Automation browser signature", 43200)
 	if "Known malicious IP" in reasons:
-		signal("ip", 40, "THREAT_INTELLIGENCE", "Known malicious IP intelligence", 604800, 7)
-		signal("asn", 5, "THREAT_INTELLIGENCE", "Malicious source observed in ASN", 86400)
+		signal("ip", weighted("malicious_ip", 0.8), "THREAT_INTELLIGENCE", "Known malicious IP intelligence", 604800, 7)
+		signal("asn", weighted("malicious_ip", 0.1), "THREAT_INTELLIGENCE", "Malicious source observed in ASN", 86400)
 	if "Tor exit node" in reasons:
-		signal("ip", 15, "TOR_NETWORK", "Tor exit node", 86400)
+		signal("ip", weighted("tor", 0.43), "TOR_NETWORK", "Tor exit node", 86400)
 	if rules.matched_rules:
-		signal("ip", 8, "RULE_MATCH", f"Matched rule {rules.matched_rules[0]['name']}", 86400)
-		signal("session", 5, "RULE_MATCH", f"Matched rule {rules.matched_rules[0]['name']}", 43200)
+		signal("ip", weighted("rule_match"), "RULE_MATCH", f"Matched rule {rules.matched_rules[0]['name']}", 86400)
+		signal("session", weighted("rule_match", 0.625), "RULE_MATCH", f"Matched rule {rules.matched_rules[0]['name']}", 43200)
 
 
 def _event(database: Database, context: RequestContext, risk: RiskResult, rules: RuleDecision, actions: list[str], request: Request, body: bytes) -> None:
@@ -1477,6 +1504,140 @@ async def admin_event_action(event_id: str, payload: EventActionInput, request: 
 		db.execute("UPDATE risk_events SET review_status = 'actioned', reviewed_by = ?, reviewed_at = ? WHERE id = ?", (actor, now, event_id))
 	db.audit(actor, f"risk_event.{payload.action}", "risk_event", event_id, {"durationSeconds": payload.duration_seconds})
 	return {"ok": True, "eventId": event_id, "action": payload.action}
+
+
+def _risk_factors_payload(database: Database) -> dict[str, Any]:
+	weights = DEFAULT_WEIGHTS | database.setting("risk_weights", {})
+	factors = []
+	for key, (label, category, subject_types) in RISK_FACTOR_CATALOG.items():
+		factors.append(
+			{
+				"key": key,
+				"label": label,
+				"category": category,
+				"subjectTypes": list(subject_types),
+				"weight": int(weights[key]),
+				"defaultWeight": int(DEFAULT_WEIGHTS[key]),
+			}
+		)
+	versions = database.query(
+		"""SELECT version, created_at AS createdAt, created_by AS createdBy, note
+		FROM risk_config_versions ORDER BY version DESC LIMIT 10"""
+	)
+	return {"factors": factors, "versions": versions, "currentVersion": versions[0]["version"] if versions else 0}
+
+
+@app.get("/__shield/api/admin/risk-factors")
+async def admin_risk_factors(request: Request):
+	await _admin(request)
+	return _risk_factors_payload(request.app.state.database)
+
+
+@app.put("/__shield/api/admin/risk-factors")
+async def admin_risk_factors_update(payload: RiskFactorsInput, request: Request):
+	actor, _ = await _admin(request, csrf=True)
+	if set(payload.weights) != set(RISK_FACTOR_CATALOG):
+		raise HTTPException(status_code=422, detail="Every visible risk factor must be supplied")
+	if any(not isinstance(value, int) or value < -100 or value > 100 for value in payload.weights.values()):
+		raise HTTPException(status_code=422, detail="Risk factor weights must be integers from -100 to 100")
+	db = request.app.state.database
+	weights = DEFAULT_WEIGHTS | db.setting("risk_weights", {})
+	weights.update(payload.weights)
+	thresholds = DEFAULT_THRESHOLDS | db.setting("risk_thresholds", {})
+	simulation = _risk_model_simulation(db, weights, thresholds)
+	if not simulation["safeToPublish"]:
+		raise HTTPException(status_code=422, detail="This change would block more than 80% of sampled traffic")
+	latest = int(db.query("SELECT COALESCE(MAX(version), 0) AS value FROM risk_config_versions")[0]["value"])
+	version = latest + 1
+	db.set_setting("risk_weights", weights, actor)
+	db.execute(
+		"""INSERT INTO risk_config_versions(version, weights_json, thresholds_json, created_at,
+		created_by, note) VALUES (?, ?, ?, ?, ?, ?)""",
+		(
+			version,
+			json.dumps(weights, separators=(",", ":")),
+			json.dumps(thresholds, separators=(",", ":")),
+			int(time.time()),
+			actor,
+			payload.reason,
+		),
+	)
+	db.audit(
+		actor,
+		"risk_factors.update",
+		"risk_factor_set",
+		str(version),
+		{"reason": payload.reason, "weights": payload.weights, "simulation": simulation},
+	)
+	return {**_risk_factors_payload(db), "simulation": simulation}
+
+
+@app.get("/__shield/api/admin/sites")
+async def admin_sites(request: Request):
+	await _admin(request)
+	stored = request.app.state.database.query(
+		"""SELECT host, protection_enabled AS protectionEnabled, mode,
+		updated_at AS updatedAt, updated_by AS updatedBy FROM service_controls ORDER BY host"""
+	)
+	controls = {row["host"]: row for row in stored}
+	rows = []
+	for host in sorted(settings.upstreams):
+		row = controls.get(
+			host,
+			{
+				"host": host,
+				"protectionEnabled": 0,
+				"mode": "observe",
+				"updatedAt": 0,
+				"updatedBy": "",
+			},
+		)
+		row["connected"] = host in settings.connected_hosts
+		row["enabled"] = bool(row.pop("protectionEnabled") and row["mode"] == "enforce")
+		rows.append(row)
+	return {"sites": rows}
+
+
+@app.put("/__shield/api/admin/sites/{host}")
+async def admin_site_protection(host: str, payload: SiteProtectionInput, request: Request):
+	actor, _ = await _admin(request, csrf=True)
+	host = host.lower()
+	if host not in settings.upstreams:
+		raise HTTPException(status_code=404, detail="Protected site is not configured")
+	if payload.enabled and host not in settings.connected_hosts:
+		raise HTTPException(status_code=422, detail="This site is not connected to the Shield edge")
+	if payload.enabled:
+		turnstile_active = request.app.state.database.query(
+			"SELECT 1 FROM rate_policies WHERE enabled = 1 AND action = 'turnstile' LIMIT 1"
+		)
+		if turnstile_active and (not settings.turnstile_site_key or not settings.turnstile_secret_key):
+			raise HTTPException(status_code=422, detail="Turnstile must be configured before protection is enabled")
+	db = request.app.state.database
+	now = int(time.time())
+	current = db.query("SELECT fail_policy FROM service_controls WHERE host = ? LIMIT 1", (host,))
+	fail_policy = current[0]["fail_policy"] if current else settings.fail_policy
+	if payload.enabled and _mode(db) == "bypass":
+		db.set_setting("global_mode", "observe", actor)
+	db.execute(
+		"""INSERT INTO service_controls(host, protection_enabled, mode, fail_policy, updated_at, updated_by)
+		VALUES (?, ?, 'enforce', ?, ?, ?) ON CONFLICT(host) DO UPDATE SET
+		protection_enabled=excluded.protection_enabled, mode='enforce',
+		updated_at=excluded.updated_at, updated_by=excluded.updated_by""",
+		(host, int(payload.enabled), fail_policy, now, actor),
+	)
+	db.audit(
+		actor,
+		"site_protection.enabled" if payload.enabled else "site_protection.disabled",
+		"service",
+		host,
+		{"enabled": payload.enabled, "reason": payload.reason},
+	)
+	return {
+		"host": host,
+		"enabled": payload.enabled,
+		"connected": host in settings.connected_hosts,
+		"updatedAt": now,
+	}
 
 
 @app.put("/__shield/api/admin/services/{host}")
@@ -2035,21 +2196,25 @@ async def verify_challenge(request: Request):
 	data = {"secret": settings.turnstile_secret_key, "response": token, "remoteip": _client_ip(request)}
 	async with httpx.AsyncClient(timeout=5) as client:
 		response = await client.post(settings.turnstile_verify_url, data=data)
-		result = response.json()
+	result = response.json()
 	signal_ref = f"challenge:{stable_hash(token, settings.internal_signing_key)[:20]}"
+	weights = DEFAULT_WEIGHTS | request.app.state.database.setting("risk_weights", {})
+	factor_key = "challenge_passed" if result.get("success") else "challenge_failed"
 	challenge_values = (
-		("ip", _client_ip(request), mask_ip(_client_ip(request))),
-		("device", _device_id(request, _client_ip(request)), ""),
-		("session", request.cookies.get("sf_account_session", ""), ""),
+		("ip", _client_ip(request), mask_ip(_client_ip(request)), 1.0),
+		("device", _device_id(request, _client_ip(request)), "", 0.65),
+		("session", request.cookies.get("sf_account_session", ""), "", 0.65),
 	)
-	for subject_type, value, display in challenge_values:
+	for subject_type, value, display, ratio in challenge_values:
 		if not value:
 			continue
 		try:
 			subject = request.app.state.entities.ensure_subject(subject_type, value, display=display)
 		except ValueError:
 			continue
-		delta = (-8 if subject_type == "ip" else -5) if result.get("success") else (15 if subject_type == "ip" else 10)
+		delta = int(round(weights[factor_key] * ratio))
+		if delta == 0:
+			continue
 		request.app.state.entities.enqueue_signal(
 			int(subject["id"]),
 			delta=delta,
@@ -2197,7 +2362,15 @@ async def gateway(path: str, request: Request):
 			actions = ["allow"]
 			risk.reasons.append("Administrator response exemption")
 		_event(request.app.state.database, context, risk, rule_decision, actions, request, body)
-		_record_entity_signals(request.app.state.entities, context, risk, rates, rule_decision, entity_subjects)
+		_record_entity_signals(
+			request.app.state.entities,
+			context,
+			risk,
+			rates,
+			rule_decision,
+			entity_subjects,
+			weights,
+		)
 		if "temporary_ban" in actions and mode == "enforce":
 			_automatic_ban(request.app.state.database, context, rates)
 			ban = request.app.state.access.active_ban(context)

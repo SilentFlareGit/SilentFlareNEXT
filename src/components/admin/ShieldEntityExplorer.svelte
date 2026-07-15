@@ -1,6 +1,6 @@
 <script lang="ts">
 import Icon from "@iconify/svelte";
-import { onDestroy, onMount } from "svelte";
+import { onMount } from "svelte";
 
 type Subject = {
 	id: number;
@@ -12,7 +12,6 @@ type Subject = {
 	lastSeenAt: number;
 	lastChangedAt: number;
 };
-
 type LedgerEntry = {
 	id: string;
 	createdAt: number;
@@ -25,73 +24,44 @@ type LedgerEntry = {
 	actor: string;
 	expiresAt?: number;
 };
-
-type RiskOverride = {
+type Override = {
 	id: number;
 	overrideType: string;
 	value?: number;
-	scopeHost?: string;
-	scopePath?: string;
 	reason: string;
 	createdAt: number;
 	createdBy: string;
 	expiresAt?: number;
 	revokedAt?: number;
 };
-
-type Detail = Subject & {
+type SubjectDetail = Subject & {
 	effectiveScore: number;
 	ledger: LedgerEntry[];
-	overrides: RiskOverride[];
-	relations: Array<{
-		relationType: string;
-		confidence: number;
-		lastSeenAt: number;
-		relatedId: number;
-	}>;
-};
-
-type Count = {
-	subjectType: string;
-	total: number;
-	elevated: number;
-	maximumScore: number;
+	overrides: Override[];
 };
 
 let { csrf }: { csrf: string } = $props();
 let subjects = $state<Subject[]>([]);
-let counts = $state<Count[]>([]);
-let selected = $state<Detail | null>(null);
-let subjectType = $state("");
+let selected = $state<SubjectDetail | null>(null);
+let typeFilter = $state("");
 let minimumScore = $state(0);
 let query = $state("");
 let loading = $state(true);
-let loadingDetail = $state(false);
+let detailLoading = $state(false);
 let saving = $state(false);
 let error = $state("");
-let success = $state("");
-let adjustment = $state(0);
-let adjustmentReason = $state("");
-let adjustmentDuration = $state(86400);
-let overrideType = $state("score_cap");
-let overrideValue = $state(30);
-let overrideReason = $state("");
-let overrideDuration = $state(86400);
-let timer: number | undefined;
-let controller: AbortController | null = null;
+let action = $state("adjust");
+let amount = $state(10);
+let duration = $state(86400);
+let reason = $state("");
 
-const typeOptions = [
-	["", "All"],
-	["account", "Accounts"],
-	["session", "Sessions"],
-	["device", "Devices"],
-	["ip", "IPs"],
-	["cidr", "CIDRs"],
-	["asn", "ASNs"],
-	["email", "Email"],
-	["api_key", "API keys"],
-	["country", "Countries"],
-];
+const activeOverrides = $derived(
+	selected?.overrides.filter(
+		(item) =>
+			!item.revokedAt &&
+			(!item.expiresAt || item.expiresAt > Date.now() / 1000),
+	) ?? [],
+);
 
 async function api<T>(path: string, init: RequestInit = {}) {
 	const response = await fetch(`/__shield/api/admin${path}`, {
@@ -101,285 +71,380 @@ async function api<T>(path: string, init: RequestInit = {}) {
 			Accept: "application/json",
 			...(init.body ? { "Content-Type": "application/json" } : {}),
 			...(init.method && init.method !== "GET" ? { "X-CSRF-Token": csrf } : {}),
-			...(init.headers ?? {}),
 		},
 	});
-	const body = (await response.json().catch(() => ({}))) as {
-		detail?: string;
-	};
+	const body = (await response.json().catch(() => ({}))) as { detail?: string };
 	if (!response.ok)
 		throw new Error(body.detail ?? `Shield API ${response.status}`);
 	return body as T;
 }
 
-async function loadSubjects(quiet = false) {
-	if (!quiet) loading = true;
-	controller?.abort();
-	controller = new AbortController();
-	const parameters = new URLSearchParams({
-		minimum_score: String(minimumScore),
-		limit: "200",
-	});
-	if (subjectType) parameters.set("subject_type", subjectType);
-	if (query.trim()) parameters.set("query", query.trim());
+async function loadSubjects() {
+	loading = true;
 	try {
-		const payload = await api<{ items: Subject[]; counts: Count[] }>(
-			`/entities?${parameters}`,
-			{ signal: controller.signal },
-		);
-		subjects = payload.items;
-		counts = payload.counts;
+		const parameters = new URLSearchParams({
+			minimum_score: String(minimumScore),
+			limit: "200",
+		});
+		if (typeFilter) parameters.set("subject_type", typeFilter);
+		if (query.trim()) parameters.set("query", query.trim());
+		const response = await api<{ items: Subject[] }>(`/entities?${parameters}`);
+		subjects = response.items;
 		error = "";
-		if (selected) {
-			const updated = subjects.find((item) => item.id === selected?.id);
-			if (updated) await openSubject(updated, true);
-		}
+		if (selected && !subjects.some((item) => item.id === selected?.id))
+			selected = null;
 	} catch (cause) {
-		if (cause instanceof DOMException && cause.name === "AbortError") return;
 		error =
-			cause instanceof Error ? cause.message : "Risk entities unavailable";
+			cause instanceof Error ? cause.message : "Subjects could not be loaded";
 	} finally {
 		loading = false;
 	}
 }
 
-async function openSubject(subject: Subject, quiet = false) {
-	if (!quiet) loadingDetail = true;
+async function openSubject(subject: Subject) {
+	detailLoading = true;
 	try {
-		selected = await api<Detail>(`/entities/${subject.id}`);
+		selected = await api<SubjectDetail>(`/entities/${subject.id}`);
 		error = "";
 	} catch (cause) {
-		error = cause instanceof Error ? cause.message : "Risk entity unavailable";
+		error =
+			cause instanceof Error
+				? cause.message
+				: "Subject details could not be loaded";
 	} finally {
-		loadingDetail = false;
+		detailLoading = false;
 	}
 }
 
-async function submitAdjustment() {
-	if (!selected || !adjustment || adjustmentReason.trim().length < 3) return;
+async function saveControl() {
+	if (!selected || !reason.trim()) return;
 	saving = true;
 	try {
-		const payload = await api<{ subject: Detail }>(
-			`/entities/${selected.id}/adjust`,
-			{
+		if (action === "adjust") {
+			await api(`/entities/${selected.id}/adjust`, {
 				method: "POST",
 				body: JSON.stringify({
-					delta: Number(adjustment),
-					reason: adjustmentReason.trim(),
-					duration_seconds: Number(adjustmentDuration),
+					delta: Number(amount),
+					reason: reason.trim(),
+					duration_seconds: Number(duration),
 				}),
-			},
-		);
-		selected = payload.subject;
-		adjustment = 0;
-		adjustmentReason = "";
-		success = "Risk adjustment applied and recorded in the ledger.";
-		await loadSubjects(true);
-	} catch (cause) {
-		error = cause instanceof Error ? cause.message : "Risk adjustment failed";
-	} finally {
-		saving = false;
-	}
-}
-
-async function submitOverride() {
-	if (!selected || overrideReason.trim().length < 3) return;
-	saving = true;
-	try {
-		const payload = await api<{ subject: Detail }>(
-			`/entities/${selected.id}/overrides`,
-			{
+			});
+		} else {
+			await api(`/entities/${selected.id}/overrides`, {
 				method: "POST",
 				body: JSON.stringify({
-					override_type: overrideType,
+					override_type: action,
 					value:
-						overrideType === "score_cap" || overrideType === "score_floor"
-							? Number(overrideValue)
-							: null,
-					reason: overrideReason.trim(),
-					duration_seconds: Number(overrideDuration),
+						action === "response_exemption" ? null : Math.abs(Number(amount)),
+					reason: reason.trim(),
+					duration_seconds: Number(duration),
 				}),
-			},
-		);
-		selected = payload.subject;
-		overrideReason = "";
-		success = "Scoped risk override activated.";
-		await loadSubjects(true);
-	} catch (cause) {
-		error = cause instanceof Error ? cause.message : "Risk override failed";
-	} finally {
-		saving = false;
-	}
-}
-
-async function revokeOverride(item: RiskOverride) {
-	if (!selected) return;
-	saving = true;
-	try {
-		const payload = await api<{ subject: Detail }>(
-			`/overrides/${item.id}/revoke`,
-			{
-				method: "POST",
-				body: JSON.stringify({ reason: "Revoked from entity dashboard" }),
-			},
-		);
-		selected = payload.subject;
-		success = "Risk override revoked and reversal recorded.";
-		await loadSubjects(true);
+			});
+		}
+		reason = "";
+		await openSubject(selected);
+		await loadSubjects();
 	} catch (cause) {
 		error =
-			cause instanceof Error ? cause.message : "Override revocation failed";
+			cause instanceof Error
+				? cause.message
+				: "Subject control could not be saved";
 	} finally {
 		saving = false;
 	}
 }
 
-function formatTime(value?: number) {
-	return value
-		? new Intl.DateTimeFormat(undefined, {
-				dateStyle: "medium",
-				timeStyle: "short",
-			}).format(new Date(value * 1000))
-		: "Not recorded";
+async function revokeOverride(item: Override) {
+	if (!selected || !window.confirm("Revoke this manual control?")) return;
+	saving = true;
+	try {
+		await api(`/overrides/${item.id}/revoke`, {
+			method: "POST",
+			body: JSON.stringify({ reason: "Revoked from the subject workspace" }),
+		});
+		await openSubject(selected);
+		await loadSubjects();
+	} catch (cause) {
+		error =
+			cause instanceof Error
+				? cause.message
+				: "Manual control could not be revoked";
+	} finally {
+		saving = false;
+	}
 }
 
-function refreshWhenVisible() {
-	if (document.visibilityState === "visible") void loadSubjects(true);
+function formatTime(timestamp?: number) {
+	if (!timestamp) return "Never";
+	return new Intl.DateTimeFormat(undefined, {
+		month: "short",
+		day: "numeric",
+		year: "numeric",
+		hour: "numeric",
+		minute: "2-digit",
+	}).format(timestamp * 1000);
 }
 
-onMount(() => {
-	void loadSubjects();
-	timer = window.setInterval(() => {
-		if (document.visibilityState === "visible" && !saving)
-			void loadSubjects(true);
-	}, 20_000);
-	document.addEventListener("visibilitychange", refreshWhenVisible);
-});
+function typeLabel(value: string) {
+	return value.replaceAll("_", " ");
+}
 
-onDestroy(() => {
-	if (timer) window.clearInterval(timer);
-	controller?.abort();
-	document.removeEventListener("visibilitychange", refreshWhenVisible);
-});
+onMount(loadSubjects);
 </script>
 
-<section class="entity-workspace">
-	<header class="entity-heading">
-		<div>
-			<p>RISK ENTITIES</p>
-			<h2>Subject posture and score history</h2>
-		</div>
-		<button class="icon-button" title="Refresh entities" aria-label="Refresh entities" onclick={() => loadSubjects()}>
-			<Icon icon="material-symbols:refresh-rounded" />
-		</button>
-	</header>
-
-	<div class="entity-metrics">
-		{#each counts.slice(0, 6) as count}
-			<button class:active={subjectType === count.subjectType} onclick={() => { subjectType = count.subjectType; void loadSubjects(); }}>
-				<span>{count.subjectType.replaceAll("_", " ")}</span>
-				<strong>{count.total}</strong>
-				<small>{count.elevated} elevated / peak {count.maximumScore}</small>
-			</button>
-		{/each}
-	</div>
-
-	<form class="entity-filters" onsubmit={(event) => { event.preventDefault(); void loadSubjects(); }}>
+<section class="subjects-workspace" class:detail-open={selected !== null}>
+	<form
+		class="filters"
+		onsubmit={(event) => {
+			event.preventDefault();
+			loadSubjects();
+		}}
+	>
 		<label>
-			<span>Type</span>
-			<select bind:value={subjectType}>
-				{#each typeOptions as option}<option value={option[0]}>{option[1]}</option>{/each}
+			<span>Subject type</span>
+			<select bind:value={typeFilter}>
+				<option value="">All types</option>
+				{#each ["account", "session", "device", "ip", "cidr", "asn", "email", "email_domain", "api_key", "country", "region"] as item}
+					<option value={item}>{typeLabel(item)}</option>
+				{/each}
 			</select>
 		</label>
 		<label>
-			<span>Minimum risk</span>
+			<span>Minimum score</span>
 			<select bind:value={minimumScore}>
 				<option value={0}>All scores</option>
-				<option value={30}>30+ Observe</option>
-				<option value={50}>50+ Verify</option>
-				<option value={65}>65+ Restrict</option>
-				<option value={80}>80+ Block</option>
+				<option value={30}>Observe, 30+</option>
+				<option value={50}>Verify, 50+</option>
+				<option value={65}>Restrict, 65+</option>
+				<option value={80}>Block, 80+</option>
 			</select>
 		</label>
 		<label class="search-field">
 			<span>Search</span>
-			<input bind:value={query} placeholder="Masked value or operator label" />
+			<input bind:value={query} placeholder="Masked value or account label" />
 		</label>
-		<button class="apply-button" type="submit"><Icon icon="material-symbols:filter-alt-outline-rounded" />Apply</button>
+		<button class="primary icon-command" type="submit" disabled={loading}>
+			<Icon icon="material-symbols:search-rounded" />
+			<span>Find</span>
+		</button>
 	</form>
 
-	{#if error}<div class="entity-notice error" aria-live="polite"><Icon icon="material-symbols:warning-outline-rounded" />{error}</div>{/if}
-	{#if success}<div class="entity-notice success" aria-live="polite"><Icon icon="material-symbols:check-circle-outline-rounded" />{success}</div>{/if}
+	{#if error}<div class="notice error" role="alert">{error}</div>{/if}
 
-	<div class="entity-layout">
-		<section class="entity-list" aria-busy={loading}>
-			<div class="list-header"><span>Risk</span><span>Subject</span><span>Last change</span><span></span></div>
-			{#if loading && subjects.length === 0}
-				<div class="empty-state">Loading risk entities...</div>
-			{:else}
-				{#each subjects as subject}
-					<button class:selected={selected?.id === subject.id} class="subject-row" onclick={() => openSubject(subject)}>
-						<span class={`score ${subject.riskLevel}`}>{subject.currentScore}</span>
-						<span class="subject-name"><strong>{subject.displayValue}</strong><small>{subject.subjectType.replaceAll("_", " ")} / {subject.riskLevel}</small></span>
-						<time>{formatTime(subject.lastChangedAt)}</time>
-						<Icon icon="material-symbols:chevron-right-rounded" />
-					</button>
+	<div class="subject-layout">
+		<section class="subject-list" aria-label="Risk subjects">
+			<header>
+				<div><strong>Subjects</strong><span>{subjects.length}</span></div>
+				<button class="icon-button" title="Refresh subjects" aria-label="Refresh subjects" onclick={loadSubjects} disabled={loading}>
+					<Icon icon="material-symbols:refresh-rounded" />
+				</button>
+			</header>
+			<div class="list-columns" aria-hidden="true"><span>Risk</span><span>Subject</span><span>Last change</span></div>
+			<div class="rows">
+				{#if loading}
+					<div class="empty">Loading subjects...</div>
+				{:else if subjects.length === 0}
+					<div class="empty">No subjects match these filters.</div>
 				{:else}
-					<div class="empty-state">No risk entities match these filters.</div>
-				{/each}
-			{/if}
+					{#each subjects as subject (subject.id)}
+						<button class="subject-row" class:selected={selected?.id === subject.id} onclick={() => openSubject(subject)}>
+							<span class={`score ${subject.riskLevel}`}>{subject.currentScore}</span>
+							<span class="identity"><strong>{subject.displayValue}</strong><small>{typeLabel(subject.subjectType)} / {subject.riskLevel}</small></span>
+							<time>{formatTime(subject.lastChangedAt)}</time>
+							<Icon class="chevron" icon="material-symbols:chevron-right-rounded" />
+						</button>
+					{/each}
+				{/if}
+			</div>
 		</section>
 
-		<aside class="entity-detail" aria-busy={loadingDetail}>
-			{#if selected}
-				<header class="detail-head">
-					<div class={`score large ${selected.riskLevel}`}>{selected.effectiveScore}</div>
-					<div><span>{selected.subjectType.replaceAll("_", " ")}</span><h3>{selected.displayValue}</h3><small>Raw {selected.currentScore} / effective {selected.effectiveScore}</small></div>
-					<button class="icon-button" title="Close subject" aria-label="Close subject" onclick={() => (selected = null)}><Icon icon="material-symbols:close-rounded" /></button>
+		<section class="subject-detail" aria-label="Selected subject">
+			{#if detailLoading}
+				<div class="empty">Loading subject history...</div>
+			{:else if !selected}
+				<div class="detail-placeholder">
+					<Icon icon="material-symbols:manage-search-rounded" />
+					<strong>Select a subject</strong>
+				</div>
+			{:else}
+				<header class="detail-header">
+					<button class="back-button" onclick={() => (selected = null)} aria-label="Back to subjects">
+						<Icon icon="material-symbols:arrow-back-rounded" />
+					</button>
+					<span class={`score large ${selected.riskLevel}`}>{selected.effectiveScore}</span>
+					<div>
+						<small>{typeLabel(selected.subjectType)}</small>
+						<h2>{selected.displayValue}</h2>
+						<p>Raw {selected.currentScore} / Effective {selected.effectiveScore} / {selected.riskLevel}</p>
+					</div>
+					<button class="close-button" onclick={() => (selected = null)} aria-label="Close subject details">
+						<Icon icon="material-symbols:close-rounded" />
+					</button>
 				</header>
 
-				<div class="quick-controls">
-					<label><span>Adjustment</span><input type="number" min="-100" max="100" bind:value={adjustment} /></label>
-					<label><span>Duration</span><select bind:value={adjustmentDuration}><option value={3600}>1 hour</option><option value={21600}>6 hours</option><option value={86400}>24 hours</option><option value={604800}>7 days</option></select></label>
-					<label class="reason-input"><span>Reason</span><input bind:value={adjustmentReason} placeholder="Required audit reason" /></label>
-					<button onclick={submitAdjustment} disabled={saving || !adjustment || adjustmentReason.trim().length < 3}><Icon icon="material-symbols:add-chart-rounded" />Apply score</button>
-				</div>
+				<form
+					class="manual-control"
+					onsubmit={(event) => {
+						event.preventDefault();
+						saveControl();
+					}}
+				>
+					<h3>Manual control</h3>
+					<div class="control-fields">
+						<label>
+							<span>Action</span>
+							<select bind:value={action}>
+								<option value="adjust">Adjust score</option>
+								<option value="score_cap">Maximum score</option>
+								<option value="score_floor">Minimum score</option>
+								<option value="response_exemption">Response exemption</option>
+							</select>
+						</label>
+						{#if action !== "response_exemption"}
+							<label>
+								<span>{action === "adjust" ? "Adjustment" : "Score"}</span>
+								<input type="number" min={action === "adjust" ? -100 : 0} max="100" bind:value={amount} required />
+							</label>
+						{/if}
+						<label>
+							<span>Duration</span>
+							<select bind:value={duration}>
+								<option value={3600}>1 hour</option>
+								<option value={21600}>6 hours</option>
+								<option value={86400}>24 hours</option>
+								<option value={604800}>7 days</option>
+								<option value={2592000}>30 days</option>
+							</select>
+						</label>
+						<label class="reason-field">
+							<span>Audit reason</span>
+							<input bind:value={reason} minlength="3" maxlength="300" required placeholder="Required" />
+						</label>
+						<button class="primary" type="submit" disabled={saving || !reason.trim()}>
+							{saving ? "Saving..." : "Apply"}
+						</button>
+					</div>
+				</form>
 
-				<div class="quick-controls override-controls">
-					<label><span>Override</span><select bind:value={overrideType}><option value="score_cap">Score cap</option><option value="score_floor">Score floor</option><option value="response_exemption">Response exemption</option><option value="rule_exemption">Rule exemption</option></select></label>
-					{#if overrideType === "score_cap" || overrideType === "score_floor"}<label><span>Value</span><input type="number" min="0" max="100" bind:value={overrideValue} /></label>{/if}
-					<label><span>Duration</span><select bind:value={overrideDuration}><option value={3600}>1 hour</option><option value={21600}>6 hours</option><option value={86400}>24 hours</option><option value={604800}>7 days</option></select></label>
-					<label class="reason-input"><span>Reason</span><input bind:value={overrideReason} placeholder="Required audit reason" /></label>
-					<button onclick={submitOverride} disabled={saving || overrideReason.trim().length < 3}><Icon icon="material-symbols:verified-user-outline-rounded" />Activate</button>
-				</div>
-
-				<section class="active-overrides">
-					<header><h4>Active overrides</h4><span>{selected.overrides.filter((item) => !item.revokedAt).length}</span></header>
-					{#each selected.overrides.filter((item) => !item.revokedAt) as item}
-						<div><span><strong>{item.overrideType.replaceAll("_", " ")}{item.value !== undefined && item.value !== null ? ` ${item.value}` : ""}</strong><small>{item.reason} / {item.expiresAt ? formatTime(item.expiresAt) : "Permanent"}</small></span><button class="icon-button" title="Revoke override" onclick={() => revokeOverride(item)} disabled={saving}><Icon icon="material-symbols:undo-rounded" /></button></div>
-					{:else}<p>No active overrides.</p>{/each}
+				<section class="detail-section">
+					<header><h3>Active controls</h3><span>{activeOverrides.length}</span></header>
+					{#if activeOverrides.length === 0}
+						<p class="empty-line">No active manual controls.</p>
+					{:else}
+						<div class="override-list">
+							{#each activeOverrides as item (item.id)}
+								<div>
+									<span><strong>{typeLabel(item.overrideType)}</strong><small>{item.value === null || item.value === undefined ? "Exempt" : item.value}</small></span>
+									<p>{item.reason}</p>
+									<time>{item.expiresAt ? `Until ${formatTime(item.expiresAt)}` : "No expiry"}</time>
+									<button class="icon-button" title="Revoke control" aria-label="Revoke control" onclick={() => revokeOverride(item)} disabled={saving}>
+										<Icon icon="material-symbols:delete-outline-rounded" />
+									</button>
+								</div>
+							{/each}
+						</div>
+					{/if}
 				</section>
 
-				<section class="risk-timeline">
-					<header><h4>Risk ledger</h4><span>{selected.ledger.length} entries</span></header>
-					{#each selected.ledger as entry}
-						<article>
-							<i class:negative={entry.delta < 0}>{entry.delta > 0 ? "+" : ""}{entry.delta}</i>
-							<div><strong>{entry.reason}</strong><small>{entry.reasonCode} / {entry.source} / {formatTime(entry.createdAt)}</small></div>
-							<span>{entry.scoreBefore} → {entry.scoreAfter}</span>
-						</article>
-					{:else}<p>No score changes have been recorded.</p>{/each}
+				<section class="detail-section ledger-section">
+					<header><h3>Risk ledger</h3><span>{selected.ledger.length}</span></header>
+					{#if selected.ledger.length === 0}
+						<p class="empty-line">No score changes recorded.</p>
+					{:else}
+						<div class="ledger">
+							{#each selected.ledger as entry (entry.id)}
+								<article>
+									<span class:negative={entry.delta < 0} class="delta">{entry.delta > 0 ? `+${entry.delta}` : entry.delta}</span>
+									<div><strong>{entry.reason}</strong><small>{entry.reasonCode.replaceAll("_", " ")} / {entry.source} / {entry.actor}</small><time>{formatTime(entry.createdAt)}</time></div>
+									<b>{entry.scoreBefore} -&gt; {entry.scoreAfter}</b>
+								</article>
+							{/each}
+						</div>
+					{/if}
 				</section>
-			{:else}
-				<div class="detail-empty"><Icon icon="material-symbols:hub-outline-rounded" /><strong>Select a risk entity</strong><span>Score changes and operator controls appear here.</span></div>
 			{/if}
-		</aside>
+		</section>
 	</div>
 </section>
 
 <style>
-.entity-workspace{container-type:inline-size;display:grid;gap:1rem;color:#182230}.entity-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:1rem}.entity-heading p{margin:0;color:#287dbf;font-size:.75rem;font-weight:800}.entity-heading h2{margin:.25rem 0 0;font-size:1.15rem}.icon-button{display:inline-grid;width:2.75rem;height:2.75rem;flex:0 0 auto;place-items:center;border:1px solid #cfdbe5;border-radius:6px;background:#fff;color:#526575;cursor:pointer}.entity-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border:1px solid #d5e0e8;border-radius:8px;background:#fff}.entity-metrics button{min-width:0;min-height:5.5rem;border:0;border-right:1px solid #e4ebf0;border-bottom:1px solid #e4ebf0;background:#fff;padding:.8rem;text-align:left;cursor:pointer}.entity-metrics button.active{box-shadow:inset 0 -3px #318bd0}.entity-metrics span,.entity-metrics strong,.entity-metrics small{display:block}.entity-metrics span{color:#617487;font-size:.875rem;text-transform:capitalize}.entity-metrics strong{margin:.3rem 0;font-size:1.4rem}.entity-metrics small{overflow:hidden;color:#718096;font-size:.875rem;text-overflow:ellipsis;white-space:nowrap}.entity-filters{display:grid;grid-template-columns:1fr;gap:.65rem}.entity-filters label,.quick-controls label{display:flex;min-height:2.75rem;align-items:center;gap:.5rem;border:1px solid #d4dfe8;border-radius:6px;background:#fff;padding:0 .7rem}.entity-filters label span,.quick-controls label span{color:#687b8d;font-size:.875rem;font-weight:700;white-space:nowrap}.entity-filters select,.entity-filters input,.quick-controls select,.quick-controls input{width:100%;min-width:0;border:0;background:#fff;color:#182230;font:inherit;font-weight:700;outline:0}.apply-button,.quick-controls button{display:inline-flex;min-height:2.75rem;align-items:center;justify-content:center;gap:.4rem;border:1px solid #318bd0;border-radius:6px;background:#318bd0;padding:0 .9rem;color:#fff;font-weight:800;cursor:pointer}.entity-notice{display:flex;min-height:3rem;align-items:center;gap:.55rem;border:1px solid #bde3cf;border-radius:6px;background:#effaf4;padding:.75rem;color:#237047}.entity-notice.error{border-color:#efc9c9;background:#fff4f4;color:#a73333}.entity-layout{display:grid;grid-template-columns:1fr;gap:1rem;align-items:start}.entity-list,.entity-detail{min-width:0;overflow:hidden;border:1px solid #d5e0e8;border-radius:8px;background:#fff}.list-header,.subject-row{display:grid;grid-template-columns:3rem minmax(0,1fr) 8rem 1.5rem;align-items:center;gap:.75rem;padding:.75rem 1rem}.list-header{background:#f7fafc;color:#687b8d;font-size:.75rem;font-weight:800;text-transform:uppercase}.subject-row{width:100%;min-height:4.35rem;border:0;border-top:1px solid #edf1f4;background:#fff;color:inherit;text-align:left;cursor:pointer}.subject-row:hover,.subject-row.selected{background:#f3f8fc}.score{display:inline-grid;width:2.5rem;height:2.5rem;place-items:center;border-radius:4px;background:#e4f4ea;color:#237047;font-size:.875rem;font-weight:900}.score.observe{background:#fff2ce;color:#825c08}.score.verify{background:#ffe8ce;color:#9a5310}.score.restrict,.score.block{background:#ffe0e2;color:#ae3039}.subject-name{min-width:0}.subject-name strong,.subject-name small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.subject-name small,.subject-row time{margin-top:.2rem;color:#718096;font-size:.875rem}.detail-head{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:.85rem;border-bottom:1px solid #e6edf2;padding:1rem}.score.large{width:3.3rem;height:3.3rem;font-size:1rem}.detail-head span,.detail-head small{color:#718096;font-size:.875rem;text-transform:capitalize}.detail-head h3{margin:.15rem 0;overflow-wrap:anywhere;font-size:1rem}.quick-controls{display:grid;grid-template-columns:1fr;gap:.55rem;border-bottom:1px solid #e6edf2;padding:1rem}.quick-controls .reason-input{grid-column:1/-1}.quick-controls button{grid-column:1/-1}.override-controls{background:#f8fafc}.active-overrides,.risk-timeline{display:grid}.active-overrides header,.risk-timeline header{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #e6edf2;padding:.8rem 1rem}.active-overrides h4,.risk-timeline h4{margin:0;font-size:.95rem}.active-overrides header span,.risk-timeline header span{color:#718096;font-size:.875rem}.active-overrides>div{display:flex;min-height:4rem;align-items:center;justify-content:space-between;gap:1rem;border-bottom:1px solid #edf1f4;padding:.7rem 1rem}.active-overrides strong,.active-overrides small{display:block}.active-overrides small{margin-top:.25rem;color:#718096;font-size:.875rem}.active-overrides p,.risk-timeline>p{margin:0;padding:1rem;color:#718096}.risk-timeline article{display:grid;grid-template-columns:2.75rem minmax(0,1fr) auto;align-items:center;gap:.75rem;border-bottom:1px solid #edf1f4;padding:.75rem 1rem}.risk-timeline article>i{display:inline-grid;min-height:2.1rem;place-items:center;border-radius:4px;background:#ffe0e2;color:#ae3039;font-style:normal;font-weight:900}.risk-timeline article>i.negative{background:#e4f4ea;color:#237047}.risk-timeline strong,.risk-timeline small{display:block}.risk-timeline small{margin-top:.2rem;color:#718096;font-size:.875rem}.risk-timeline article>span{color:#526575;font-size:.875rem;font-weight:800}.detail-empty,.empty-state{display:grid;min-height:12rem;place-content:center;justify-items:center;gap:.5rem;padding:1rem;color:#718096;text-align:center}.detail-empty :global(svg){font-size:2rem}.detail-empty span{font-size:.875rem}button:disabled{cursor:not-allowed;opacity:.5}
-@container(min-width:40rem){.entity-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.entity-filters{grid-template-columns:11rem 12rem minmax(12rem,1fr) auto}.quick-controls{grid-template-columns:minmax(7rem,.6fr) minmax(9rem,.8fr) minmax(12rem,1.6fr) auto}.quick-controls .reason-input,.quick-controls button{grid-column:auto}}
-@container(min-width:70rem){.entity-metrics{grid-template-columns:repeat(6,minmax(0,1fr))}.entity-layout{grid-template-columns:minmax(26rem,.9fr) minmax(31rem,1.1fr)}.entity-detail{position:sticky;top:1rem;max-height:calc(100vh - 2rem);overflow:auto}}
-@container(max-width:32rem){.list-header{display:none}.subject-row{grid-template-columns:2.5rem minmax(0,1fr) 1.5rem}.subject-row time{grid-column:2}.risk-timeline article{grid-template-columns:2.75rem minmax(0,1fr)}.risk-timeline article>span{grid-column:2}.entity-metrics small{white-space:normal}}
+	:global(*) { box-sizing: border-box; }
+	.subjects-workspace { min-width: 0; }
+	.filters { display: grid; grid-template-columns: 1fr; gap: .75rem; margin-bottom: 1rem; }
+	label { display: grid; gap: .35rem; min-width: 0; }
+	label > span { color: #56697c; font-size: .75rem; font-weight: 700; }
+	input, select, button { font: inherit; letter-spacing: 0; }
+	input, select { width: 100%; min-height: 2.75rem; border: 1px solid #cbd7e1; border-radius: .375rem; background: #fff; color: #172536; padding: .65rem .75rem; }
+	input:focus, select:focus { outline: 2px solid #2f8fd5; outline-offset: 1px; border-color: transparent; }
+	button { min-height: 2.75rem; border-radius: .375rem; cursor: pointer; }
+	button:disabled { cursor: not-allowed; opacity: .55; }
+	.primary { border: 1px solid #237fc1; background: #237fc1; color: #fff; font-weight: 700; padding: .65rem 1rem; }
+	.icon-command { display: inline-flex; align-items: center; justify-content: center; gap: .45rem; align-self: end; }
+	.icon-command :global(svg), .icon-button :global(svg), .back-button :global(svg), .close-button :global(svg) { width: 1.2rem; height: 1.2rem; }
+	.notice { margin-bottom: 1rem; border-left: .25rem solid #c74452; background: #fff1f2; color: #7e2430; padding: .75rem 1rem; }
+	.subject-layout { display: grid; min-width: 0; border: 1px solid #d7e0e7; background: #fff; }
+	.subject-list, .subject-detail { min-width: 0; }
+	.subject-list > header { min-height: 3.25rem; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #e2e8ed; padding: 0 .75rem 0 1rem; }
+	.subject-list > header div { display: flex; align-items: center; gap: .5rem; }
+	.subject-list > header span, .detail-section > header span { color: #74879a; font-size: .75rem; }
+	.icon-button, .back-button, .close-button { display: inline-grid; place-items: center; min-width: 2.75rem; width: 2.75rem; border: 1px solid #d2dde5; background: #fff; color: #536a7e; }
+	.list-columns { display: none; }
+	.rows { max-height: 46rem; overflow: auto; }
+	.subject-row { position: relative; width: 100%; display: grid; grid-template-columns: 2.5rem minmax(0, 1fr) auto; gap: .75rem; align-items: center; border: 0; border-bottom: 1px solid #e8edf1; border-radius: 0; background: #fff; color: #182738; padding: .75rem 2.25rem .75rem .75rem; text-align: left; }
+	.subject-row:hover, .subject-row.selected { background: #f2f8fc; }
+	.score { display: inline-grid; place-items: center; width: 2.5rem; height: 2.5rem; border-radius: .25rem; background: #e5f3ea; color: #187348; font-weight: 800; font-variant-numeric: tabular-nums; }
+	.score.observe { background: #fff3cd; color: #735b00; }
+	.score.verify, .score.restrict { background: #ffe6d2; color: #9a4512; }
+	.score.block { background: #ffe0e3; color: #b52f40; }
+	.score.large { width: 3.5rem; height: 3.5rem; font-size: 1.125rem; }
+	.identity { display: grid; min-width: 0; gap: .2rem; }
+	.identity strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.identity small, .subject-row time { color: #718398; font-size: .75rem; }
+	.subject-row time { display: none; }
+	.chevron { position: absolute; right: .75rem; width: 1.15rem; color: #8293a4; }
+	.empty, .detail-placeholder { min-height: 12rem; display: grid; place-items: center; color: #718398; padding: 2rem; text-align: center; }
+	.detail-placeholder { align-content: center; gap: .75rem; }
+	.detail-placeholder :global(svg) { width: 2rem; height: 2rem; }
+	.subject-detail { display: none; }
+	.detail-open .subject-list { display: none; }
+	.detail-open .subject-detail { display: block; }
+	.detail-header { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: .75rem; align-items: center; border-bottom: 1px solid #dfe7ed; padding: 1rem; }
+	.detail-header h2 { margin: .1rem 0; overflow-wrap: anywhere; font-size: 1.125rem; }
+	.detail-header small, .detail-header p { margin: 0; color: #6c7e91; font-size: .75rem; text-transform: capitalize; }
+	.close-button { display: none; }
+	.manual-control { border-bottom: 1px solid #dfe7ed; background: #f7fafc; padding: 1rem; }
+	h3 { margin: 0; font-size: .875rem; }
+	.control-fields { display: grid; grid-template-columns: 1fr; gap: .75rem; margin-top: .75rem; }
+	.detail-section { border-bottom: 1px solid #dfe7ed; }
+	.detail-section > header { min-height: 3rem; display: flex; align-items: center; justify-content: space-between; padding: 0 1rem; }
+	.empty-line { margin: 0; border-top: 1px solid #edf1f4; color: #718398; padding: 1rem; }
+	.override-list > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .35rem 1rem; border-top: 1px solid #edf1f4; padding: .75rem 1rem; }
+	.override-list span { display: flex; gap: .5rem; align-items: baseline; text-transform: capitalize; }
+	.override-list small, .override-list p, .override-list time { color: #718398; font-size: .75rem; }
+	.override-list p, .override-list time { grid-column: 1; margin: 0; }
+	.override-list .icon-button { grid-column: 2; grid-row: 1 / 4; align-self: center; }
+	.ledger article { display: grid; grid-template-columns: 2.75rem minmax(0, 1fr); gap: .75rem; border-top: 1px solid #edf1f4; padding: .875rem 1rem; }
+	.delta { display: inline-grid; place-items: center; align-self: start; min-height: 2rem; border-radius: .25rem; background: #ffe0e3; color: #b52f40; font-weight: 800; }
+	.delta.negative { background: #e5f3ea; color: #187348; }
+	.ledger article div { display: grid; min-width: 0; gap: .2rem; }
+	.ledger strong { overflow-wrap: anywhere; }
+	.ledger small, .ledger time, .ledger b { color: #718398; font-size: .75rem; font-weight: 500; }
+	.ledger b { grid-column: 2; }
+
+	@media (min-width: 48rem) {
+		.filters { grid-template-columns: minmax(9rem, .8fr) minmax(9rem, .8fr) minmax(14rem, 2fr) auto; align-items: end; }
+		.subject-layout { grid-template-columns: minmax(20rem, 40%) minmax(0, 60%); min-height: 38rem; }
+		.subject-list { display: block !important; border-right: 1px solid #d7e0e7; }
+		.subject-detail { display: block !important; }
+		.list-columns { display: grid; grid-template-columns: 2.5rem minmax(0, 1fr) 7rem; gap: .75rem; border-bottom: 1px solid #e2e8ed; background: #f7f9fb; color: #718398; padding: .55rem .75rem; font-size: .6875rem; font-weight: 700; text-transform: uppercase; }
+		.subject-row { grid-template-columns: 2.5rem minmax(0, 1fr) 7rem; }
+		.subject-row time { display: block; }
+		.back-button { display: none; }
+		.close-button { display: inline-grid; }
+		.detail-header { grid-template-columns: auto minmax(0, 1fr) auto; }
+		.control-fields { grid-template-columns: minmax(8rem, 1fr) minmax(6rem, .7fr) minmax(8rem, .9fr) minmax(12rem, 1.6fr) auto; align-items: end; }
+		.reason-field { min-width: 0; }
+		.ledger article { grid-template-columns: 2.75rem minmax(0, 1fr) auto; align-items: center; }
+		.ledger b { grid-column: 3; grid-row: 1; }
+	}
 </style>

@@ -409,6 +409,8 @@ Migration `0009_entity_risk_ledger.sql` adds independent subjects, an append-onl
 
 The public contract now uses stable three-digit codes: `1xx` identity, `2xx` network, `3xx` behavior, `4xx` automation/policy, and `501` protected administration. The public portal renders only the inaccessible message, code, and `SFB-` identifier. Detailed reasons, scores, subjects, paths, expiry, and internal references remain private.
 
+The Admin control surface intentionally exposes only three workspaces: `Subjects`, `Risk factors`, and `Sites`. Subjects provide search, the full append-only score history, expiring score adjustments, caps, floors, and response exemptions. Risk factors publish a complete versioned weight set with a required audit reason and pre-publish traffic simulation. Sites expose one audited protection switch per configured hostname. Rate enforcement, decay, correlation, threat intelligence, account synchronization, and response jobs remain autonomous backend services rather than operator-facing configuration screens.
+
 ## 18. Phased Development Plan
 
 ### Phase 0: Perimeter and Observation (Complete)
@@ -447,4 +449,4 @@ Add rule quality metrics, false-positive budgets, canary rules, historical basel
 - The administration console is independent, English-only, responsive, protected by the existing SilentFlare Admin session, CSRF-protected, and audited.
 - The original SilentFlare website remains operational after Nginx is pointed back to its original origins and Shield is stopped.
 - All five production hosts can traverse Shield without a public-port proxy loop, and blog reads remain available during a Shield process outage.
-- The live dashboard can operate services, geography, networks, bans, accounts, score versions, alerts, and reports without raw target-value forms.
+- The live dashboard exposes only subject operations, versioned risk-factor weights, and one protection switch per configured site; all other automation remains internal.

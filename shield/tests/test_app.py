@@ -315,6 +315,57 @@ class ShieldApplicationTests(unittest.TestCase):
 		self.assertEqual(listing.status_code, 200)
 		self.assertTrue(any(item["id"] == subject["id"] for item in listing.json()["items"]))
 
+	def test_simplified_console_updates_factor_versions_and_site_protection(self):
+		headers = {"Cookie": "sf_bot_session=valid-admin", "X-CSRF-Token": "admin-csrf"}
+		factor_response = self.client.get("/__shield/api/admin/risk-factors", headers=headers)
+		self.assertEqual(factor_response.status_code, 200)
+		factor_payload = factor_response.json()
+		weights = {item["key"]: item["weight"] for item in factor_payload["factors"]}
+		self.assertIn("no_2fa", weights)
+		original = dict(weights)
+		weights["no_2fa"] = 11
+		published = self.client.put(
+			"/__shield/api/admin/risk-factors",
+			headers=headers,
+			json={"weights": weights, "reason": "Integration factor change"},
+		)
+		self.assertEqual(published.status_code, 200)
+		self.assertGreater(published.json()["currentVersion"], factor_payload["currentVersion"])
+		audit = app.state.database.query(
+			"SELECT action FROM audit_log WHERE action = 'risk_factors.update' ORDER BY id DESC LIMIT 1"
+		)
+		self.assertEqual(audit[0]["action"], "risk_factors.update")
+		self.client.put(
+			"/__shield/api/admin/risk-factors",
+			headers=headers,
+			json={"weights": original, "reason": "Restore integration factor values"},
+		)
+
+		sites = self.client.get("/__shield/api/admin/sites", headers=headers)
+		self.assertEqual(sites.status_code, 200)
+		self.assertEqual(len(sites.json()["sites"]), 5)
+		original_site = app.state.database.query(
+			"SELECT protection_enabled, mode FROM service_controls WHERE host = 'api.silentflare.com'"
+		)[0]
+		app.state.database.execute("UPDATE rate_policies SET action = 'log' WHERE action = 'turnstile'")
+		try:
+			enabled = self.client.put(
+				"/__shield/api/admin/sites/api.silentflare.com",
+				headers=headers,
+				json={"enabled": True, "reason": "Integration site enable"},
+			)
+			self.assertEqual(enabled.status_code, 200)
+			control = app.state.database.query(
+				"SELECT protection_enabled, mode FROM service_controls WHERE host = 'api.silentflare.com'"
+			)[0]
+			self.assertEqual(control, {"protection_enabled": 1, "mode": "enforce"})
+		finally:
+			app.state.database.execute("UPDATE rate_policies SET action = 'turnstile' WHERE name = 'Login per IP'")
+			app.state.database.execute(
+				"UPDATE service_controls SET protection_enabled = ?, mode = ? WHERE host = 'api.silentflare.com'",
+				(original_site["protection_enabled"], original_site["mode"]),
+			)
+
 	def test_split_role_apps_expose_only_their_route_surface(self):
 		from app.control.app import app as control_app
 		from app.gateway.app import app as gateway_app
