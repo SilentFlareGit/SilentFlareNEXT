@@ -9,7 +9,7 @@ let {
 	onCreated,
 }: {
 	postSlug: string;
-	onCreated: () => void;
+	onCreated: () => void | Promise<void>;
 } = $props();
 
 let content = $state("");
@@ -43,7 +43,7 @@ async function submit() {
 		turnstileToken = "";
 		resetKey += 1;
 		success = "Comment published.";
-		onCreated();
+		await onCreated();
 	} catch (err) {
 		error = err instanceof Error ? err.message : "Could not publish comment";
 		resetKey += 1;

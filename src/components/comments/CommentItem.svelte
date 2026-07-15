@@ -17,8 +17,8 @@ let {
 }: {
 	comment: CommentRecord;
 	currentUser: CurrentUser | null;
-	onDeleted: () => void;
-	onUpdated: () => void;
+	onDeleted: () => void | Promise<void>;
+	onUpdated: () => void | Promise<void>;
 } = $props();
 
 let deleting = $state(false);
@@ -53,7 +53,7 @@ async function remove() {
 	error = "";
 	try {
 		await deleteComment(comment.id);
-		onDeleted();
+		await onDeleted();
 	} catch (err) {
 		error = err instanceof Error ? err.message : "Could not delete comment";
 	} finally {
@@ -81,8 +81,8 @@ async function save() {
 	error = "";
 	try {
 		await updateComment(comment.id, content);
+		await onUpdated();
 		editing = false;
-		onUpdated();
 	} catch (err) {
 		error = err instanceof Error ? err.message : "Could not update comment";
 	} finally {

@@ -11,8 +11,8 @@ let {
 }: {
 	comments: CommentRecord[];
 	currentUser: CurrentUser | null;
-	onDeleted: () => void;
-	onUpdated: () => void;
+	onDeleted: () => void | Promise<void>;
+	onUpdated: () => void | Promise<void>;
 } = $props();
 </script>
 

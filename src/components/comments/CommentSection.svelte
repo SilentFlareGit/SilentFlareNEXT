@@ -73,7 +73,7 @@ onMount(() => {
 	{:else}
 		<div class="mb-6">
 			{#if user}
-				<CommentForm {postSlug} onCreated={() => void loadComments()} />
+				<CommentForm {postSlug} onCreated={loadComments} />
 			{:else}
 				<div class="rounded-xl border border-dashed border-[var(--line-divider)] bg-black/[0.015] p-4 dark:bg-white/[0.02]">
 					<p class="mb-3 text-75">Sign in to join the discussion and publish comments.</p>
@@ -85,7 +85,7 @@ onMount(() => {
 		</div>
 
 		{#if comments.length > 0}
-			<CommentList {comments} currentUser={user} onDeleted={() => void loadComments()} onUpdated={() => void loadComments()} />
+			<CommentList {comments} currentUser={user} onDeleted={loadComments} onUpdated={loadComments} />
 		{:else}
 			<div class="rounded-xl border border-[var(--line-divider)] px-4 py-8 text-center">
 				<p class="font-medium text-75">No comments yet.</p>
