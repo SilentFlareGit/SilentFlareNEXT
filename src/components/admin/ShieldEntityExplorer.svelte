@@ -80,13 +80,13 @@ const subjectTypeIcons: Record<string, string> = {
 	account: "material-symbols:person-outline-rounded",
 	session: "material-symbols:login-rounded",
 	device: "material-symbols:devices-outline-rounded",
-	ip: "material-symbols:language-rounded",
+	ip: "material-symbols:lan-outline-rounded",
 	cidr: "material-symbols:lan-outline-rounded",
-	asn: "material-symbols:hub-outline-rounded",
+	asn: "material-symbols:lan-outline-rounded",
 	email: "material-symbols:mail-outline-rounded",
 	email_domain: "material-symbols:alternate-email-rounded",
 	api_key: "material-symbols:key-outline-rounded",
-	country: "material-symbols:public-rounded",
+	country: "material-symbols:map-outline-rounded",
 	region: "material-symbols:map-outline-rounded",
 };
 const totalSubjects = $derived(
@@ -269,13 +269,13 @@ onMount(loadSubjects);
 		<header><strong>Subject type</strong><span>{totalSubjects} total</span></header>
 		<div class="type-grid" role="group" aria-label="Subject type">
 			<button class:active={typeFilter === ""} type="button" onclick={() => chooseType("")} disabled={loading}>
-				<Icon icon="material-symbols:select-all-rounded" />
-				<span><strong>All</strong><small>{totalSubjects}</small></span>
+				<span class="type-icon"><Icon icon="material-symbols:select-all-rounded" /></span>
+				<span class="type-label"><strong>All</strong><small>{totalSubjects}</small></span>
 			</button>
 			{#each subjectTypes as item (item.key)}
 				<button class:active={typeFilter === item.key} type="button" onclick={() => chooseType(item.key)} disabled={loading}>
-					<Icon icon={subjectTypeIcons[item.key] ?? "material-symbols:category-outline-rounded"} />
-					<span><strong>{item.label}</strong><small>{item.total}</small></span>
+					<span class="type-icon"><Icon icon={subjectTypeIcons[item.key] ?? "material-symbols:category-outline-rounded"} /></span>
+					<span class="type-label"><strong>{item.label}</strong><small>{item.total}</small></span>
 				</button>
 			{/each}
 		</div>
@@ -456,8 +456,9 @@ onMount(loadSubjects);
 	.type-grid button { display: grid; grid-template-columns: 1.25rem minmax(0, 1fr); gap: .5rem; align-items: center; min-width: 0; border: 1px solid #d4dee6; background: #f9fbfc; color: #4d6275; padding: .45rem .6rem; text-align: left; }
 	.type-grid button:hover { border-color: #8dbbd9; background: #f1f8fc; }
 	.type-grid button.active { border-color: #2584c4; background: #eaf5fc; color: #176fa9; box-shadow: inset 0 0 0 1px #2584c4; }
-	.type-grid button :global(svg) { width: 1.15rem; height: 1.15rem; }
-	.type-grid button > span { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: .35rem; }
+	.type-icon { display: inline-grid; width: 1.25rem; height: 1.25rem; place-items: center; }
+	.type-icon :global(svg) { width: 1.15rem; height: 1.15rem; }
+	.type-label { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: .35rem; }
 	.type-grid button strong { overflow: hidden; font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
 	.type-grid button small { flex: 0 0 auto; color: #718398; font-size: .6875rem; font-variant-numeric: tabular-nums; }
 	.filter-tools { display: grid; gap: .75rem; border-top: 1px solid #e3e9ee; padding-top: .75rem; }
