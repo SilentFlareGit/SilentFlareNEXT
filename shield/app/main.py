@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlencode, urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -22,17 +22,15 @@ from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from .blocking import (
-	ERROR_DESCRIPTIONS,
-	ban_error_code,
 	ban_subject_display,
 	new_public_ban_id,
 	normalize_ban_subject,
-	safe_error_code,
-	safe_event_id,
 	safe_public_ban_id,
 )
 from .config import Settings, settings
 from .database import Database, mask_ip, stable_hash
+from .domain.risk_codes import is_public_risk_code, risk_code_for
+from .entity_risk import EntityRiskService, entity_level
 from .geo import GeoService, IpIntel
 from .rate_limit import RateHit, RateLimiter
 from .risk import DEFAULT_THRESHOLDS, DEFAULT_WEIGHTS, RiskResult, score_request
@@ -56,18 +54,6 @@ BLOCK_HTML = (STATIC_ROOT / "blocked.html").read_text(encoding="utf-8").replace(
 )
 HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade"}
 SENSITIVE_PATHS = ("/auth/", "/accounts/register/", "/admin", "/comments/create")
-BLOCK_CASE_FIELDS = ("code", "ban", "ref", "origin", "until", "scope")
-BLOCK_SCOPE_LABELS = {
-	"all": "All access",
-	"login": "Sign-in",
-	"register": "Registration",
-	"comment": "Comments",
-	"api": "API access",
-	"read_only": "Write operations",
-	"review": "Operations requiring review",
-}
-
-
 class AccessListInput(BaseModel):
 	kind: str = Field(pattern=r"^(allow|deny)$")
 	subject_type: str = Field(pattern=r"^(ip|cidr|asn|country|region|account)$")
@@ -150,9 +136,30 @@ class AlertConfigInput(BaseModel):
 	daily_report_hour: int = Field(ge=0, le=23)
 
 
-def build_services(config: Settings):
+class EntityAdjustmentInput(BaseModel):
+	delta: int = Field(ge=-100, le=100)
+	reason: str = Field(min_length=3, max_length=300)
+	duration_seconds: int | None = Field(default=86400, ge=300, le=31536000)
+
+
+class EntityOverrideInput(BaseModel):
+	override_type: str = Field(pattern=r"^(score_cap|score_floor|rule_exemption|response_exemption)$")
+	value: int | None = Field(default=None, ge=0, le=100)
+	reason: str = Field(min_length=3, max_length=300)
+	duration_seconds: int | None = Field(default=86400, ge=300, le=31536000)
+	scope_host: str | None = Field(default=None, max_length=255)
+	scope_path: str | None = Field(default=None, max_length=500)
+	scope_rule_id: int | None = None
+
+
+class OverrideRevokeInput(BaseModel):
+	reason: str = Field(default="Administrator revoked the override", min_length=3, max_length=300)
+
+
+def build_services(config: Settings, *, migrate: bool = True):
 	database = Database(config.database_path, ROOT / "migrations")
-	database.migrate()
+	if migrate:
+		database.migrate()
 	key = config.internal_signing_key or "bypass-development-key"
 	return (
 		database,
@@ -160,34 +167,36 @@ def build_services(config: Settings):
 		RuleEngine(database),
 		AccessListService(database, key),
 		RateLimiter(database, key),
+		EntityRiskService(database, key),
 	)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 	settings.validate()
-	database, geo, rules, access, limiter = build_services(settings)
+	role = getattr(app.state, "shield_role", "unified")
+	database, geo, rules, access, limiter, entities = build_services(settings, migrate=role == "unified")
 	app.state.database = database
 	app.state.geo = geo
 	app.state.rules = rules
 	app.state.access = access
 	app.state.limiter = limiter
+	app.state.entities = entities
 	app.state.client = httpx.AsyncClient(timeout=settings.proxy_timeout_seconds, follow_redirects=False)
 	app.state.degraded_counters = {}
 	app.state.degraded_events = []
-	app.state.account_sync_task = asyncio.create_task(_account_sync_loop(app))
-	app.state.operations_task = asyncio.create_task(_operations_loop(app))
+	app.state.account_sync_task = asyncio.create_task(_account_sync_loop(app)) if role == "unified" else None
+	app.state.operations_task = asyncio.create_task(_operations_loop(app)) if role == "unified" else None
+	app.state.risk_signal_task = asyncio.create_task(_risk_signal_loop(app)) if role == "unified" else None
 	yield
-	app.state.account_sync_task.cancel()
-	app.state.operations_task.cancel()
-	try:
-		await app.state.account_sync_task
-	except asyncio.CancelledError:
-		pass
-	try:
-		await app.state.operations_task
-	except asyncio.CancelledError:
-		pass
+	for task in (app.state.account_sync_task, app.state.operations_task, app.state.risk_signal_task):
+		if not task:
+			continue
+		task.cancel()
+		try:
+			await task
+		except asyncio.CancelledError:
+			pass
 	await app.state.client.aclose()
 
 
@@ -357,6 +366,32 @@ async def _sync_account_projections(application: FastAPI, session_token: str = "
 					json.dumps(reasons, separators=(",", ":")), now),
 				)
 		db.transaction(write)
+		for user in users:
+			account_ref = str(user.get("id") or "")
+			if not account_ref:
+				continue
+			score, _level, reasons = _account_risk(user, now)
+			posture = stable_hash(
+				json.dumps(
+					{
+						"score": score,
+						"verified": bool(user.get("email_verified_at")),
+						"twoFactor": bool(user.get("totp_enabled")),
+						"disabled": bool(user.get("disabled_at")),
+						"sessions": int(user.get("active_session_count") or 0),
+					},
+					sort_keys=True,
+				),
+				settings.internal_signing_key,
+			)[:20]
+			application.state.entities.set_baseline(
+				"account",
+				account_ref,
+				display=str(user.get("username") or user.get("id") or "Unknown")[:100],
+				baseline=score,
+				reasons=reasons,
+				source_ref=f"posture:{posture}",
+			)
 		db.execute("UPDATE sync_runs SET completed_at = ?, status = 'completed', record_count = ? WHERE id = ?", (int(time.time()), len(users), run_id))
 		return {"status": "completed", "recordCount": len(users), "completedAt": int(time.time())}
 	except (httpx.HTTPError, ValueError, json.JSONDecodeError) as error:
@@ -371,6 +406,15 @@ async def _account_sync_loop(application: FastAPI) -> None:
 		except Exception:
 			pass
 		await asyncio.sleep(max(30, settings.account_sync_interval))
+
+
+async def _risk_signal_loop(application: FastAPI) -> None:
+	while True:
+		try:
+			processed = application.state.entities.process_signal_queue()
+		except Exception:
+			processed = 0
+		await asyncio.sleep(0.1 if processed else 0.75)
 
 
 def _daily_report(database: Database) -> dict[str, Any]:
@@ -464,16 +508,192 @@ def _aggregate_alerts(database: Database) -> None:
 			)
 
 
+def _reconcile_entity_bans(database: Database, entities: EntityRiskService | None = None) -> int:
+	now = int(time.time())
+	changed = 0
+	entities = entities or EntityRiskService(database, settings.internal_signing_key)
+	eligible = database.query(
+		"""SELECT id, subject_type, subject_hash, display_value, current_score FROM risk_subjects
+		WHERE subject_type IN ('ip', 'session', 'device', 'api_key', 'email', 'email_domain')
+		AND (current_score >= 80 OR EXISTS (
+			SELECT 1 FROM risk_overrides WHERE risk_overrides.subject_id = risk_subjects.id
+			AND override_type = 'score_floor' AND value_integer >= 80 AND revoked_at IS NULL
+			AND (expires_at IS NULL OR expires_at > ?)
+		)) ORDER BY current_score DESC LIMIT 500""",
+		(now,),
+	)
+	for subject in eligible:
+		effective_score = entities.effective_score(subject)
+		if effective_score < 80 or entities.active_override(int(subject["id"]), "response_exemption"):
+			continue
+		active = database.query(
+			"""SELECT id FROM bans WHERE subject_type = ? AND subject_hash = ? AND revoked_at IS NULL
+			AND (expires_at IS NULL OR expires_at > ?) LIMIT 1""",
+			(subject["subject_type"], subject["subject_hash"], now),
+		)
+		if active:
+			continue
+		recent = database.query(
+			"""SELECT COUNT(*) AS value FROM bans WHERE subject_type = ? AND subject_hash = ?
+			AND created_by = 'shield-worker' AND created_at >= ?""",
+			(subject["subject_type"], subject["subject_hash"], now - 86400),
+		)[0]["value"]
+		durations = (900, 3600, 21600, 86400)
+		duration = durations[min(int(recent or 0), len(durations) - 1)]
+		if effective_score >= 90:
+			duration = max(duration, 21600)
+		public_id = new_public_ban_id()
+		database.execute(
+			"""INSERT INTO bans(public_id, subject_type, subject_hash, subject_display, restriction,
+			reason, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, 'all', ?, 'shield-worker', ?, ?)""",
+			(
+				public_id,
+				subject["subject_type"],
+				subject["subject_hash"],
+				subject["display_value"],
+				f"Automatic entity response at risk {effective_score}",
+				now,
+				now + duration,
+			),
+		)
+		database.execute(
+			"""INSERT INTO risk_actions(id, subject_id, action, status, reason, created_at,
+			created_by, completed_at, expires_at, attempt_count, detail)
+			VALUES (?, ?, 'temporary_ban', 'completed', ?, ?, 'shield-worker', ?, ?, 1, ?)""",
+			(
+				uuid.uuid4().hex,
+				subject["id"],
+				f"Risk score reached {effective_score}",
+				now,
+				now,
+				now + duration,
+				public_id,
+			),
+		)
+		changed += 1
+	resolved = database.query(
+		"""SELECT bans.id AS ban_id, risk_subjects.* FROM bans JOIN risk_subjects
+		ON risk_subjects.subject_type = bans.subject_type AND risk_subjects.subject_hash = bans.subject_hash
+		WHERE bans.created_by = 'shield-worker' AND bans.revoked_at IS NULL"""
+	)
+	for ban in resolved:
+		if (
+			entities.effective_score(ban) >= 50
+			and not entities.active_override(int(ban["id"]), "response_exemption")
+		):
+			continue
+		database.execute(
+			"""UPDATE bans SET revoked_at = ?, revoked_by = 'shield-worker',
+			revoke_reason = 'Entity risk recovered below release threshold' WHERE id = ?""",
+			(now, ban["ban_id"]),
+		)
+		changed += 1
+	return changed
+
+
+async def _reconcile_account_responses(application: FastAPI) -> int:
+	if len(settings.sync_secret) < 32:
+		return 0
+	now = int(time.time())
+	rows = application.state.database.query(
+		"""SELECT risk_subjects.id AS subject_id, risk_subjects.subject_hash,
+		risk_subjects.current_score, account_projections.account_ref
+		FROM risk_subjects JOIN account_projections
+		ON account_projections.account_id_hash = risk_subjects.subject_hash
+		WHERE risk_subjects.subject_type = 'account' AND (risk_subjects.current_score >= 80 OR EXISTS (
+			SELECT 1 FROM risk_overrides WHERE risk_overrides.subject_id = risk_subjects.id
+			AND override_type = 'score_floor' AND value_integer >= 80 AND revoked_at IS NULL
+			AND (expires_at IS NULL OR expires_at > ?)
+		))
+		AND account_projections.account_ref IS NOT NULL LIMIT 100"""
+		,
+		(now,),
+	)
+	processed = 0
+	for subject in rows:
+		score_subject = dict(subject)
+		score_subject["id"] = subject["subject_id"]
+		effective_score = application.state.entities.effective_score(score_subject)
+		if effective_score < 80 or application.state.entities.active_override(
+			int(subject["subject_id"]), "response_exemption"
+		):
+			continue
+		action = "revoke_sessions" if effective_score >= 90 else "reauthenticate"
+		recent = application.state.database.query(
+			"""SELECT 1 FROM risk_actions WHERE subject_id = ? AND action = ?
+			AND created_at >= ? AND status IN ('queued', 'running', 'completed') LIMIT 1""",
+			(subject["subject_id"], action, now - 21600),
+		)
+		if recent:
+			continue
+		command_id = uuid.uuid4().hex
+		reason = f"Automatic Shield response at risk {effective_score}"
+		application.state.database.execute(
+			"""INSERT INTO risk_actions(id, subject_id, action, status, reason, created_at,
+			created_by, attempt_count) VALUES (?, ?, ?, 'running', ?, ?, 'shield-worker', 1)""",
+			(command_id, subject["subject_id"], action, reason, now),
+		)
+		timestamp = str(now)
+		canonical = f"POST\n/internal/shield/respond\n{timestamp}\n{command_id}\n{action}\n{subject['account_ref']}"
+		signature = hmac.new(settings.sync_secret.encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest()
+		try:
+			response = await application.state.client.post(
+				settings.account_response_url,
+				headers={
+					"Host": "api.silentflare.com",
+					"X-SF-Shield-Timestamp": timestamp,
+					"X-SF-Shield-Signature": signature,
+				},
+				json={
+					"command_id": command_id,
+					"action": action,
+					"account_id": subject["account_ref"],
+					"reason": reason,
+				},
+			)
+			response.raise_for_status()
+			application.state.database.execute(
+				"UPDATE risk_actions SET status = 'completed', completed_at = ?, detail = 'delivered' WHERE id = ?",
+				(int(time.time()), command_id),
+			)
+			processed += 1
+		except httpx.HTTPError as error:
+			application.state.database.execute(
+				"UPDATE risk_actions SET status = 'failed', completed_at = ?, detail = ? WHERE id = ?",
+				(int(time.time()), type(error).__name__, command_id),
+			)
+	return processed
+
+
 async def _operations_loop(application: FastAPI) -> None:
 	while True:
+		run_id = None
 		try:
+			run_id = application.state.database.execute(
+				"INSERT INTO automation_runs(job_name, started_at, status) VALUES ('operations.minute', ?, 'running')",
+				(int(time.time()),),
+			)
 			report = _daily_report(application.state.database)
 			_queue_daily_report_alert(application.state.database, report)
 			_aggregate_alerts(application.state.database)
 			await _deliver_alerts(application)
+			decayed = application.state.entities.run_due_decay()
+			automated = _reconcile_entity_bans(application.state.database, application.state.entities)
+			automated += await _reconcile_account_responses(application)
 			application.state.database.execute("DELETE FROM rate_counters WHERE updated_at < ?", (int(time.time()) - 2592000,))
-		except Exception:
-			pass
+			application.state.database.execute(
+				"UPDATE automation_runs SET completed_at = ?, status = 'completed', processed_count = ? WHERE id = ?",
+				(int(time.time()), decayed + automated, run_id),
+			)
+		except Exception as error:
+			if run_id:
+				try:
+					application.state.database.execute(
+						"UPDATE automation_runs SET completed_at = ?, status = 'failed', detail = ? WHERE id = ?",
+						(int(time.time()), type(error).__name__, run_id),
+					)
+				except Exception:
+					pass
 		await asyncio.sleep(60)
 
 
@@ -584,15 +804,6 @@ def _email_from_body(body: bytes, content_type: str) -> str:
 		return ""
 
 
-def _block_case_signature(values: dict[str, str]) -> str:
-	canonical = "\n".join(values.get(field, "") for field in BLOCK_CASE_FIELDS)
-	return hmac.new(
-		settings.internal_signing_key.encode("utf-8"),
-		canonical.encode("utf-8"),
-		hashlib.sha256,
-	).hexdigest()
-
-
 def _ban_public_id(database: Database, ban: dict[str, Any]) -> str:
 	public_id = safe_public_ban_id(str(ban.get("public_id") or ""))
 	if public_id:
@@ -616,23 +827,54 @@ def _ban_public_id(database: Database, ban: dict[str, Any]) -> str:
 
 
 def _block_case_url(
+	request: Request,
 	request_id: str,
-	host: str,
-	error_code: str,
+	risk_code: str,
 	ban: dict[str, Any] | None,
 	database: Database,
+	context: RequestContext | None,
 ) -> tuple[str, str]:
-	public_ban_id = _ban_public_id(database, ban) if ban else ""
-	values = {
-		"code": safe_error_code(error_code),
-		"ban": public_ban_id,
-		"ref": request_id,
-		"origin": host if host in settings.upstreams else "",
-		"until": str(ban.get("expires_at") or "") if ban else "",
-		"scope": str(ban.get("restriction") or "all") if ban else "all",
-	}
-	values["sig"] = _block_case_signature(values)
-	return f"{settings.public_url}/blocked?{urlencode(values)}", public_ban_id
+	public_ban_id = _ban_public_id(database, ban) if ban else new_public_ban_id()
+	host = _host(request)
+	now = int(time.time())
+	expires_at = int(ban["expires_at"]) if ban and ban.get("expires_at") else None if ban else now + 900
+	subject_type = str(ban.get("subject_type") or "") if ban else ""
+	subject_hash = str(ban.get("subject_hash") or "") if ban else ""
+	if not subject_type and context:
+		for candidate, value in (
+			("account", context.account_id),
+			("session", context.session_id),
+			("device", context.device_id),
+			("ip", context.ip),
+		):
+			if value:
+				subject_type = candidate
+				subject_hash = request.app.state.entities.subject_hash(candidate, value)
+				break
+	return_path = request.url.path if request.url.path.startswith("/") else "/"
+	database.execute(
+		"""INSERT INTO risk_cases(public_id, risk_code, subject_type, subject_hash, ban_public_id,
+		host, return_path, created_at, expires_at, status, request_id, internal_reason)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+		ON CONFLICT(public_id) DO UPDATE SET risk_code=excluded.risk_code, host=excluded.host,
+		return_path=excluded.return_path, request_id=excluded.request_id,
+		expires_at=COALESCE(excluded.expires_at, risk_cases.expires_at), status='active'""",
+		(
+			public_ban_id,
+			risk_code,
+			subject_type or None,
+			subject_hash or None,
+			public_ban_id if ban else None,
+			host,
+			return_path,
+			now,
+			expires_at,
+			request_id,
+			"Persistent ban" if ban else "Request decision",
+		),
+	)
+	token = issue_token({"purpose": "public_case", "id": public_ban_id}, settings.internal_signing_key, 86400)
+	return f"{settings.public_url}/blocked?id={quote(public_ban_id)}&token={quote(token)}", public_ban_id
 
 
 def _block_error_code(
@@ -644,18 +886,18 @@ def _block_error_code(
 	actions: list[str],
 ) -> str:
 	if ban:
-		return ban_error_code(ban)
+		return risk_code_for(ban)
 	if list_status == "deny":
-		return "SF-BLOCK-310"
+		return "403"
 	if geo_reason:
-		return "SF-BLOCK-320"
+		return "204"
 	if rules.matched_rules:
-		return "SF-BLOCK-330"
+		return "403"
 	if risk.level == "block":
-		return "SF-BLOCK-340"
+		return "404"
 	if "temporary_ban" in actions:
-		return "SF-BLOCK-350"
-	return "SF-BLOCK-399"
+		return "304"
+	return "404"
 
 
 def _blocked_response(
@@ -664,13 +906,15 @@ def _blocked_response(
 	host: str,
 	error_code: str,
 	ban: dict[str, Any] | None,
+	context: RequestContext | None = None,
 ) -> Response:
 	case_url, public_ban_id = _block_case_url(
+		request,
 		request_id,
-		host,
 		error_code,
 		ban,
 		request.app.state.database,
+		context,
 	)
 	headers = {
 		"Cache-Control": "no-store",
@@ -705,57 +949,50 @@ def _portal_headers() -> dict[str, str]:
 	}
 
 
-def _render_block_portal(request: Request, generic: bool = False) -> HTMLResponse:
-	values = {field: str(request.query_params.get(field, "")) for field in BLOCK_CASE_FIELDS}
-	signature = str(request.query_params.get("sig", ""))
-	valid = bool(signature) and hmac.compare_digest(signature, _block_case_signature(values))
-	if generic or not valid:
-		page_values = {
-			"PAGE_TITLE": "Shield protection is active" if generic else "Block case unavailable",
-			"DESCRIPTION": "SilentFlare Shield is online and protecting connected services." if generic else "This case link is incomplete, expired, or has been modified.",
-			"ERROR_CODE": "SF-BLOCK-399",
-			"CASE_LABEL": "Reference ID",
-			"CASE_LABEL_LOWER": "reference ID",
-			"CASE_ID": "No active case" if generic else "Unavailable",
-			"STATUS": "Operational" if generic else "Unverified",
-			"SERVICE": "SilentFlare Shield",
-			"SCOPE": "Security gateway",
-			"EXPIRY": "No restriction is represented by this page.",
-			"REQUEST_REFERENCE": "none",
-			"SEVERITY": "neutral",
-		}
-	else:
-		error_code = safe_error_code(values["code"])
-		ban_id = safe_public_ban_id(values["ban"])
-		request_id = safe_event_id(values["ref"])
-		origin = values["origin"] if values["origin"] in settings.upstreams else "SilentFlare service"
-		scope = BLOCK_SCOPE_LABELS.get(values["scope"], "Protected access")
-		until = int(values["until"]) if values["until"].isdigit() else None
-		if ban_id and until is None:
-			status, title, expiry, severity = "Permanent", "Access permanently restricted", "No automatic expiry", "permanent"
-		elif ban_id:
-			status, title, expiry, severity = (
-				"Temporary",
-				"Access temporarily restricted",
-				datetime.fromtimestamp(until, timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if until else "Pending review",
-				"temporary",
+def _render_block_portal(request: Request, generic: bool = False) -> Response:
+	if generic:
+		return HTMLResponse(
+			"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>SilentFlare Shield</title></head><body><main><h1>Shield protection is active</h1></main></body></html>""",
+			headers=_portal_headers(),
+		)
+	public_id = safe_public_ban_id(str(request.query_params.get("id", "")))
+	token = read_token(str(request.query_params.get("token", "")), settings.internal_signing_key)
+	valid = bool(public_id and token and token.get("purpose") == "public_case" and token.get("id") == public_id)
+	case = None
+	if valid:
+		rows = request.app.state.database.query("SELECT * FROM risk_cases WHERE public_id = ? LIMIT 1", (public_id,))
+		case = rows[0] if rows else None
+	if case:
+		now = int(time.time())
+		released = case["status"] != "active" or (case["expires_at"] is not None and int(case["expires_at"]) <= now)
+		if case["ban_public_id"]:
+			active = request.app.state.database.query(
+				"""SELECT 1 FROM bans WHERE public_id = ? AND revoked_at IS NULL
+				AND (expires_at IS NULL OR expires_at > ?) LIMIT 1""",
+				(case["ban_public_id"], now),
 			)
-		else:
-			status, title, expiry, severity = "Blocked", "Request blocked", "This decision applies to the referenced request.", "neutral"
-		page_values = {
-			"PAGE_TITLE": title,
-			"DESCRIPTION": ERROR_DESCRIPTIONS[error_code],
-			"ERROR_CODE": error_code,
-			"CASE_LABEL": "Ban ID" if ban_id else "Incident ID",
-			"CASE_LABEL_LOWER": "ban ID" if ban_id else "incident ID",
-			"CASE_ID": ban_id or (f"SFE-{request_id[:16].upper()}" if request_id else "Unavailable"),
-			"STATUS": status,
-			"SERVICE": origin,
-			"SCOPE": scope,
-			"EXPIRY": expiry,
-			"REQUEST_REFERENCE": request_id or "unavailable",
-			"SEVERITY": severity,
-		}
+			released = not bool(active)
+		elif case["subject_type"] and case["subject_hash"]:
+			subject = request.app.state.entities.subject_by_hash(case["subject_type"], case["subject_hash"])
+			if subject and request.app.state.entities.effective_score(subject, case["host"], case["return_path"]) < 50:
+				released = True
+		if released and case["host"] in settings.upstreams:
+			request.app.state.database.execute(
+				"UPDATE risk_cases SET status = 'released', released_at = ? WHERE public_id = ? AND status = 'active'",
+				(now, public_id),
+			)
+			response = RedirectResponse(f"https://{case['host']}{case['return_path']}", status_code=303)
+			clearance = issue_token(
+				{"purpose": "clearance", "case": public_id, "host": case["host"], "path": case["return_path"]},
+				settings.internal_signing_key,
+				60,
+			)
+			response.set_cookie("sf_shield_clearance", clearance, max_age=60, secure=settings.cookie_secure, httponly=True, samesite="lax", domain=".silentflare.com")
+			return response
+	page_values = {
+		"RISK_CODE": case["risk_code"] if case and is_public_risk_code(case["risk_code"]) else "404",
+		"BAN_ID": public_id if case else "SFB-UNAVAILABLE",
+	}
 	page = BLOCK_HTML
 	for key, value in page_values.items():
 		page = page.replace(f"{{{{{key}}}}}", html.escape(str(value)))
@@ -798,6 +1035,131 @@ def _actions(mode: str, risk: RiskResult, list_status: str | None, ban: dict | N
 	if mode == "observe":
 		return ["log"]
 	return list(dict.fromkeys(actions or ["allow"]))
+
+
+def _entity_subjects(service: EntityRiskService, context: RequestContext) -> dict[str, dict[str, Any]]:
+	try:
+		address = ipaddress.ip_address(context.ip)
+		cidr = str(ipaddress.ip_network(f"{address}/{24 if address.version == 4 else 48}", strict=False))
+	except ValueError:
+		cidr = ""
+	email_domain = context.email.rsplit("@", 1)[-1] if "@" in context.email else ""
+	values = {
+		"account": context.account_id,
+		"session": context.session_id,
+		"device": context.device_id,
+		"ip": context.ip,
+		"cidr": cidr,
+		"asn": context.asn,
+		"email": context.email,
+		"email_domain": email_domain,
+		"api_key": context.api_key,
+		"country": context.country,
+		"region": context.region,
+	}
+	subjects: dict[str, dict[str, Any]] = {}
+	for subject_type, value in values.items():
+		if not value:
+			continue
+		display = mask_ip(value) if subject_type == "ip" else ""
+		try:
+			subjects[subject_type] = service.ensure_subject(subject_type, value, display=display)
+		except ValueError:
+			continue
+	primary = subjects.get("account") or subjects.get("session") or subjects.get("device") or subjects.get("ip")
+	if primary:
+		for subject_type, subject in subjects.items():
+			if subject_type not in {"account", "session", "device", "ip"}:
+				service.relate(int(primary["id"]), int(subject["id"]), f"observed_with_{subject_type}", 80)
+		for subject_type in ("account", "session", "device", "ip"):
+			subject = subjects.get(subject_type)
+			if subject and subject["id"] != primary["id"]:
+				service.relate(int(primary["id"]), int(subject["id"]), "request_identity", 100)
+	return subjects
+
+
+def _apply_entity_score(
+	service: EntityRiskService,
+	context: RequestContext,
+	risk: RiskResult,
+) -> dict[str, dict[str, Any]]:
+	subjects = _entity_subjects(service, context)
+	primary_scores = [
+		service.effective_score(subject, context.host, context.path)
+		for name, subject in subjects.items()
+		if name in {"account", "session", "device", "ip", "api_key"}
+	]
+	context_score = 0
+	if subjects.get("asn"):
+		context_score += int(service.effective_score(subjects["asn"], context.host, context.path) * 0.2)
+	if subjects.get("cidr"):
+		context_score += int(service.effective_score(subjects["cidr"], context.host, context.path) * 0.2)
+	if subjects.get("country"):
+		context_score += int(service.effective_score(subjects["country"], context.host, context.path) * 0.1)
+	if subjects.get("email_domain"):
+		context_score += int(service.effective_score(subjects["email_domain"], context.host, context.path) * 0.1)
+	entity_score = min(100, max(primary_scores or [0]) + min(15, context_score))
+	if entity_score > risk.score:
+		risk.score = entity_score
+		risk.level = entity_level(entity_score)
+		risk.reasons.append("Existing subject risk score")
+	return subjects
+
+
+def _record_entity_signals(
+	service: EntityRiskService,
+	context: RequestContext,
+	risk: RiskResult,
+	rates: list[RateHit],
+	rules: RuleDecision,
+	subjects: dict[str, dict[str, Any]],
+) -> None:
+	def signal(subject_type: str, delta: int, code: str, reason: str, duration: int, steps: int = 4) -> None:
+		try:
+			address = ipaddress.ip_address(context.ip)
+			cidr = str(ipaddress.ip_network(f"{address}/{24 if address.version == 4 else 48}", strict=False))
+		except ValueError:
+			cidr = ""
+		value = {
+			"account": context.account_id,
+			"session": context.session_id,
+			"device": context.device_id,
+			"ip": context.ip,
+			"cidr": cidr,
+			"asn": context.asn,
+			"email": context.email,
+			"email_domain": context.email.rsplit("@", 1)[-1] if "@" in context.email else "",
+			"api_key": context.api_key,
+		}.get(subject_type, "")
+		if not value or subject_type not in subjects:
+			return
+		service.enqueue_signal(
+			int(subjects[subject_type]["id"]),
+			delta=delta,
+			reason_code=code,
+			reason=reason,
+			source_ref=context.request_id,
+			duration_seconds=duration,
+			decay_steps=steps,
+		)
+
+	reasons = set(risk.reasons)
+	if rates:
+		signal("ip", 10, "RATE_LIMIT_EXCEEDED", rates[0].policy_name, 86400)
+		signal("cidr", 3, "RATE_LIMIT_EXCEEDED", rates[0].policy_name, 43200)
+		signal("session", 8, "RATE_LIMIT_EXCEEDED", rates[0].policy_name, 43200)
+		signal("account", 8, "RATE_LIMIT_EXCEEDED", rates[0].policy_name, 43200)
+	if "Automation browser signature" in reasons:
+		signal("device", 18, "AUTOMATION_SIGNATURE", "Automation browser signature", 43200)
+		signal("ip", 8, "AUTOMATION_SIGNATURE", "Automation browser signature", 43200)
+	if "Known malicious IP" in reasons:
+		signal("ip", 40, "THREAT_INTELLIGENCE", "Known malicious IP intelligence", 604800, 7)
+		signal("asn", 5, "THREAT_INTELLIGENCE", "Malicious source observed in ASN", 86400)
+	if "Tor exit node" in reasons:
+		signal("ip", 15, "TOR_NETWORK", "Tor exit node", 86400)
+	if rules.matched_rules:
+		signal("ip", 8, "RULE_MATCH", f"Matched rule {rules.matched_rules[0]['name']}", 86400)
+		signal("session", 5, "RULE_MATCH", f"Matched rule {rules.matched_rules[0]['name']}", 43200)
 
 
 def _event(database: Database, context: RequestContext, risk: RiskResult, rules: RuleDecision, actions: list[str], request: Request, body: bytes) -> None:
@@ -880,8 +1242,8 @@ async def _proxy(request: Request, body: bytes, upstream: str, context: RequestC
 		}
 		shield_headers["x-sf-shield-signature"] = sign_headers(shield_headers, request.method, request.url.path, settings.internal_signing_key)
 		headers.update(shield_headers)
-	proxy_request = app.state.client.build_request(request.method, url, headers=headers, content=body)
-	proxy_response = await app.state.client.send(proxy_request, stream=True)
+	proxy_request = request.app.state.client.build_request(request.method, url, headers=headers, content=body)
+	proxy_response = await request.app.state.client.send(proxy_request, stream=True)
 	if context and proxy_response.status_code == 404:
 		try:
 			response_hits = request.app.state.limiter.check(context, response_status=404)
@@ -1045,10 +1407,25 @@ async def admin_dashboard(request: Request, range_hours: int = 24):
 	alert_config = db.query("SELECT enabled, minimum_score AS minimumScore, high_risk_per_5m AS highRiskPer5m, blocked_per_5m AS blockedPer5m, daily_report_hour AS dailyReportHour FROM alert_config WHERE id = 1")[0]
 	risk_model = {"weights": DEFAULT_WEIGHTS | db.setting("risk_weights", {}), "thresholds": DEFAULT_THRESHOLDS | db.setting("risk_thresholds", {}), "versions": db.query("SELECT version, created_at AS createdAt, created_by AS createdBy, note FROM risk_config_versions ORDER BY version DESC LIMIT 10")}
 	daily_report = _daily_report(db)
+	entity_metrics = db.query(
+		"""SELECT COUNT(*) AS total,
+		SUM(CASE WHEN current_score >= 50 THEN 1 ELSE 0 END) AS elevated,
+		SUM(CASE WHEN current_score >= 80 THEN 1 ELSE 0 END) AS blocking
+		FROM risk_subjects"""
+	)[0]
+	queue_metrics = db.query(
+		"""SELECT SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS queued,
+		SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed FROM risk_signal_queue"""
+	)[0]
+	automation_runs = db.query(
+		"""SELECT id, job_name AS jobName, started_at AS startedAt, completed_at AS completedAt,
+		status, processed_count AS processedCount, detail FROM automation_runs
+		ORDER BY id DESC LIMIT 20"""
+	)
 	return {
 		"mode": _mode(db),
 		"rangeHours": range_hours,
-		"metrics": {"requests": counts["requests"] or 0, "blocked": counts["blocked"] or 0, "challenged": counts["challenged"] or 0, "highRisk": counts["high_risk"] or 0, "uniqueIps": counts["unique_ips"] or 0, "activeBans": active_bans, "accounts": account_counts["total"] or 0, "riskyAccounts": account_counts["risky"] or 0},
+		"metrics": {"requests": counts["requests"] or 0, "blocked": counts["blocked"] or 0, "challenged": counts["challenged"] or 0, "highRisk": counts["high_risk"] or 0, "uniqueIps": counts["unique_ips"] or 0, "activeBans": active_bans, "accounts": account_counts["total"] or 0, "riskyAccounts": account_counts["risky"] or 0, "riskEntities": entity_metrics["total"] or 0, "elevatedEntities": entity_metrics["elevated"] or 0, "blockingEntities": entity_metrics["blocking"] or 0},
 		"series": series,
 		"topCountries": top_countries,
 		"topAsns": top_asns,
@@ -1065,6 +1442,7 @@ async def admin_dashboard(request: Request, range_hours: int = 24):
 		"alertConfig": alert_config,
 		"riskModel": risk_model,
 		"dailyReport": daily_report,
+		"automation": {"queuedSignals": queue_metrics["queued"] or 0, "failedSignals": queue_metrics["failed"] or 0, "runs": automation_runs},
 		"sync": sync,
 		"generatedAt": now,
 	}
@@ -1167,8 +1545,24 @@ async def admin_geo_policy_disable(policy_id: int, request: Request):
 async def admin_account_risk(account_id_hash: str, payload: AccountRiskInput, request: Request):
 	actor, _ = await _admin(request, csrf=True)
 	db = request.app.state.database
-	if not db.query("SELECT account_id_hash FROM account_projections WHERE account_id_hash = ?", (account_id_hash,)):
+	projections = db.query("SELECT account_id_hash, account_ref, account_label FROM account_projections WHERE account_id_hash = ?", (account_id_hash,))
+	if not projections:
 		raise HTTPException(status_code=404, detail="Account projection not found")
+	subject = request.app.state.entities.subject_by_hash("account", account_id_hash)
+	if not subject and projections[0]["account_ref"]:
+		subject = request.app.state.entities.ensure_subject(
+			"account", projections[0]["account_ref"], display=projections[0]["account_label"]
+		)
+	if subject:
+		active_adjustments = db.query(
+			"""SELECT id FROM risk_overrides WHERE subject_id = ? AND override_type = 'adjustment'
+			AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)""",
+			(subject["id"], int(time.time())),
+		)
+		for adjustment in active_adjustments:
+			request.app.state.entities.revoke_override(
+				int(adjustment["id"]), actor, "Replaced from account risk control"
+			)
 	if payload.delta == 0:
 		db.execute("DELETE FROM account_risk_adjustments WHERE account_id_hash = ?", (account_id_hash,))
 	else:
@@ -1180,6 +1574,15 @@ async def admin_account_risk(account_id_hash: str, payload: AccountRiskInput, re
 			expires_at=excluded.expires_at""",
 			(account_id_hash, payload.delta, payload.reason, now, actor, now + payload.duration_seconds),
 		)
+		if subject:
+			request.app.state.entities.add_override(
+				int(subject["id"]),
+				override_type="adjustment",
+				value=payload.delta,
+				reason=payload.reason,
+				actor=actor,
+				duration_seconds=payload.duration_seconds,
+			)
 	db.audit(actor, "account_risk.adjust", "account", account_id_hash[:12], {"delta": payload.delta, "reason": payload.reason, "durationSeconds": payload.duration_seconds})
 	return {"accountId": account_id_hash, **payload.model_dump()}
 
@@ -1223,6 +1626,136 @@ async def admin_events(request: Request, limit: int = 100, minimum_score: int = 
 async def admin_intel(request: Request, limit: int = 200):
 	await _admin(request)
 	return request.app.state.database.query("SELECT ip_masked, country_code, region, city, timezone, asn, isp, organization, ip_type, is_vpn, is_proxy, is_tor, is_crawler, is_malicious, risk_score, first_seen_at, last_seen_at FROM ip_intel ORDER BY last_seen_at DESC LIMIT ?", (min(500, max(1, limit)),))
+
+
+@app.get("/__shield/api/admin/entities")
+async def admin_entities(
+	request: Request,
+	subject_type: str | None = None,
+	minimum_score: int = 0,
+	query: str = "",
+	limit: int = 100,
+):
+	await _admin(request)
+	allowed_types = {
+		"account", "session", "device", "ip", "cidr", "asn", "email",
+		"email_domain", "api_key", "country", "region",
+	}
+	if subject_type and subject_type not in allowed_types:
+		raise HTTPException(status_code=422, detail="Unsupported risk subject type")
+	items = request.app.state.entities.list_subjects(
+		subject_type=subject_type,
+		minimum_score=max(0, min(100, minimum_score)),
+		query=query[:160],
+		limit=limit,
+	)
+	counts = request.app.state.database.query(
+		"""SELECT subject_type AS subjectType, COUNT(*) AS total,
+		SUM(CASE WHEN current_score >= 50 THEN 1 ELSE 0 END) AS elevated,
+		MAX(current_score) AS maximumScore FROM risk_subjects GROUP BY subject_type
+		ORDER BY CASE subject_type WHEN 'account' THEN 1 WHEN 'ip' THEN 2 WHEN 'asn' THEN 3
+		WHEN 'session' THEN 4 WHEN 'device' THEN 5 WHEN 'api_key' THEN 6 ELSE 20 END, subject_type"""
+	)
+	return {"items": items, "counts": counts, "generatedAt": int(time.time())}
+
+
+@app.get("/__shield/api/admin/entities/{subject_id}")
+async def admin_entity_detail(subject_id: int, request: Request):
+	await _admin(request)
+	detail = request.app.state.entities.detail(subject_id)
+	if not detail:
+		raise HTTPException(status_code=404, detail="Risk subject not found")
+	return detail
+
+
+@app.post("/__shield/api/admin/entities/{subject_id}/adjust")
+async def admin_entity_adjust(subject_id: int, payload: EntityAdjustmentInput, request: Request):
+	actor, _ = await _admin(request, csrf=True)
+	if not request.app.state.entities.subject_by_public_id(subject_id):
+		raise HTTPException(status_code=404, detail="Risk subject not found")
+	try:
+		override = request.app.state.entities.add_override(
+			subject_id,
+			override_type="adjustment",
+			value=payload.delta,
+			reason=payload.reason,
+			actor=actor,
+			duration_seconds=payload.duration_seconds,
+		)
+	except ValueError as error:
+		raise HTTPException(status_code=422, detail=str(error)) from error
+	request.app.state.database.audit(
+		actor,
+		"risk_subject.adjust",
+		"risk_subject",
+		str(subject_id),
+		{"delta": payload.delta, "durationSeconds": payload.duration_seconds, "reason": payload.reason},
+	)
+	return {"ok": True, "overrideId": override["id"], "subject": request.app.state.entities.detail(subject_id)}
+
+
+@app.post("/__shield/api/admin/entities/{subject_id}/overrides")
+async def admin_entity_override(subject_id: int, payload: EntityOverrideInput, request: Request):
+	actor, _ = await _admin(request, csrf=True)
+	if not request.app.state.entities.subject_by_public_id(subject_id):
+		raise HTTPException(status_code=404, detail="Risk subject not found")
+	if payload.override_type in {"score_cap", "score_floor"} and payload.value is None:
+		raise HTTPException(status_code=422, detail="Score cap and floor require a value")
+	if payload.scope_host and payload.scope_host not in settings.upstreams:
+		raise HTTPException(status_code=422, detail="Override host is not protected by Shield")
+	try:
+		override = request.app.state.entities.add_override(
+			subject_id,
+			override_type=payload.override_type,
+			value=payload.value,
+			reason=payload.reason,
+			actor=actor,
+			duration_seconds=payload.duration_seconds,
+			scope_host=payload.scope_host,
+			scope_path=payload.scope_path,
+			scope_rule_id=payload.scope_rule_id,
+		)
+	except ValueError as error:
+		raise HTTPException(status_code=422, detail=str(error)) from error
+	request.app.state.database.audit(
+		actor,
+		"risk_override.create",
+		"risk_subject",
+		str(subject_id),
+		{"overrideType": payload.override_type, "value": payload.value, "durationSeconds": payload.duration_seconds},
+	)
+	return {"ok": True, "overrideId": override["id"], "subject": request.app.state.entities.detail(subject_id)}
+
+
+@app.post("/__shield/api/admin/overrides/{override_id}/revoke")
+async def admin_override_revoke(override_id: int, payload: OverrideRevokeInput, request: Request):
+	actor, _ = await _admin(request, csrf=True)
+	try:
+		override = request.app.state.entities.revoke_override(override_id, actor, payload.reason)
+	except ValueError as error:
+		raise HTTPException(status_code=404, detail=str(error)) from error
+	request.app.state.database.audit(
+		actor,
+		"risk_override.revoke",
+		"risk_override",
+		str(override_id),
+		{"reason": payload.reason},
+	)
+	return {"ok": True, "subject": request.app.state.entities.detail(int(override["subject_id"]))}
+
+
+@app.get("/__shield/api/admin/risk-codes")
+async def admin_risk_codes(request: Request):
+	await _admin(request)
+	return {
+		"codes": {
+			"101": "Account", "102": "Session", "103": "Device", "104": "Email",
+			"201": "IP", "202": "CIDR", "203": "ASN", "204": "Geography",
+			"301": "Login or registration", "302": "Comment or content", "303": "API rate",
+			"304": "Scanning", "401": "Automation", "402": "Threat intelligence",
+			"403": "Rule decision", "404": "Combined risk", "501": "Protected administration",
+		}
+	}
 
 
 @app.get("/__shield/api/admin/rate-policies")
@@ -1503,6 +2036,29 @@ async def verify_challenge(request: Request):
 	async with httpx.AsyncClient(timeout=5) as client:
 		response = await client.post(settings.turnstile_verify_url, data=data)
 		result = response.json()
+	signal_ref = f"challenge:{stable_hash(token, settings.internal_signing_key)[:20]}"
+	challenge_values = (
+		("ip", _client_ip(request), mask_ip(_client_ip(request))),
+		("device", _device_id(request, _client_ip(request)), ""),
+		("session", request.cookies.get("sf_account_session", ""), ""),
+	)
+	for subject_type, value, display in challenge_values:
+		if not value:
+			continue
+		try:
+			subject = request.app.state.entities.ensure_subject(subject_type, value, display=display)
+		except ValueError:
+			continue
+		delta = (-8 if subject_type == "ip" else -5) if result.get("success") else (15 if subject_type == "ip" else 10)
+		request.app.state.entities.enqueue_signal(
+			int(subject["id"]),
+			delta=delta,
+			reason_code="CHALLENGE_PASSED" if result.get("success") else "CHALLENGE_FAILED",
+			reason="Successfully completed security challenge" if result.get("success") else "Security challenge verification failed",
+			source_ref=signal_ref,
+			duration_seconds=86400 if result.get("success") else 43200,
+			decay_steps=1 if result.get("success") else 4,
+		)
 	if not result.get("success"):
 		raise HTTPException(status_code=403, detail="Challenge verification failed")
 	binding = stable_hash(f"{_client_ip(request)}|{request.headers.get('user-agent', '')}", settings.internal_signing_key)
@@ -1597,16 +2153,51 @@ async def gateway(path: str, request: Request):
 		weights = request.app.state.database.setting("risk_weights", {})
 		thresholds = request.app.state.database.setting("risk_thresholds", {})
 		risk = score_request(intel, headers, weights, thresholds, list_status, bool(rates))
+		entity_subjects = _apply_entity_score(request.app.state.entities, context, risk)
 		context.risk_score = risk.score
 		rule_decision = request.app.state.rules.evaluate(context, mode)
+		matched_rule_ids = [int(item["id"]) for item in rule_decision.matched_rules]
+		rule_exempt = bool(
+			matched_rule_ids
+			and host not in {"admin.silentflare.com", "cms.silentflare.com"}
+			and any(
+				request.app.state.entities.matching_rule_exemption(
+					int(subject["id"]), matched_rule_ids, context.host, context.path
+				)
+				for subject_type, subject in entity_subjects.items()
+				if subject_type in {"account", "session", "device", "ip", "api_key"}
+			)
+		)
+		if rule_exempt:
+			rule_decision.actions = ["log"]
+			risk.reasons.append("Administrator rule exemption")
 		geo_action, geo_reason = _geo_policy_action(request.app.state.database, context)
 		if geo_reason:
 			risk.reasons.append(geo_reason)
 		binding = stable_hash(f"{ip}|{request.headers.get('user-agent', '')}", settings.internal_signing_key)
 		challenge = read_token(request.cookies.get("sf_shield_challenge", ""), settings.internal_signing_key)
 		challenge_passed = bool(challenge and challenge.get("purpose") == "challenge" and hmac.compare_digest(str(challenge.get("binding", "")), binding))
+		clearance = read_token(request.cookies.get("sf_shield_clearance", ""), settings.internal_signing_key)
+		clearance_passed = bool(
+			clearance
+			and clearance.get("purpose") == "clearance"
+			and clearance.get("host") == host
+			and clearance.get("path") == request.url.path
+		)
+		challenge_passed = challenge_passed or clearance_passed
 		actions = _actions(mode, risk, list_status, ban, rates, rule_decision, challenge_passed, [geo_action] if geo_action else [])
+		response_exempt = any(
+			request.app.state.entities.active_override(
+				int(subject["id"]), "response_exemption", context.host, context.path
+			)
+			for subject_type, subject in entity_subjects.items()
+			if subject_type in {"account", "session", "device", "ip", "api_key"}
+		)
+		if response_exempt and not ban and list_status != "deny" and host not in {"admin.silentflare.com", "cms.silentflare.com"}:
+			actions = ["allow"]
+			risk.reasons.append("Administrator response exemption")
 		_event(request.app.state.database, context, risk, rule_decision, actions, request, body)
+		_record_entity_signals(request.app.state.entities, context, risk, rates, rule_decision, entity_subjects)
 		if "temporary_ban" in actions and mode == "enforce":
 			_automatic_ban(request.app.state.database, context, rates)
 			ban = request.app.state.access.active_ban(context)
@@ -1614,7 +2205,7 @@ async def gateway(path: str, request: Request):
 			await asyncio.sleep(1)
 		if "block" in actions or "temporary_ban" in actions:
 			error_code = _block_error_code(ban, list_status, geo_reason, rule_decision, risk, actions)
-			return _blocked_response(request, request_id, host, error_code, ban)
+			return _blocked_response(request, request_id, host, error_code, ban, context)
 		if "turnstile" in actions and not challenge_passed:
 			return _challenge_response(request, request_id, max([hit.retry_after for hit in rates] or [0]))
 		if "rate_limit" in actions:

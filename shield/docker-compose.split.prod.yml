@@ -1,0 +1,60 @@
+x-shield-common: &shield-common
+  build:
+    context: .
+  restart: unless-stopped
+  env_file:
+    - ${SHIELD_ENV_FILE:-/opt/silentflare/shield/shared/.env}
+  network_mode: host
+  volumes:
+    - shield-data:/app/data
+  read_only: true
+  tmpfs:
+    - /tmp:size=16m,mode=1777
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  stop_grace_period: 15s
+
+services:
+  migrate:
+    <<: *shield-common
+    restart: "no"
+    command: ["python", "-m", "app.migrate"]
+
+  gateway:
+    <<: *shield-common
+    command: ["uvicorn", "app.gateway.app:app", "--host", "127.0.0.1", "--port", "9080", "--proxy-headers", "--forwarded-allow-ips", "127.0.0.1"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9080/__shield/health/live', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
+  control:
+    <<: *shield-common
+    command: ["uvicorn", "app.control.app:app", "--host", "127.0.0.1", "--port", "9082", "--proxy-headers", "--forwarded-allow-ips", "127.0.0.1"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  portal:
+    <<: *shield-common
+    command: ["uvicorn", "app.portal.app:app", "--host", "127.0.0.1", "--port", "9083", "--proxy-headers", "--forwarded-allow-ips", "127.0.0.1"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    <<: *shield-common
+    command: ["python", "-m", "app.worker.main"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  shield-data:

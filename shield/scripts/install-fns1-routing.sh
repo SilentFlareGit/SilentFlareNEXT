@@ -34,6 +34,7 @@ TARGETS=(
 	/etc/nginx/snippets/silentflare-shield-api.conf
 	/etc/nginx/snippets/silentflare-shield-edge.conf
 	/etc/nginx/snippets/silentflare-shield-cms.conf
+	/etc/nginx/snippets/silentflare-shield-control.conf
 )
 
 for target in "${TARGETS[@]}"; do
@@ -70,6 +71,7 @@ install -m 0644 "${SOURCE_DIR}/silentflare-shield-blog.conf" /etc/nginx/snippets
 install -m 0644 "${SOURCE_DIR}/silentflare-shield-api.conf" /etc/nginx/snippets/silentflare-shield-api.conf
 install -m 0644 "${SOURCE_DIR}/silentflare-shield-edge.conf" /etc/nginx/snippets/silentflare-shield-edge.conf
 install -m 0644 "${SOURCE_DIR}/silentflare-shield-cms.conf" /etc/nginx/snippets/silentflare-shield-cms.conf
+install -m 0644 "${SOURCE_DIR}/silentflare-shield-control.conf" /etc/nginx/snippets/silentflare-shield-control.conf
 ln -sfn /etc/nginx/sites-available/silentflare-shield-portal "${PORTAL_ENABLED}"
 
 nginx -t

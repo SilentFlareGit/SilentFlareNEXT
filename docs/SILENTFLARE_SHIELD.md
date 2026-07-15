@@ -323,7 +323,7 @@ The emergency switch is the audited global `bypass` mode. The out-of-process eme
 
 ## 13. Docker Compose and Deployment
 
-`shield/docker-compose.yml` is the portable development deployment. `shield/docker-compose.prod.yml` uses Linux host networking but overrides Uvicorn to bind only `127.0.0.1:9080`; this lets Shield reach the existing FNS1 origins without exposing Shield publicly. Its service environment defaults to the root-owned `/opt/silentflare/shield/shared/.env` file and can be overridden with `SHIELD_ENV_FILE`. Both variants run a non-root, read-only container, mount only the Shield data volume, and drop Linux capabilities. `shield/nginx/silentflare-shield.conf` remains a generic merge reference. The production FNS1 files in `shield/nginx/fns1` are installable, versioned configurations.
+`shield/docker-compose.split.yml` is the portable split development deployment. `shield/docker-compose.split.prod.yml` uses Linux host networking and binds the gateway, control, and portal only to loopback ports 9080, 9082, and 9083. The one-shot migrator completes before these roles and the worker start. `shield/docker-compose.prod.yml` remains the single-process rollback target. All variants run non-root, read-only containers, mount only the Shield data volume, and drop Linux capabilities. `shield/nginx/silentflare-shield.conf` remains a generic merge reference. The production FNS1 files in `shield/nginx/fns1` are installable, versioned configurations.
 
 FNS1 uses an internal Nginx origin listener on `127.0.0.1:9081` for the Astro account/admin/blog renderers and Ghost HTTP traffic. Public Nginx sends the five protected Host values to Shield on `127.0.0.1:9080`; Shield then selects `9081` or FastAPI on `9010`. This prevents the routing loop that would occur if a Shield upstream pointed back to the public port. The separate `shield.silentflare.com` Nginx host also reaches port `9080`, but it serves only explicit public portal routes and is never added to the protected-upstream map. The blog has a one-second connection timeout and named fail-open origin. Accounts, API, Admin, and CMS fail closed. CMS Upgrade requests bypass the HTTP-only Shield gateway and proxy directly to Ghost; ordinary CMS HTTP traffic is still evaluated.
 
@@ -343,7 +343,7 @@ The FNS1 helper sequence is:
 ```bash
 bash shield/scripts/configure-fns1-env.sh
 bash shield/scripts/install-fns1-routing.sh
-docker compose -f shield/docker-compose.prod.yml -p silentflare-shield up -d --build
+docker compose -f shield/docker-compose.split.prod.yml -p silentflare-shield up -d --build
 ```
 
 The environment configurator copies the existing Turnstile values on the host without printing them, connects all five protected hostnames, sets `SHIELD_PUBLIC_URL=https://shield.silentflare.com`, raises the CMS request-body budget to 50 MiB, and points Shield at the internal origins. The routing installer installs and enables the separate portal host, backs up every replaced file under `/etc/nginx/shield-backups`, validates with `nginx -t`, and automatically restores the backup if validation fails.
@@ -399,7 +399,17 @@ python -m unittest discover -s tests -v
 docker compose config
 ```
 
-## 17. Phased Development Plan
+## 17. Shield 2.0 Entity Risk and Split Runtime
+
+Shield remains an independent exoskeleton under `shield/`. Astro and FastAPI business logic do not import Shield modules. The only application-level integration is the Admin Security frontend, which calls the same-origin Shield control API.
+
+The runtime has four bounded entry points: `app.gateway.app:app` for protected traffic, `app.control.app:app` for delegated Admin control, `app.portal.app:app` for the minimal public decision site, and `app.worker.main` for account synchronization, score decay, alerts, and maintenance. `app.main:app` remains the compatibility composition used by tests and controlled single-process fallback.
+
+Migration `0009_entity_risk_ledger.sql` adds independent subjects, an append-only risk ledger, mutable decay effects, scoped operator overrides, subject relations, public cases, automation actions, and job history. Gateway signals add bounded, expiring risk to the relevant subjects. Worker decay creates explicit negative or reversal ledger entries, so every increase and decrease is attributable.
+
+The public contract now uses stable three-digit codes: `1xx` identity, `2xx` network, `3xx` behavior, `4xx` automation/policy, and `501` protected administration. The public portal renders only the inaccessible message, code, and `SFB-` identifier. Detailed reasons, scores, subjects, paths, expiry, and internal references remain private.
+
+## 18. Phased Development Plan
 
 ### Phase 0: Perimeter and Observation (Complete)
 

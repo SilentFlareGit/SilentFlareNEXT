@@ -1,0 +1,1 @@
+"""Shield durable automation workers."""

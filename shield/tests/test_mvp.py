@@ -8,6 +8,7 @@ from pathlib import Path
 
 from app.blocking import ban_error_code, normalize_ban_subject
 from app.database import Database
+from app.entity_risk import EntityRiskService
 from app.geo import IpIntel
 from app.rate_limit import RateLimiter
 from app.risk import score_request
@@ -128,6 +129,69 @@ class ShieldMvpTests(unittest.TestCase):
 		self.database.audit("owner", "mode.change", "system", "global", {"mode": "observe"})
 		with self.assertRaises(sqlite3.DatabaseError):
 			self.database.execute("DELETE FROM audit_log")
+
+	def test_entity_risk_ledger_records_adjustment_and_automatic_decay(self):
+		service = EntityRiskService(self.database, KEY)
+		subject = service.ensure_subject("asn", "AS64512")
+		entry = service.adjust(
+			int(subject["id"]),
+			20,
+			reason_code="ASN_ATTACK_CLUSTER",
+			reason="Multiple hostile sources",
+			source="test",
+			actor="shield",
+			duration_seconds=3600,
+			decay_steps=2,
+		)
+		self.assertEqual(entry["score_after"], 20)
+		processed = service.run_due_decay(int(time.time()) + 1801)
+		self.assertEqual(processed, 1)
+		detail = service.detail(int(subject["id"]))
+		self.assertEqual(detail["currentScore"], 10)
+		self.assertEqual(detail["ledger"][0]["reasonCode"], "AUTO_DECAY")
+		self.assertEqual(detail["ledger"][0]["scoreBefore"], 20)
+		self.assertEqual(detail["ledger"][0]["scoreAfter"], 10)
+
+	def test_manual_entity_exemption_caps_effective_score_and_is_audited(self):
+		service = EntityRiskService(self.database, KEY)
+		subject = service.ensure_subject("ip", "203.0.113.20")
+		service.adjust(
+			int(subject["id"]),
+			80,
+			reason_code="THREAT_INTELLIGENCE",
+			reason="Test threat signal",
+			source="test",
+			actor="shield",
+		)
+		override = service.add_override(
+			int(subject["id"]),
+			override_type="score_cap",
+			value=30,
+			reason="Verified trusted source",
+			actor="owner",
+			duration_seconds=3600,
+		)
+		updated = service.subject_by_public_id(int(subject["id"]))
+		self.assertEqual(service.effective_score(updated), 30)
+		service.revoke_override(int(override["id"]), "owner", "Trust window ended")
+		self.assertEqual(service.effective_score(updated), 80)
+
+	def test_gateway_signal_queue_is_applied_idempotently_by_worker(self):
+		service = EntityRiskService(self.database, KEY)
+		subject = service.ensure_subject("device", "device-reference")
+		for _ in range(2):
+			service.enqueue_signal(
+				int(subject["id"]),
+				delta=18,
+				reason_code="AUTOMATION_SIGNATURE",
+				reason="Automation browser signature",
+				source_ref="request-1",
+				duration_seconds=43200,
+				decay_steps=4,
+			)
+		self.assertEqual(service.process_signal_queue(), 1)
+		self.assertEqual(service.process_signal_queue(), 0)
+		self.assertEqual(service.detail(int(subject["id"]))["currentScore"], 18)
 
 
 if __name__ == "__main__":

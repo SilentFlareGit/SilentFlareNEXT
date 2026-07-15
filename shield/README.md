@@ -16,6 +16,8 @@ The MVP includes:
 - A real Security workspace inside SilentFlare Admin with live trends, contextual event actions, automated policies, service coverage, and account-risk projections synchronized from FastAPI without sharing the business database.
 - Network intelligence, access-list and ban operations, signed account/session response commands, risk-model simulation/versioning/rollback, configurable alerts, and rolling daily reports.
 - A public `shield.silentflare.com` decision portal with signed case links, stable public ban IDs, and subject/duration-specific error codes.
+- Independent Account, Session, Device, IP, CIDR, ASN, email, API-key, and geography risk subjects with append-only score ledgers, automatic decay, operator adjustments, and scoped exemptions.
+- Split gateway, control, portal, and worker entry points that keep Shield deployable as an external security exoskeleton; only `ShieldDashboard.svelte` and its entity explorer are integrated into SilentFlare Admin.
 - SQLite/WAL persistence, migrations, health probes, Docker Compose, and an Nginx reference configuration.
 
 The full architecture, data model, integration contract, API plan, failure matrix, and phased roadmap are in [docs/SILENTFLARE_SHIELD.md](../docs/SILENTFLARE_SHIELD.md).
@@ -39,7 +41,7 @@ Invoke-RestMethod http://127.0.0.1:9080/__shield/health/ready
 On the Linux origin host, use the production Compose file so Shield can reach services bound to host loopback while Shield itself remains loopback-only:
 
 ```bash
-docker compose -f docker-compose.prod.yml -p silentflare-shield up -d --build
+docker compose -f docker-compose.split.prod.yml -p silentflare-shield up -d --build
 ```
 
 For local HTTP-only console testing, set `SHIELD_COOKIE_SECURE=false`. Production must use HTTPS and `SHIELD_COOKIE_SECURE=true`.
@@ -53,6 +55,21 @@ python -m compileall app adapters tests
 python -m unittest discover -s tests -v
 docker compose config
 ```
+
+Validate the split deployment separately:
+
+```powershell
+docker compose -f docker-compose.split.yml config
+docker compose -f docker-compose.split.prod.yml config
+```
+
+The split deployment uses one image with four least-purpose commands. `gateway` owns the request data plane on port 9080, `control` owns Admin APIs on 9082, `portal` owns the public decision site on 9083, and `worker` owns queued signal application, synchronization, decay, automatic response, alerting, and maintenance. The one-shot `migrate` service must complete before any role starts. `docker-compose.prod.yml` remains the controlled single-process fallback and test-compatible rollback target.
+
+## Entity Risk Ledger
+
+Every observed risk subject has an independent score from 0 to 100. Changes are written to the append-only `risk_ledger` with before/after values, delta, reason code, human reason, source, actor, expiry, and parent event. Temporary effects are reversed by the worker in explicit `AUTO_DECAY` or `AUTO_EXPIRE` entries rather than silently changing a score.
+
+Admin operators can apply an exact temporary positive or negative adjustment, a score cap or floor, or a scoped rule/response exemption. Authentication, authorization, CSRF, Admin-session enforcement, and the Admin/CMS non-bypassable perimeter are never disabled by a response exemption.
 
 ## Operational Guardrails
 
@@ -74,6 +91,8 @@ Never expose the Shield container directly to the internet. Nginx must be the on
 
 ## Public Block Contract
 
-Active bans receive a non-secret public identifier such as `SFB-0123456789ABCDEF`. Browser `GET`/`HEAD` requests that accept HTML receive a `303` redirect to `https://shield.silentflare.com/blocked` with a signed case payload. API and non-HTML requests retain a `403` JSON response and receive the same `errorCode`, `banId`, `requestId`, `supportUrl`, and `Location` header. The case URL never includes a raw IP, account identifier, email, API key, path, cookie, or ban reason.
+Every denied request receives or reuses a non-secret public identifier such as `SFB-0123456789ABCDEF`. Browser `GET`/`HEAD` requests that accept HTML receive a `303` redirect to `https://shield.silentflare.com/blocked` with only the public ID and a signed token. API and non-HTML requests retain a `403` JSON response. The portal displays only `Unable to access this website`, a three-digit risk code, and the Ban ID. Its URL never includes a raw IP, account identifier, email, API key, path, cookie, score, or ban reason.
+
+The safe original host and path remain server-side in `risk_cases`. When the restriction has expired, been revoked, or the subject has returned below the release threshold, the portal issues a one-use clearance and redirects a GET/HEAD request back to that validated SilentFlare location without rendering the block page. Mutation requests are never replayed.
 
 Temporary and permanent codes are unique per subject family. For example, a temporary session ban is `SF-BAN-T210`, while a permanent session ban is `SF-BAN-P210`. Policy-only blocks use the `SF-BLOCK-3xx` family and show an incident ID rather than claiming that a persistent ban exists.

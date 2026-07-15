@@ -5,50 +5,18 @@
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="robots" content="noindex,nofollow,noarchive" />
 		<meta name="referrer" content="no-referrer" />
-		<title>{{PAGE_TITLE}} | SilentFlare Shield</title>
+		<title>Unable to access | SilentFlare Shield</title>
 		<link rel="icon" href="/assets/shield-mark.png" />
 		<link rel="stylesheet" href="/assets/blocked.css?v=__BLOCK_ASSET_VERSION__" />
 	</head>
 	<body>
-		<header class="site-header">
-			<a class="brand" href="/" aria-label="SilentFlare Shield home">
-				<img src="/assets/shield-mark.png" alt="" width="38" height="38" />
-				<span><strong>SilentFlare</strong><small>Shield</small></span>
-			</a>
-			<span class="service-state"><i aria-hidden="true"></i>Protection active</span>
-		</header>
-
 		<main>
-			<section class="decision" data-severity="{{SEVERITY}}">
-				<div class="decision-heading">
-					<p class="eyebrow">ACCESS DECISION</p>
-					<h1>{{PAGE_TITLE}}</h1>
-					<p class="summary">{{DESCRIPTION}}</p>
-				</div>
-
-				<div class="code-line">
-					<span>Error code</span>
-					<strong>{{ERROR_CODE}}</strong>
-				</div>
-
-				<dl class="case-details">
-					<div><dt>{{CASE_LABEL}}</dt><dd>{{CASE_ID}}</dd></div>
-					<div><dt>Status</dt><dd>{{STATUS}}</dd></div>
-					<div><dt>Service</dt><dd>{{SERVICE}}</dd></div>
-					<div><dt>Scope</dt><dd>{{SCOPE}}</dd></div>
-					<div class="wide"><dt>Expiry</dt><dd>{{EXPIRY}}</dd></div>
-				</dl>
-
-				<div class="guidance">
-					<h2>What you can do</h2>
-					<p>Do not repeat the blocked action. If you believe this decision is incorrect, contact the site administrator and include the error code and {{CASE_LABEL_LOWER}} exactly as shown.</p>
-				</div>
-			</section>
+			<img src="/assets/shield-mark.png" alt="" width="44" height="44" />
+			<h1>Unable to access this website</h1>
+			<dl>
+				<div><dt>Risk code</dt><dd>{{RISK_CODE}}</dd></div>
+				<div><dt>Ban ID</dt><dd>{{BAN_ID}}</dd></div>
+			</dl>
 		</main>
-
-		<footer>
-			<span>SilentFlare Shield</span>
-			<span>Request reference {{REQUEST_REFERENCE}}</span>
-		</footer>
 	</body>
 </html>

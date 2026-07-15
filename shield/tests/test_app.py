@@ -23,7 +23,7 @@ import httpx
 
 from app.config import settings
 from app.database import stable_hash
-from app.main import _automatic_ban, app
+from app.main import _automatic_ban, _reconcile_entity_bans, app
 from app.rate_limit import RateHit
 from app.rules import RequestContext
 from app.security import verify_headers
@@ -115,8 +115,8 @@ class ShieldApplicationTests(unittest.TestCase):
 			parts = urlsplit(location)
 			query = parse_qs(parts.query)
 			self.assertEqual(parts.netloc, "shield.silentflare.com")
-			self.assertEqual(query["code"], ["SF-BAN-T210"])
-			self.assertEqual(query["ban"], [public_id])
+			self.assertEqual(query["id"], [public_id])
+			self.assertTrue(query["token"][0])
 			self.assertEqual(response.headers["x-sf-shield-ban-id"], public_id)
 
 			portal = self.client.get(
@@ -125,8 +125,9 @@ class ShieldApplicationTests(unittest.TestCase):
 			)
 			self.assertEqual(portal.status_code, 200)
 			self.assertIn(public_id, portal.text)
-			self.assertIn("SF-BAN-T210", portal.text)
-			self.assertIn("Access temporarily restricted", portal.text)
+			self.assertIn(">102<", portal.text)
+			self.assertIn("Unable to access this website", portal.text)
+			self.assertNotIn("Portal integration test", portal.text)
 
 			api_response = self.client.get(
 				"/private",
@@ -137,15 +138,24 @@ class ShieldApplicationTests(unittest.TestCase):
 				},
 			)
 			self.assertEqual(api_response.status_code, 403)
-			self.assertEqual(api_response.json()["errorCode"], "SF-BAN-T210")
+			self.assertEqual(api_response.json()["errorCode"], "102")
 			self.assertEqual(api_response.json()["banId"], public_id)
 			self.assertEqual(api_response.headers["location"], api_response.json()["supportUrl"])
 
 			tampered = self.client.get(
-				f"{parts.path}?{parts.query.replace('SF-BAN-T210', 'SF-BAN-P210')}",
+				f"{parts.path}?id={public_id}&token=tampered",
 				headers={"Host": "shield.silentflare.com"},
 			)
-			self.assertIn("Block case unavailable", tampered.text)
+			self.assertIn("SFB-UNAVAILABLE", tampered.text)
+
+			database.execute("UPDATE bans SET revoked_at = ? WHERE public_id = ?", (int(time.time()), public_id))
+			released = self.client.get(
+				f"{parts.path}?{parts.query}",
+				headers={"Host": "shield.silentflare.com"},
+				follow_redirects=False,
+			)
+			self.assertEqual(released.status_code, 303)
+			self.assertEqual(released.headers["location"], "https://blog.silentflare.com/private")
 		finally:
 			database.execute("UPDATE bans SET revoked_at = ? WHERE public_id = ?", (int(time.time()), public_id))
 			database.set_setting("global_mode", "observe", "test")
@@ -284,6 +294,57 @@ class ShieldApplicationTests(unittest.TestCase):
 			self.assertIn(key, payload)
 		self.assertTrue(next(item for item in payload["services"] if item["host"] == "api.silentflare.com")["connected"])
 
+	def test_entity_dashboard_supports_custom_adjustment_and_score_cap(self):
+		headers = {"Cookie": "sf_bot_session=valid-admin", "X-CSRF-Token": "admin-csrf"}
+		subject = app.state.entities.ensure_subject("ip", "203.0.113.70")
+		adjusted = self.client.post(
+			f"/__shield/api/admin/entities/{subject['id']}/adjust",
+			headers=headers,
+			json={"delta": 72, "reason": "Integration risk increase", "duration_seconds": 3600},
+		)
+		self.assertEqual(adjusted.status_code, 200)
+		self.assertEqual(adjusted.json()["subject"]["currentScore"], 72)
+		exempted = self.client.post(
+			f"/__shield/api/admin/entities/{subject['id']}/overrides",
+			headers=headers,
+			json={"override_type": "score_cap", "value": 25, "reason": "Temporary trusted source", "duration_seconds": 3600},
+		)
+		self.assertEqual(exempted.status_code, 200)
+		self.assertEqual(exempted.json()["subject"]["effectiveScore"], 25)
+		listing = self.client.get("/__shield/api/admin/entities?subject_type=ip", headers=headers)
+		self.assertEqual(listing.status_code, 200)
+		self.assertTrue(any(item["id"] == subject["id"] for item in listing.json()["items"]))
+
+	def test_split_role_apps_expose_only_their_route_surface(self):
+		from app.control.app import app as control_app
+		from app.gateway.app import app as gateway_app
+		from app.portal.app import app as portal_app
+
+		gateway_paths = {route.path for route in gateway_app.routes}
+		control_paths = {route.path for route in control_app.routes}
+		portal_paths = {route.path for route in portal_app.routes}
+		self.assertIn("/{path:path}", gateway_paths)
+		self.assertNotIn("/__shield/api/admin/entities", gateway_paths)
+		self.assertIn("/__shield/api/admin/entities", control_paths)
+		self.assertNotIn("/{path:path}", control_paths)
+		self.assertIn("/blocked", portal_paths)
+		self.assertNotIn("/__shield/api/admin/entities", portal_paths)
+
+	def test_split_gateway_uses_its_own_runtime_services(self):
+		from app.gateway.app import app as gateway_app
+
+		class SplitMockStream(httpx.AsyncByteStream):
+			async def __aiter__(self):
+				yield b"split-gateway-ok"
+
+		with TestClient(gateway_app) as gateway_client:
+			gateway_app.state.client._transport = httpx.MockTransport(
+				lambda _request: httpx.Response(200, stream=SplitMockStream())
+			)
+			response = gateway_client.get("/split-runtime", headers={"Host": "blog.silentflare.com"})
+			self.assertEqual(response.status_code, 200)
+			self.assertEqual(response.text, "split-gateway-ok")
+
 	def test_automatic_account_policy_bans_correlated_session_once(self):
 		context = RequestContext(
 			request_id="automatic-ban-test",
@@ -304,6 +365,44 @@ class ShieldApplicationTests(unittest.TestCase):
 		self.assertEqual(rows[0]["subject_type"], "session")
 		self.assertEqual(rows[0]["subject_display"], "Correlated session")
 		self.assertGreaterEqual(rows[0]["expires_at"], int(time.time()) + 21590)
+
+	def test_high_risk_entity_is_automatically_banned_and_released(self):
+		subject = app.state.entities.ensure_subject("ip", "203.0.113.88")
+		app.state.entities.adjust(
+			int(subject["id"]),
+			85,
+			reason_code="AUTOMATION_TEST",
+			reason="Automated response integration test",
+			source="test",
+			actor="test",
+		)
+		exemption = app.state.entities.add_override(
+			int(subject["id"]),
+			override_type="score_cap",
+			value=25,
+			reason="Verified maintenance source",
+			actor="owner",
+			duration_seconds=3600,
+		)
+		self.assertEqual(_reconcile_entity_bans(app.state.database), 0)
+		app.state.entities.revoke_override(int(exemption["id"]), "owner", "Maintenance completed")
+		self.assertEqual(_reconcile_entity_bans(app.state.database), 1)
+		active = app.state.database.query(
+			"SELECT * FROM bans WHERE subject_hash = ? AND created_by = 'shield-worker' AND revoked_at IS NULL",
+			(subject["subject_hash"],),
+		)
+		self.assertEqual(len(active), 1)
+		app.state.entities.adjust(
+			int(subject["id"]),
+			-45,
+			reason_code="FALSE_POSITIVE",
+			reason="Confirmed safe source",
+			source="test",
+			actor="owner",
+		)
+		self.assertEqual(_reconcile_entity_bans(app.state.database), 1)
+		released = app.state.database.query("SELECT revoked_at FROM bans WHERE id = ?", (active[0]["id"],))[0]
+		self.assertIsNotNone(released["revoked_at"])
 
 	def test_unknown_host_is_rejected_before_proxying(self):
 		response = self.client.get("/not-an-upstream", headers={"Host": "unlisted.example"})
