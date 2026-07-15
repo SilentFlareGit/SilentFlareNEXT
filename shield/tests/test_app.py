@@ -63,6 +63,17 @@ class ShieldApplicationTests(unittest.TestCase):
 				return httpx.Response(200, json={"users": [{"id": "user-1", "username": "risk-user", "role": "user", "created_at": "2020-01-01T00:00:00+00:00", "email_verified_at": None, "totp_enabled": 0, "active_session_count": 2, "comment_count": 4}]})
 			if request.url.path == "/missing":
 				return httpx.Response(404, stream=MockStream(b"missing"), headers={"Content-Type": "text/plain"})
+			if request.url.path == "/cookies":
+				return httpx.Response(
+					200,
+					stream=MockStream(b"cookies"),
+					headers=[
+						("Content-Type", "text/plain"),
+						("Set-Cookie", "first=one; Path=/; HttpOnly"),
+						("Set-Cookie", "second=two; Path=/; Secure"),
+						("X-SF-Shield-Request-ID", "spoofed-upstream-id"),
+					],
+				)
 			return httpx.Response(200, stream=MockStream(b"upstream-ok"), headers={"Content-Type": "text/plain"})
 
 		app.state.client._transport = httpx.MockTransport(upstream)
@@ -741,6 +752,15 @@ class ShieldApplicationTests(unittest.TestCase):
 		forwarded = {name.lower(): value for name, value in self.upstream_requests[-1].headers.items()}
 		self.assertNotEqual(forwarded["x-sf-shield-signature"], "forged")
 		self.assertTrue(verify_headers(forwarded, "GET", "/proxied", settings.internal_signing_key))
+
+	def test_proxy_preserves_duplicate_cookies_and_replaces_upstream_shield_headers(self):
+		response = self.client.get("/cookies", headers={"Host": "blog.silentflare.com"})
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(
+			response.headers.get_list("set-cookie"),
+			["first=one; Path=/; HttpOnly", "second=two; Path=/; Secure"],
+		)
+		self.assertNotEqual(response.headers["x-sf-shield-request-id"], "spoofed-upstream-id")
 
 	def test_repeated_404_responses_create_scan_event(self):
 		app.state.database.execute("UPDATE rate_policies SET limit_value = 1 WHERE name = '404 scanner per IP'")

@@ -1481,10 +1481,20 @@ async def _proxy(request: Request, body: bytes, upstream: str, context: RequestC
 					)
 		except sqlite3.Error:
 			request.app.state.degraded_events.append({"createdAt": int(time.time()), "requestId": context.request_id, "host": context.host, "path": context.path, "method": context.method, "ipMasked": mask_ip(context.ip), "riskScore": 0, "reason": "response_telemetry_database_unavailable"})
-	response_headers = {name: value for name, value in proxy_response.headers.items() if name.lower() not in HOP_BY_HOP}
+	response = StreamingResponse(
+		proxy_response.aiter_raw(),
+		status_code=proxy_response.status_code,
+		background=BackgroundTask(proxy_response.aclose),
+	)
+	response.raw_headers = [
+		(name, value)
+		for name, value in proxy_response.headers.raw
+		if name.decode("latin-1").lower() not in HOP_BY_HOP
+		and name.decode("latin-1").lower() not in SHIELD_HEADERS
+	]
 	if context:
-		response_headers["X-SF-Shield-Request-ID"] = context.request_id
-	return StreamingResponse(proxy_response.aiter_raw(), status_code=proxy_response.status_code, headers=response_headers, background=BackgroundTask(proxy_response.aclose))
+		response.raw_headers.append((b"x-sf-shield-request-id", context.request_id.encode("latin-1")))
+	return response
 
 
 @app.get("/__shield/health/live")

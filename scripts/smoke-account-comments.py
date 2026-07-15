@@ -27,6 +27,13 @@ def install_api_import_stubs() -> None:
 			self.status_code = status_code
 			self.detail = detail
 
+	class BackgroundTasks:
+		def __init__(self) -> None:
+			self.tasks: list[tuple[object, tuple[object, ...], dict[str, object]]] = []
+
+		def add_task(self, function, *args: object, **kwargs: object) -> None:
+			self.tasks.append((function, args, kwargs))
+
 	class FastAPI:
 		def __init__(self, *_args: object, **_kwargs: object) -> None:
 			pass
@@ -48,6 +55,7 @@ def install_api_import_stubs() -> None:
 		return default
 
 	fastapi_module = types.ModuleType("fastapi")
+	fastapi_module.BackgroundTasks = BackgroundTasks
 	fastapi_module.FastAPI = FastAPI
 	fastapi_module.Header = Header
 	fastapi_module.HTTPException = HTTPException
@@ -69,6 +77,14 @@ def install_api_import_stubs() -> None:
 
 class StubClient:
 	host = "127.0.0.1"
+
+
+class StubBackgroundTasks:
+	def __init__(self) -> None:
+		self.tasks: list[tuple[object, tuple[object, ...], dict[str, object]]] = []
+
+	def add_task(self, function, *args: object, **kwargs: object) -> None:
+		self.tasks.append((function, args, kwargs))
 
 
 class StubRequest:
@@ -122,6 +138,9 @@ def load_api_module(db_path: Path):
 		{
 			"ACCOUNT_DB_PATH": str(db_path),
 			"ACCOUNT_AVATAR_DIR": str(db_path.parent / "avatars"),
+			"ADMIN_WEB_LOGIN_STATE_PATH": str(
+				db_path.parent / "admin-web-login-state.json"
+			),
 			"ACCOUNT_AVATAR_PUBLIC_BASE": "https://api.silentflare.com/account-avatars",
 			"TURNSTILE_SECRET_KEY": "test-turnstile-secret",
 			"TURNSTILE_EXPECTED_HOSTNAMES": "auth.silentflare.com,accounts.silentflare.com",
@@ -347,6 +366,7 @@ def main() -> None:
 				"from": {"id": 8737100423},
 				"chat": {"id": 8737100423},
 			}}).encode("utf-8")),
+			StubBackgroundTasks(),
 			"test-webhook-secret",
 		))
 		if not allow_result.get("web_login_enabled"):
@@ -370,6 +390,7 @@ def main() -> None:
 				"data": f"sf_login:{challenge['id']}",
 				"from": {"id": 8737100423},
 			}}).encode("utf-8")),
+			StubBackgroundTasks(),
 			"test-webhook-secret",
 		))
 		if not telegram_result.get("approved"):
@@ -380,6 +401,7 @@ def main() -> None:
 				"from": {"id": 8737100423},
 				"chat": {"id": 8737100423},
 			}}).encode("utf-8")),
+			StubBackgroundTasks(),
 			"test-webhook-secret",
 		))
 		if deny_result.get("web_login_enabled") is not False:
