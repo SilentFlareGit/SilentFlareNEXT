@@ -30,7 +30,7 @@ from .blocking import (
 from .config import Settings, settings
 from .database import Database, mask_ip, stable_hash
 from .domain.risk_codes import is_public_risk_code, risk_code_for
-from .entity_risk import EntityRiskService, entity_level
+from .entity_risk import SUBJECT_TYPE_CATALOG, EntityRiskService, entity_level
 from .geo import GeoService, IpIntel
 from .rate_limit import RateHit, RateLimiter
 from .risk import DEFAULT_THRESHOLDS, DEFAULT_WEIGHTS, RISK_FACTOR_CATALOG, RiskResult, score_request
@@ -303,32 +303,36 @@ def _account_risk(
 	user: dict[str, Any],
 	now: int,
 	weights: dict[str, int] | None = None,
-) -> tuple[int, str, list[str]]:
+) -> tuple[int, str, list[str], dict[str, tuple[int, str]]]:
 	values = DEFAULT_WEIGHTS | (weights or {})
 	score = 0
 	reasons: list[str] = []
+	factors: dict[str, tuple[int, str]] = {}
+
+	def add(condition: bool, key: str, reason: str) -> None:
+		nonlocal score
+		if not condition:
+			return
+		before = max(0, min(100, score))
+		score = max(0, min(100, score + int(values[key])))
+		applied = score - before
+		reasons.append(reason)
+		if applied:
+			factors[key] = (applied, reason)
+
 	created_at = _timestamp(user.get("created_at"), now)
-	if now - created_at < 86400:
-		score += values["new_account"]
-		reasons.append("Account created within 24 hours")
-	if not user.get("email_verified_at"):
-		score += values["unverified_email"]
-		reasons.append("Email is not verified")
-	if not user.get("totp_enabled"):
-		score += values["no_2fa"]
-		reasons.append("Two-factor authentication is not enabled")
-	if user.get("role") == "admin" and not user.get("totp_enabled"):
-		score += values["privileged_no_2fa"]
-		reasons.append("Privileged account has no two-factor authentication")
-	if int(user.get("active_session_count") or 0) > 5:
-		score += values["many_sessions"]
-		reasons.append("Account has more than five active sessions")
-	if user.get("disabled_at"):
-		score += values["disabled_account"]
-		reasons.append("Account is disabled")
-	score = max(0, min(score, 100))
+	add(now - created_at < 86400, "new_account", "Account created within 24 hours")
+	add(not user.get("email_verified_at"), "unverified_email", "Email is not verified")
+	add(not user.get("totp_enabled"), "no_2fa", "Two-factor authentication is not enabled")
+	add(
+		user.get("role") == "admin" and not user.get("totp_enabled"),
+		"privileged_no_2fa",
+		"Privileged account has no two-factor authentication",
+	)
+	add(int(user.get("active_session_count") or 0) > 5, "many_sessions", "Account has more than five active sessions")
+	add(bool(user.get("disabled_at")), "disabled_account", "Account is disabled")
 	level = "block" if score >= 80 else "restrict" if score >= 60 else "verify" if score >= 40 else "observe" if score >= 20 else "normal"
-	return score, level, reasons
+	return score, level, reasons, factors
 
 
 async def _sync_account_projections(application: FastAPI, session_token: str = "", force: bool = False) -> dict[str, Any]:
@@ -361,7 +365,7 @@ async def _sync_account_projections(application: FastAPI, session_token: str = "
 			connection.execute("DELETE FROM account_projections")
 			for user in users:
 				account_hash = stable_hash(str(user.get("id", "")), settings.internal_signing_key)
-				score, level, reasons = _account_risk(user, now, weights)
+				score, level, reasons, _factors = _account_risk(user, now, weights)
 				connection.execute(
 					"""INSERT INTO account_projections(account_id_hash, account_ref, account_label, role, country_code,
 					email_verified, two_factor_enabled, disabled, created_at, last_seen_at, active_session_count,
@@ -386,7 +390,7 @@ async def _sync_account_projections(application: FastAPI, session_token: str = "
 			account_ref = str(user.get("id") or "")
 			if not account_ref:
 				continue
-			score, _level, reasons = _account_risk(user, now, weights)
+			score, _level, reasons, factors = _account_risk(user, now, weights)
 			posture = stable_hash(
 				json.dumps(
 					{
@@ -395,6 +399,7 @@ async def _sync_account_projections(application: FastAPI, session_token: str = "
 						"twoFactor": bool(user.get("totp_enabled")),
 						"disabled": bool(user.get("disabled_at")),
 						"sessions": int(user.get("active_session_count") or 0),
+						"factors": {key: value for key, (value, _reason) in factors.items()},
 					},
 					sort_keys=True,
 				),
@@ -407,6 +412,7 @@ async def _sync_account_projections(application: FastAPI, session_token: str = "
 				baseline=score,
 				reasons=reasons,
 				source_ref=f"posture:{posture}",
+				factors=factors,
 			)
 		db.execute("UPDATE sync_runs SET completed_at = ?, status = 'completed', record_count = ? WHERE id = ?", (int(time.time()), len(users), run_id))
 		return {"status": "completed", "recordCount": len(users), "completedAt": int(time.time())}
@@ -694,6 +700,7 @@ async def _operations_loop(application: FastAPI) -> None:
 			_aggregate_alerts(application.state.database)
 			await _deliver_alerts(application)
 			decayed = application.state.entities.run_due_decay()
+			decayed += application.state.entities.expire_due_overrides()
 			automated = _reconcile_entity_bans(application.state.database, application.state.entities)
 			automated += await _reconcile_account_responses(application)
 			application.state.database.execute("DELETE FROM rate_counters WHERE updated_at < ?", (int(time.time()) - 2592000,))
@@ -1098,8 +1105,16 @@ def _apply_entity_score(
 	service: EntityRiskService,
 	context: RequestContext,
 	risk: RiskResult,
+	weights: dict[str, int],
 ) -> dict[str, dict[str, Any]]:
 	subjects = _entity_subjects(service, context)
+	device = subjects.get("device")
+	if device and int(device["first_seen_at"]) >= int(time.time()) - 5:
+		new_device_weight = int((DEFAULT_WEIGHTS | weights)["new_device"])
+		if new_device_weight:
+			risk.score = max(0, min(100, risk.score + new_device_weight))
+			risk.level = entity_level(risk.score)
+			risk.reasons.append("New device observed")
 	primary_scores = [
 		service.effective_score(subject, context.host, context.path)
 		for name, subject in subjects.items()
@@ -1130,6 +1145,7 @@ def _record_entity_signals(
 	rules: RuleDecision,
 	subjects: dict[str, dict[str, Any]],
 	weights: dict[str, int],
+	list_match: dict[str, Any] | None = None,
 ) -> None:
 	values = DEFAULT_WEIGHTS | weights
 
@@ -1139,7 +1155,15 @@ def _record_entity_signals(
 			return 1 if values[key] > 0 else -1
 		return value
 
-	def signal(subject_type: str, delta: int, code: str, reason: str, duration: int, steps: int = 4) -> None:
+	def signal(
+		subject_type: str,
+		delta: int,
+		code: str,
+		reason: str,
+		duration: int,
+		steps: int = 4,
+		source_ref: str | None = None,
+	) -> None:
 		if delta == 0:
 			return
 		try:
@@ -1157,6 +1181,8 @@ def _record_entity_signals(
 			"email": context.email,
 			"email_domain": context.email.rsplit("@", 1)[-1] if "@" in context.email else "",
 			"api_key": context.api_key,
+			"country": context.country,
+			"region": context.region,
 		}.get(subject_type, "")
 		if not value or subject_type not in subjects:
 			return
@@ -1165,17 +1191,57 @@ def _record_entity_signals(
 			delta=delta,
 			reason_code=code,
 			reason=reason,
-			source_ref=context.request_id,
+			source_ref=source_ref or context.request_id,
 			duration_seconds=duration,
 			decay_steps=steps,
 		)
 
 	reasons = set(risk.reasons)
+	if "VPN network" in reasons:
+		signal("ip", weighted("vpn", 0.5), "VPN_NETWORK", "VPN network observed", 86400)
+		signal("cidr", weighted("vpn", 0.15), "VPN_NETWORK", "VPN source observed in CIDR", 43200)
+	if "Proxy network" in reasons:
+		signal("ip", weighted("proxy", 0.5), "PROXY_NETWORK", "Proxy network observed", 86400)
+		signal("cidr", weighted("proxy", 0.15), "PROXY_NETWORK", "Proxy source observed in CIDR", 43200)
+	if "Data center network" in reasons:
+		signal("ip", weighted("datacenter", 0.5), "DATACENTER_NETWORK", "Data center network observed", 86400)
+		signal("asn", weighted("datacenter", 0.2), "DATACENTER_NETWORK", "Data center source observed in ASN", 86400)
+	if "Expected browser headers missing" in reasons:
+		signal("device", weighted("missing_headers", 0.7), "MISSING_BROWSER_HEADERS", "Expected browser headers missing", 21600)
+		signal("ip", weighted("missing_headers", 0.3), "MISSING_BROWSER_HEADERS", "Expected browser headers missing", 21600)
+	if "Abnormal request origin" in reasons:
+		signal("session", weighted("abnormal_origin", 0.7), "ABNORMAL_ORIGIN", "Abnormal request origin", 43200)
+		signal("ip", weighted("abnormal_origin", 0.3), "ABNORMAL_ORIGIN", "Abnormal request origin", 43200)
+	if "New device observed" in reasons and subjects.get("device"):
+		signal(
+			"device",
+			weighted("new_device"),
+			"NEW_DEVICE",
+			"New device observed",
+			86400,
+			4,
+			f"new-device:{subjects['device']['id']}",
+		)
+		if subjects.get("account"):
+			signal(
+				"account",
+				weighted("new_device", 0.5),
+				"NEW_DEVICE",
+				"New device observed for account",
+				86400,
+				4,
+				f"new-device:{subjects['device']['id']}",
+			)
 	if rates:
-		signal("ip", weighted("rate_exceeded", 0.4), "RATE_LIMIT_EXCEEDED", rates[0].policy_name, 86400)
-		signal("cidr", weighted("rate_exceeded", 0.12), "RATE_LIMIT_EXCEEDED", rates[0].policy_name, 43200)
-		signal("session", weighted("rate_exceeded", 0.32), "RATE_LIMIT_EXCEEDED", rates[0].policy_name, 43200)
-		signal("account", weighted("rate_exceeded", 0.32), "RATE_LIMIT_EXCEEDED", rates[0].policy_name, 43200)
+		for hit in rates:
+			reference = f"{context.request_id}:rate:{hit.policy_id}"
+			signal("ip", weighted("rate_exceeded", 0.4), "RATE_LIMIT_EXCEEDED", hit.policy_name, 86400, 4, reference)
+			signal("cidr", weighted("rate_exceeded", 0.12), "RATE_LIMIT_EXCEEDED", hit.policy_name, 43200, 4, reference)
+			dimension = hit.dimension
+			if dimension == "account" and not context.account_id:
+				dimension = "session" if context.session_id else "ip"
+			if dimension in {"account", "session", "device", "email", "country", "asn"}:
+				signal(dimension, weighted("rate_exceeded", 0.32), "RATE_LIMIT_EXCEEDED", hit.policy_name, 43200, 4, reference)
 	if "Automation browser signature" in reasons:
 		signal("device", weighted("automation", 0.82), "AUTOMATION_SIGNATURE", "Automation browser signature", 43200)
 		signal("ip", weighted("automation", 0.36), "AUTOMATION_SIGNATURE", "Automation browser signature", 43200)
@@ -1184,6 +1250,18 @@ def _record_entity_signals(
 		signal("asn", weighted("malicious_ip", 0.1), "THREAT_INTELLIGENCE", "Malicious source observed in ASN", 86400)
 	if "Tor exit node" in reasons:
 		signal("ip", weighted("tor", 0.43), "TOR_NETWORK", "Tor exit node", 86400)
+	if list_match:
+		list_subject_type = str(list_match.get("subject_type") or "")
+		if list_subject_type in subjects and list_match.get("kind") in {"allow", "deny"}:
+			kind = str(list_match["kind"])
+			signal(
+				list_subject_type,
+				weighted("allow_list" if kind == "allow" else "deny_list"),
+				"ALLOW_LIST_MATCH" if kind == "allow" else "DENY_LIST_MATCH",
+				"Matched allow list" if kind == "allow" else "Matched deny list",
+				86400,
+				1,
+			)
 	if rules.matched_rules:
 		signal("ip", weighted("rule_match"), "RULE_MATCH", f"Matched rule {rules.matched_rules[0]['name']}", 86400)
 		signal("session", weighted("rule_match", 0.625), "RULE_MATCH", f"Matched rule {rules.matched_rules[0]['name']}", 43200)
@@ -1798,10 +1876,7 @@ async def admin_entities(
 	limit: int = 100,
 ):
 	await _admin(request)
-	allowed_types = {
-		"account", "session", "device", "ip", "cidr", "asn", "email",
-		"email_domain", "api_key", "country", "region",
-	}
+	allowed_types = {key for key, _label in SUBJECT_TYPE_CATALOG}
 	if subject_type and subject_type not in allowed_types:
 		raise HTTPException(status_code=422, detail="Unsupported risk subject type")
 	items = request.app.state.entities.list_subjects(
@@ -1810,14 +1885,27 @@ async def admin_entities(
 		query=query[:160],
 		limit=limit,
 	)
-	counts = request.app.state.database.query(
+	count_rows = request.app.state.database.query(
 		"""SELECT subject_type AS subjectType, COUNT(*) AS total,
 		SUM(CASE WHEN current_score >= 50 THEN 1 ELSE 0 END) AS elevated,
 		MAX(current_score) AS maximumScore FROM risk_subjects GROUP BY subject_type
 		ORDER BY CASE subject_type WHEN 'account' THEN 1 WHEN 'ip' THEN 2 WHEN 'asn' THEN 3
 		WHEN 'session' THEN 4 WHEN 'device' THEN 5 WHEN 'api_key' THEN 6 ELSE 20 END, subject_type"""
 	)
-	return {"items": items, "counts": counts, "generatedAt": int(time.time())}
+	counts_by_type = {row["subjectType"]: row for row in count_rows}
+	types = []
+	for key, label in SUBJECT_TYPE_CATALOG:
+		row = counts_by_type.get(key, {})
+		types.append(
+			{
+				"key": key,
+				"label": label,
+				"total": int(row.get("total") or 0),
+				"elevated": int(row.get("elevated") or 0),
+				"maximumScore": int(row.get("maximumScore") or 0),
+			}
+		)
+	return {"items": items, "types": types, "counts": count_rows, "generatedAt": int(time.time())}
 
 
 @app.get("/__shield/api/admin/entities/{subject_id}")
@@ -1827,6 +1915,14 @@ async def admin_entity_detail(subject_id: int, request: Request):
 	if not detail:
 		raise HTTPException(status_code=404, detail="Risk subject not found")
 	return detail
+
+
+@app.get("/__shield/api/admin/entities/{subject_id}/ledger")
+async def admin_entity_ledger(subject_id: int, request: Request, before: int | None = None, limit: int = 100):
+	await _admin(request)
+	if not request.app.state.entities.subject_by_public_id(subject_id):
+		raise HTTPException(status_code=404, detail="Risk subject not found")
+	return request.app.state.entities.ledger_page(subject_id, before=before, limit=limit)
 
 
 @app.post("/__shield/api/admin/entities/{subject_id}/adjust")
@@ -2311,14 +2407,14 @@ async def gateway(path: str, request: Request):
 			api_key=_api_key(request),
 			user_agent=request.headers.get("user-agent", ""),
 		)
-		list_status, _list_match = request.app.state.access.match(context)
+		list_status, list_match = request.app.state.access.match(context)
 		ban = request.app.state.access.active_ban(context)
 		rates = request.app.state.limiter.check(context)
 		context.rate_exceeded = bool(rates)
 		weights = request.app.state.database.setting("risk_weights", {})
 		thresholds = request.app.state.database.setting("risk_thresholds", {})
 		risk = score_request(intel, headers, weights, thresholds, list_status, bool(rates))
-		entity_subjects = _apply_entity_score(request.app.state.entities, context, risk)
+		entity_subjects = _apply_entity_score(request.app.state.entities, context, risk, weights)
 		context.risk_score = risk.score
 		rule_decision = request.app.state.rules.evaluate(context, mode)
 		matched_rule_ids = [int(item["id"]) for item in rule_decision.matched_rules]
@@ -2370,6 +2466,7 @@ async def gateway(path: str, request: Request):
 			rule_decision,
 			entity_subjects,
 			weights,
+			list_match,
 		)
 		if "temporary_ban" in actions and mode == "enforce":
 			_automatic_ban(request.app.state.database, context, rates)

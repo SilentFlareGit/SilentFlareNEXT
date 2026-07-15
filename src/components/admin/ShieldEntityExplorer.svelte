@@ -13,6 +13,7 @@ type Subject = {
 	lastChangedAt: number;
 };
 type LedgerEntry = {
+	cursor: number;
 	id: string;
 	createdAt: number;
 	delta: number;
@@ -22,6 +23,7 @@ type LedgerEntry = {
 	reason: string;
 	source: string;
 	actor: string;
+	scoreKind: "raw" | "effective";
 	expiresAt?: number;
 };
 type Override = {
@@ -37,17 +39,29 @@ type Override = {
 type SubjectDetail = Subject & {
 	effectiveScore: number;
 	ledger: LedgerEntry[];
+	ledgerTotal: number;
+	ledgerHasMore: boolean;
+	ledgerNextCursor?: number;
 	overrides: Override[];
+};
+type SubjectType = {
+	key: string;
+	label: string;
+	total: number;
+	elevated: number;
+	maximumScore: number;
 };
 
 let { csrf }: { csrf: string } = $props();
 let subjects = $state<Subject[]>([]);
+let subjectTypes = $state<SubjectType[]>([]);
 let selected = $state<SubjectDetail | null>(null);
 let typeFilter = $state("");
 let minimumScore = $state(0);
 let query = $state("");
 let loading = $state(true);
 let detailLoading = $state(false);
+let ledgerLoading = $state(false);
 let saving = $state(false);
 let error = $state("");
 let action = $state("adjust");
@@ -61,6 +75,22 @@ const activeOverrides = $derived(
 			!item.revokedAt &&
 			(!item.expiresAt || item.expiresAt > Date.now() / 1000),
 	) ?? [],
+);
+const subjectTypeIcons: Record<string, string> = {
+	account: "material-symbols:person-outline-rounded",
+	session: "material-symbols:login-rounded",
+	device: "material-symbols:devices-outline-rounded",
+	ip: "material-symbols:language-rounded",
+	cidr: "material-symbols:lan-outline-rounded",
+	asn: "material-symbols:hub-outline-rounded",
+	email: "material-symbols:mail-outline-rounded",
+	email_domain: "material-symbols:alternate-email-rounded",
+	api_key: "material-symbols:key-outline-rounded",
+	country: "material-symbols:public-rounded",
+	region: "material-symbols:map-outline-rounded",
+};
+const totalSubjects = $derived(
+	subjectTypes.reduce((total, item) => total + item.total, 0),
 );
 
 async function api<T>(path: string, init: RequestInit = {}) {
@@ -88,8 +118,11 @@ async function loadSubjects() {
 		});
 		if (typeFilter) parameters.set("subject_type", typeFilter);
 		if (query.trim()) parameters.set("query", query.trim());
-		const response = await api<{ items: Subject[] }>(`/entities?${parameters}`);
+		const response = await api<{ items: Subject[]; types: SubjectType[] }>(
+			`/entities?${parameters}`,
+		);
 		subjects = response.items;
+		subjectTypes = response.types;
 		error = "";
 		if (selected && !subjects.some((item) => item.id === selected?.id))
 			selected = null;
@@ -99,6 +132,18 @@ async function loadSubjects() {
 	} finally {
 		loading = false;
 	}
+}
+
+async function chooseType(value: string) {
+	typeFilter = value;
+	selected = null;
+	await loadSubjects();
+}
+
+async function chooseMinimum(value: number) {
+	minimumScore = value;
+	selected = null;
+	await loadSubjects();
 }
 
 async function openSubject(subject: Subject) {
@@ -113,6 +158,33 @@ async function openSubject(subject: Subject) {
 				: "Subject details could not be loaded";
 	} finally {
 		detailLoading = false;
+	}
+}
+
+async function loadOlderLedger() {
+	if (!selected?.ledgerHasMore || !selected.ledgerNextCursor) return;
+	ledgerLoading = true;
+	try {
+		const page = await api<{
+			items: LedgerEntry[];
+			hasMore: boolean;
+			nextCursor?: number;
+		}>(
+			`/entities/${selected.id}/ledger?before=${selected.ledgerNextCursor}&limit=100`,
+		);
+		selected = {
+			...selected,
+			ledger: [...selected.ledger, ...page.items],
+			ledgerHasMore: page.hasMore,
+			ledgerNextCursor: page.nextCursor,
+		};
+	} catch (cause) {
+		error =
+			cause instanceof Error
+				? cause.message
+				: "Older score changes could not be loaded";
+	} finally {
+		ledgerLoading = false;
 	}
 }
 
@@ -193,41 +265,44 @@ onMount(loadSubjects);
 </script>
 
 <section class="subjects-workspace" class:detail-open={selected !== null}>
-	<form
-		class="filters"
-		onsubmit={(event) => {
-			event.preventDefault();
-			loadSubjects();
-		}}
-	>
-		<label>
-			<span>Subject type</span>
-			<select bind:value={typeFilter}>
-				<option value="">All types</option>
-				{#each ["account", "session", "device", "ip", "cidr", "asn", "email", "email_domain", "api_key", "country", "region"] as item}
-					<option value={item}>{typeLabel(item)}</option>
-				{/each}
-			</select>
-		</label>
-		<label>
-			<span>Minimum score</span>
-			<select bind:value={minimumScore}>
-				<option value={0}>All scores</option>
-				<option value={30}>Observe, 30+</option>
-				<option value={50}>Verify, 50+</option>
-				<option value={65}>Restrict, 65+</option>
-				<option value={80}>Block, 80+</option>
-			</select>
-		</label>
-		<label class="search-field">
-			<span>Search</span>
-			<input bind:value={query} placeholder="Masked value or account label" />
-		</label>
-		<button class="primary icon-command" type="submit" disabled={loading}>
-			<Icon icon="material-symbols:search-rounded" />
-			<span>Find</span>
-		</button>
-	</form>
+	<section class="filters" aria-label="Subject filters">
+		<header><strong>Subject type</strong><span>{totalSubjects} total</span></header>
+		<div class="type-grid" role="group" aria-label="Subject type">
+			<button class:active={typeFilter === ""} type="button" onclick={() => chooseType("")} disabled={loading}>
+				<Icon icon="material-symbols:select-all-rounded" />
+				<span><strong>All</strong><small>{totalSubjects}</small></span>
+			</button>
+			{#each subjectTypes as item (item.key)}
+				<button class:active={typeFilter === item.key} type="button" onclick={() => chooseType(item.key)} disabled={loading}>
+					<Icon icon={subjectTypeIcons[item.key] ?? "material-symbols:category-outline-rounded"} />
+					<span><strong>{item.label}</strong><small>{item.total}</small></span>
+				</button>
+			{/each}
+		</div>
+		<div class="filter-tools">
+			<div class="score-filter">
+				<span>Minimum score</span>
+				<div role="group" aria-label="Minimum score">
+					{#each [{ value: 0, label: "All" }, { value: 30, label: "30+" }, { value: 50, label: "50+" }, { value: 65, label: "65+" }, { value: 80, label: "80+" }] as item}
+						<button class:active={minimumScore === item.value} type="button" onclick={() => chooseMinimum(item.value)} disabled={loading}>{item.label}</button>
+					{/each}
+				</div>
+			</div>
+			<form
+				class="search-filter"
+				onsubmit={(event) => {
+					event.preventDefault();
+					loadSubjects();
+				}}
+			>
+				<label><span>Search</span><input bind:value={query} placeholder="Masked value or account label" /></label>
+				<button class="primary icon-command" type="submit" disabled={loading}>
+					<Icon icon="material-symbols:search-rounded" />
+					<span>Find</span>
+				</button>
+			</form>
+		</div>
+	</section>
 
 	{#if error}<div class="notice error" role="alert">{error}</div>{/if}
 
@@ -347,7 +422,7 @@ onMount(loadSubjects);
 				</section>
 
 				<section class="detail-section ledger-section">
-					<header><h3>Risk ledger</h3><span>{selected.ledger.length}</span></header>
+					<header><h3>Risk ledger</h3><span>{selected.ledger.length} of {selected.ledgerTotal}</span></header>
 					{#if selected.ledger.length === 0}
 						<p class="empty-line">No score changes recorded.</p>
 					{:else}
@@ -355,11 +430,14 @@ onMount(loadSubjects);
 							{#each selected.ledger as entry (entry.id)}
 								<article>
 									<span class:negative={entry.delta < 0} class="delta">{entry.delta > 0 ? `+${entry.delta}` : entry.delta}</span>
-									<div><strong>{entry.reason}</strong><small>{entry.reasonCode.replaceAll("_", " ")} / {entry.source} / {entry.actor}</small><time>{formatTime(entry.createdAt)}</time></div>
+									<div><strong>{entry.reason}</strong><small>{entry.scoreKind} score / {entry.reasonCode.replaceAll("_", " ")} / {entry.source} / {entry.actor}</small><time>{formatTime(entry.createdAt)}</time></div>
 									<b>{entry.scoreBefore} -&gt; {entry.scoreAfter}</b>
 								</article>
 							{/each}
 						</div>
+						{#if selected.ledgerHasMore}
+							<button class="load-older" onclick={loadOlderLedger} disabled={ledgerLoading}>{ledgerLoading ? "Loading..." : "Load older changes"}</button>
+						{/if}
 					{/if}
 				</section>
 			{/if}
@@ -370,7 +448,26 @@ onMount(loadSubjects);
 <style>
 	:global(*) { box-sizing: border-box; }
 	.subjects-workspace { min-width: 0; }
-	.filters { display: grid; grid-template-columns: 1fr; gap: .75rem; margin-bottom: 1rem; }
+	.filters { display: grid; gap: .75rem; margin-bottom: 1rem; border: 1px solid #d7e0e7; background: #fff; padding: .75rem; }
+	.filters > header { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+	.filters > header strong { font-size: .8rem; }
+	.filters > header span { color: #718398; font-size: .75rem; }
+	.type-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .375rem; }
+	.type-grid button { display: grid; grid-template-columns: 1.25rem minmax(0, 1fr); gap: .5rem; align-items: center; min-width: 0; border: 1px solid #d4dee6; background: #f9fbfc; color: #4d6275; padding: .45rem .6rem; text-align: left; }
+	.type-grid button:hover { border-color: #8dbbd9; background: #f1f8fc; }
+	.type-grid button.active { border-color: #2584c4; background: #eaf5fc; color: #176fa9; box-shadow: inset 0 0 0 1px #2584c4; }
+	.type-grid button :global(svg) { width: 1.15rem; height: 1.15rem; }
+	.type-grid button > span { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: .35rem; }
+	.type-grid button strong { overflow: hidden; font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
+	.type-grid button small { flex: 0 0 auto; color: #718398; font-size: .6875rem; font-variant-numeric: tabular-nums; }
+	.filter-tools { display: grid; gap: .75rem; border-top: 1px solid #e3e9ee; padding-top: .75rem; }
+	.score-filter { display: grid; gap: .35rem; }
+	.score-filter > span { color: #56697c; font-size: .75rem; font-weight: 700; }
+	.score-filter > div { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border: 1px solid #cbd7e1; border-radius: .375rem; overflow: hidden; }
+	.score-filter button { min-width: 0; min-height: 2.75rem; border: 0; border-right: 1px solid #d7e0e7; border-radius: 0; background: #fff; color: #5a6f82; font-size: .75rem; font-weight: 700; }
+	.score-filter button:last-child { border-right: 0; }
+	.score-filter button.active { background: #237fc1; color: #fff; }
+	.search-filter { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .5rem; align-items: end; }
 	label { display: grid; gap: .35rem; min-width: 0; }
 	label > span { color: #56697c; font-size: .75rem; font-weight: 700; }
 	input, select, button { font: inherit; letter-spacing: 0; }
@@ -430,9 +527,11 @@ onMount(loadSubjects);
 	.ledger strong { overflow-wrap: anywhere; }
 	.ledger small, .ledger time, .ledger b { color: #718398; font-size: .75rem; font-weight: 500; }
 	.ledger b { grid-column: 2; }
+	.load-older { width: calc(100% - 2rem); margin: .75rem 1rem; border: 1px solid #cbd7e1; background: #fff; color: #425b70; font-weight: 700; }
 
 	@media (min-width: 48rem) {
-		.filters { grid-template-columns: minmax(9rem, .8fr) minmax(9rem, .8fr) minmax(14rem, 2fr) auto; align-items: end; }
+		.type-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+		.filter-tools { grid-template-columns: minmax(16rem, .8fr) minmax(18rem, 1.2fr); align-items: end; }
 		.subject-layout { grid-template-columns: minmax(20rem, 40%) minmax(0, 60%); min-height: 38rem; }
 		.subject-list { display: block !important; border-right: 1px solid #d7e0e7; }
 		.subject-detail { display: block !important; }
@@ -446,5 +545,9 @@ onMount(loadSubjects);
 		.reason-field { min-width: 0; }
 		.ledger article { grid-template-columns: 2.75rem minmax(0, 1fr) auto; align-items: center; }
 		.ledger b { grid-column: 3; grid-row: 1; }
+	}
+
+	@media (min-width: 72rem) {
+		.type-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 	}
 </style>

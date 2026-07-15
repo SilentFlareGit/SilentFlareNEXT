@@ -23,9 +23,10 @@ import httpx
 
 from app.config import settings
 from app.database import stable_hash
-from app.main import _automatic_ban, _reconcile_entity_bans, app
+from app.main import _automatic_ban, _entity_subjects, _reconcile_entity_bans, _record_entity_signals, app
 from app.rate_limit import RateHit
-from app.rules import RequestContext
+from app.risk import RiskResult
+from app.rules import RequestContext, RuleDecision
 from app.security import verify_headers
 
 
@@ -314,6 +315,83 @@ class ShieldApplicationTests(unittest.TestCase):
 		listing = self.client.get("/__shield/api/admin/entities?subject_type=ip", headers=headers)
 		self.assertEqual(listing.status_code, 200)
 		self.assertTrue(any(item["id"] == subject["id"] for item in listing.json()["items"]))
+		self.assertEqual(len(listing.json()["types"]), 11)
+		self.assertEqual(
+			{item["key"] for item in listing.json()["types"]},
+			{"account", "session", "device", "ip", "cidr", "asn", "email", "email_domain", "api_key", "country", "region"},
+		)
+
+	def test_every_gateway_factor_writes_subject_ledger_changes(self):
+		context = RequestContext(
+			request_id="all-factor-ledger-request",
+			host="blog.silentflare.com",
+			path="/ledger-test",
+			method="GET",
+			ip="203.0.113.171",
+			country="US",
+			region="California",
+			asn="AS64571",
+			account_id="ledger-account",
+			session_id="ledger-session",
+			device_id="ledger-device",
+			email="ledger@example.com",
+			api_key="ledger-api-key",
+		)
+		subjects = _entity_subjects(app.state.entities, context)
+		risk = RiskResult(
+			20,
+			"observe",
+			[
+				"VPN network",
+				"Proxy network",
+				"Data center network",
+				"Expected browser headers missing",
+				"Abnormal request origin",
+				"New device observed",
+				"Automation browser signature",
+				"Known malicious IP",
+				"Tor exit node",
+			],
+		)
+		weights = {
+			"vpn": 2,
+			"proxy": 2,
+			"datacenter": 2,
+			"missing_headers": 2,
+			"abnormal_origin": 2,
+			"new_device": 2,
+			"automation": 2,
+			"malicious_ip": 2,
+			"tor": 2,
+			"rule_match": 2,
+			"deny_list": 2,
+		}
+		_record_entity_signals(
+			app.state.entities,
+			context,
+			risk,
+			[RateHit(73, "Email verification per email", "email", "rate_limit", 60, 60)],
+			RuleDecision(matched_rules=[{"id": 71, "name": "Ledger rule"}]),
+			subjects,
+			weights,
+			{"id": 72, "kind": "deny", "subject_type": "ip"},
+		)
+		self.assertGreater(app.state.entities.process_signal_queue(), 0)
+		codes_by_type = {
+			subject_type: {
+				entry["reasonCode"]
+				for entry in app.state.entities.detail(int(subject["id"]))["ledger"]
+			}
+			for subject_type, subject in subjects.items()
+		}
+		self.assertTrue(
+			{"VPN_NETWORK", "PROXY_NETWORK", "DATACENTER_NETWORK", "MISSING_BROWSER_HEADERS", "ABNORMAL_ORIGIN", "AUTOMATION_SIGNATURE", "THREAT_INTELLIGENCE", "TOR_NETWORK", "DENY_LIST_MATCH", "RULE_MATCH"}.issubset(codes_by_type["ip"])
+		)
+		self.assertTrue({"NEW_DEVICE", "MISSING_BROWSER_HEADERS", "AUTOMATION_SIGNATURE"}.issubset(codes_by_type["device"]))
+		self.assertTrue({"VPN_NETWORK", "PROXY_NETWORK"}.issubset(codes_by_type["cidr"]))
+		self.assertTrue({"DATACENTER_NETWORK", "THREAT_INTELLIGENCE"}.issubset(codes_by_type["asn"]))
+		self.assertTrue({"ABNORMAL_ORIGIN", "RULE_MATCH"}.issubset(codes_by_type["session"]))
+		self.assertIn("RATE_LIMIT_EXCEEDED", codes_by_type["email"])
 
 	def test_simplified_console_updates_factor_versions_and_site_protection(self):
 		headers = {"Cookie": "sf_bot_session=valid-admin", "X-CSRF-Token": "admin-csrf"}

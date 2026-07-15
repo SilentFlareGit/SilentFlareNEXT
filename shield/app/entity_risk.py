@@ -10,19 +10,20 @@ from .blocking import ban_subject_display, normalize_ban_subject
 from .database import Database, stable_hash
 
 
-SUBJECT_TYPES = {
-	"account",
-	"session",
-	"device",
-	"ip",
-	"cidr",
-	"asn",
-	"email",
-	"email_domain",
-	"api_key",
-	"country",
-	"region",
-}
+SUBJECT_TYPE_CATALOG = (
+	("account", "Accounts"),
+	("session", "Sessions"),
+	("device", "Devices"),
+	("ip", "IP addresses"),
+	("cidr", "CIDR ranges"),
+	("asn", "ASNs"),
+	("email", "Emails"),
+	("email_domain", "Email domains"),
+	("api_key", "API keys"),
+	("country", "Countries"),
+	("region", "Regions"),
+)
+SUBJECT_TYPES = {key for key, _label in SUBJECT_TYPE_CATALOG}
 
 
 def entity_level(score: int) -> str:
@@ -124,10 +125,25 @@ class EntityRiskService:
 			before = int(subject["current_score"])
 			after = max(0, min(100, before + int(delta)))
 			applied_delta = after - before
+			if applied_delta == 0:
+				return {
+					"id": None,
+					"subject_id": subject_id,
+					"created_at": now,
+					"delta": 0,
+					"score_before": before,
+					"score_after": after,
+					"reason_code": reason_code,
+					"reason": reason,
+					"source": source,
+					"source_ref": source_ref,
+					"actor": actor,
+					"expires_at": expires_at,
+				}
 			connection.execute(
 				"""INSERT INTO risk_ledger(id, subject_id, created_at, delta, score_before, score_after,
-				reason_code, reason, source, source_ref, actor, expires_at, parent_entry_id, metadata_json)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+				reason_code, reason, source, source_ref, actor, expires_at, parent_entry_id, metadata_json,
+				score_kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'raw')""",
 				(
 					entry_id,
 					subject_id,
@@ -163,6 +179,74 @@ class EntityRiskService:
 				"source_ref": source_ref,
 				"actor": actor,
 				"expires_at": expires_at,
+			}
+
+		return self.database.transaction(operation)
+
+	def _record_effective_change(
+		self,
+		subject_id: int,
+		before: int,
+		after: int,
+		*,
+		reason_code: str,
+		reason: str,
+		source_ref: str,
+		actor: str,
+		source: str = "admin",
+		metadata: dict[str, Any] | None = None,
+	) -> dict[str, Any] | None:
+		before = max(0, min(100, int(before)))
+		after = max(0, min(100, int(after)))
+		if before == after:
+			return None
+		now = int(time.time())
+		entry_id = uuid.uuid4().hex
+
+		def operation(connection):
+			existing = connection.execute(
+				"""SELECT * FROM risk_ledger WHERE subject_id = ? AND reason_code = ?
+				AND source = ? AND source_ref = ? LIMIT 1""",
+				(subject_id, reason_code, source, source_ref),
+			).fetchone()
+			if existing:
+				return dict(existing)
+			connection.execute(
+				"""INSERT INTO risk_ledger(id, subject_id, created_at, delta, score_before, score_after,
+				reason_code, reason, source, source_ref, actor, metadata_json, score_kind)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'effective')""",
+				(
+					entry_id,
+					subject_id,
+					now,
+					after - before,
+					before,
+					after,
+					reason_code[:80],
+					reason[:300],
+					source[:40],
+					source_ref,
+					actor[:120],
+					json.dumps(metadata or {}, separators=(",", ":")),
+				),
+			)
+			connection.execute(
+				"UPDATE risk_subjects SET last_changed_at = ?, version = version + 1 WHERE id = ?",
+				(now, subject_id),
+			)
+			return {
+				"id": entry_id,
+				"subject_id": subject_id,
+				"created_at": now,
+				"delta": after - before,
+				"score_before": before,
+				"score_after": after,
+				"reason_code": reason_code,
+				"reason": reason,
+				"source": source,
+				"source_ref": source_ref,
+				"actor": actor,
+				"score_kind": "effective",
 			}
 
 		return self.database.transaction(operation)
@@ -262,6 +346,11 @@ class EntityRiskService:
 		return signal_id
 
 	def process_signal_queue(self, limit: int = 200) -> int:
+		self.database.execute(
+			"""UPDATE risk_signal_queue SET status = 'queued', detail = 'recovered'
+			WHERE status = 'processing' AND created_at < ?""",
+			(int(time.time()) - 60,),
+		)
 		rows = self.database.query(
 			"SELECT * FROM risk_signal_queue WHERE status = 'queued' ORDER BY created_at, id LIMIT ?",
 			(limit,),
@@ -305,24 +394,67 @@ class EntityRiskService:
 		baseline: int,
 		reasons: list[str],
 		source_ref: str,
+		factors: dict[str, tuple[int, str]] | None = None,
 	) -> dict[str, Any]:
 		subject = self.ensure_subject(subject_type, value, display=display)
 		baseline = max(0, min(100, int(baseline)))
 		previous = int(subject["base_score"])
-		delta = baseline - previous
-		if delta:
-			entry = self._apply(
-				int(subject["id"]),
-				delta,
-				reason_code="ACCOUNT_POSTURE_CHANGED",
-				reason="; ".join(reasons)[:300] or "Account security posture changed",
-				source="account_sync",
-				source_ref=source_ref,
-				actor="shield-worker",
-				metadata={"baselineBefore": previous, "baselineAfter": baseline},
+		factor_rows = self.database.query(
+			"SELECT factor_key, value_integer, reason FROM risk_baseline_factors WHERE subject_id = ?",
+			(subject["id"],),
+		)
+		current_factors = {row["factor_key"]: row for row in factor_rows}
+		factor_values = factors or {}
+		entry: dict[str, Any] = {"delta": 0, "score_after": int(subject["current_score"])}
+		if not current_factors and previous:
+			delta = baseline - previous
+			if delta:
+				entry = self._apply(
+					int(subject["id"]),
+					delta,
+					reason_code="ACCOUNT_POSTURE_RECONCILED",
+					reason="; ".join(reasons)[:300] or "Account security posture changed",
+					source="account_sync",
+					source_ref=source_ref,
+					actor="shield-worker",
+					metadata={"baselineBefore": previous, "baselineAfter": baseline},
+				)
+		else:
+			for key in sorted(set(current_factors) | set(factor_values)):
+				old_value = int(current_factors.get(key, {}).get("value_integer") or 0)
+				new_value, new_reason = factor_values.get(
+					key,
+					(0, str(current_factors.get(key, {}).get("reason") or f"Account factor cleared: {key}")),
+				)
+				delta = int(new_value) - old_value
+				if not delta:
+					continue
+				entry = self._apply(
+					int(subject["id"]),
+					delta,
+					reason_code=f"ACCOUNT_{key.upper()}",
+					reason=new_reason if new_value else f"Resolved: {new_reason}",
+					source="account_sync",
+					source_ref=f"{source_ref}:{key}",
+					actor="shield-worker",
+					metadata={"factorKey": key, "factorBefore": old_value, "factorAfter": int(new_value)},
+				)
+		now = int(time.time())
+		for key, (factor_value, factor_reason) in factor_values.items():
+			self.database.execute(
+				"""INSERT INTO risk_baseline_factors(subject_id, factor_key, value_integer, reason, updated_at)
+				VALUES (?, ?, ?, ?, ?) ON CONFLICT(subject_id, factor_key) DO UPDATE SET
+				value_integer=excluded.value_integer, reason=excluded.reason, updated_at=excluded.updated_at""",
+				(subject["id"], key, int(factor_value), factor_reason[:300], now),
+			)
+		if factor_values:
+			placeholders = ",".join("?" for _key in factor_values)
+			self.database.execute(
+				f"DELETE FROM risk_baseline_factors WHERE subject_id = ? AND factor_key NOT IN ({placeholders})",
+				(subject["id"], *factor_values.keys()),
 			)
 		else:
-			entry = {"delta": 0, "score_after": int(subject["current_score"])}
+			self.database.execute("DELETE FROM risk_baseline_factors WHERE subject_id = ?", (subject["id"],))
 		self.database.execute(
 			"UPDATE risk_subjects SET base_score = ? WHERE id = ?",
 			(baseline, subject["id"]),
@@ -345,6 +477,10 @@ class EntityRiskService:
 		if override_type not in {"adjustment", "score_cap", "score_floor", "rule_exemption", "response_exemption"}:
 			raise ValueError("Unsupported override type")
 		now = int(time.time())
+		subject = self.subject_by_public_id(subject_id)
+		if not subject:
+			raise ValueError("Risk subject not found")
+		before_effective = self.effective_score(subject)
 		expires_at = now + duration_seconds if duration_seconds else None
 		ledger_entry_id = None
 		if override_type == "adjustment":
@@ -366,6 +502,18 @@ class EntityRiskService:
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
 			(subject_id, override_type, value, scope_host, scope_path, scope_rule_id, reason, now, actor, expires_at, ledger_entry_id),
 		)
+		if override_type in {"score_cap", "score_floor"}:
+			after_effective = self.effective_score(self.subject_by_public_id(subject_id) or subject)
+			self._record_effective_change(
+				subject_id,
+				before_effective,
+				after_effective,
+				reason_code="SCORE_CAP_APPLIED" if override_type == "score_cap" else "SCORE_FLOOR_APPLIED",
+				reason=reason,
+				source_ref=f"override:{override_id}:apply",
+				actor=actor,
+				metadata={"overrideId": override_id, "overrideType": override_type, "value": value},
+			)
 		return self.database.query("SELECT * FROM risk_overrides WHERE id = ?", (override_id,))[0]
 
 	def revoke_override(self, override_id: int, actor: str, reason: str) -> dict[str, Any]:
@@ -376,6 +524,8 @@ class EntityRiskService:
 			raise ValueError("Active risk override not found")
 		override = rows[0]
 		now = int(time.time())
+		subject = self.subject_by_public_id(int(override["subject_id"]))
+		before_effective = self.effective_score(subject) if subject else 0
 		if override["override_type"] == "adjustment" and override["ledger_entry_id"]:
 			entry = self.database.query(
 				"SELECT delta FROM risk_ledger WHERE id = ? LIMIT 1", (override["ledger_entry_id"],)
@@ -399,10 +549,29 @@ class EntityRiskService:
 			"UPDATE risk_effects SET status = 'revoked', updated_at = ? WHERE source_entry_id = ?",
 			(now, override["ledger_entry_id"]),
 		)
+		if subject and override["override_type"] in {"score_cap", "score_floor"}:
+			after_effective = self.effective_score(self.subject_by_public_id(int(subject["id"])) or subject)
+			self._record_effective_change(
+				int(subject["id"]),
+				before_effective,
+				after_effective,
+				reason_code="SCORE_CAP_REVOKED" if override["override_type"] == "score_cap" else "SCORE_FLOOR_REVOKED",
+				reason=reason,
+				source_ref=f"override:{override_id}:revoke",
+				actor=actor,
+				metadata={"overrideId": override_id, "overrideType": override["override_type"]},
+			)
 		return self.database.query("SELECT * FROM risk_overrides WHERE id = ?", (override_id,))[0]
 
-	def active_override(self, subject_id: int, override_type: str, host: str = "", path: str = "") -> dict[str, Any] | None:
-		now = int(time.time())
+	def active_override(
+		self,
+		subject_id: int,
+		override_type: str,
+		host: str = "",
+		path: str = "",
+		at: int | None = None,
+	) -> dict[str, Any] | None:
+		now = at if at is not None else int(time.time())
 		rows = self.database.query(
 			"""SELECT * FROM risk_overrides WHERE subject_id = ? AND override_type = ?
 			AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)
@@ -435,15 +604,55 @@ class EntityRiskService:
 				return row
 		return None
 
-	def effective_score(self, subject: dict[str, Any], host: str = "", path: str = "") -> int:
+	def effective_score(
+		self,
+		subject: dict[str, Any],
+		host: str = "",
+		path: str = "",
+		at: int | None = None,
+	) -> int:
 		score = int(subject["current_score"])
-		cap = self.active_override(int(subject["id"]), "score_cap", host, path)
-		floor = self.active_override(int(subject["id"]), "score_floor", host, path)
+		cap = self.active_override(int(subject["id"]), "score_cap", host, path, at)
+		floor = self.active_override(int(subject["id"]), "score_floor", host, path, at)
 		if cap and cap["value_integer"] is not None:
 			score = min(score, int(cap["value_integer"]))
 		if floor and floor["value_integer"] is not None:
 			score = max(score, int(floor["value_integer"]))
 		return max(0, min(100, score))
+
+	def expire_due_overrides(self, now: int | None = None, limit: int = 500) -> int:
+		now = now or int(time.time())
+		rows = self.database.query(
+			"""SELECT * FROM risk_overrides WHERE revoked_at IS NULL AND expires_at IS NOT NULL
+			AND expires_at <= ? AND override_type IN ('score_cap', 'score_floor')
+			ORDER BY expires_at, id LIMIT ?""",
+			(now, limit),
+		)
+		processed = 0
+		for override in rows:
+			subject = self.subject_by_public_id(int(override["subject_id"]))
+			if not subject:
+				continue
+			before = self.effective_score(subject, at=max(0, int(override["expires_at"]) - 1))
+			self.database.execute(
+				"""UPDATE risk_overrides SET revoked_at = ?, revoked_by = 'shield-worker',
+				revoke_reason = 'Manual score control expired' WHERE id = ? AND revoked_at IS NULL""",
+				(int(override["expires_at"]), override["id"]),
+			)
+			after = self.effective_score(self.subject_by_public_id(int(subject["id"])) or subject, at=now)
+			self._record_effective_change(
+				int(subject["id"]),
+				before,
+				after,
+				reason_code="SCORE_CAP_EXPIRED" if override["override_type"] == "score_cap" else "SCORE_FLOOR_EXPIRED",
+				reason="Manual score control expired",
+				source_ref=f"override:{override['id']}:expire",
+				actor="shield-worker",
+				source="worker",
+				metadata={"overrideId": override["id"], "overrideType": override["override_type"]},
+			)
+			processed += 1
+		return processed
 
 	def run_due_decay(self, now: int | None = None, limit: int = 500) -> int:
 		now = now or int(time.time())
@@ -509,17 +718,45 @@ class EntityRiskService:
 			parameters,
 		)
 
+	def ledger_page(
+		self,
+		subject_id: int,
+		*,
+		before: int | None = None,
+		limit: int = 100,
+	) -> dict[str, Any]:
+		limit = min(200, max(1, int(limit)))
+		conditions = ["subject_id = ?"]
+		parameters: list[Any] = [subject_id]
+		if before is not None:
+			conditions.append("rowid < ?")
+			parameters.append(max(1, int(before)))
+		parameters.append(limit + 1)
+		rows = self.database.query(
+			f"""SELECT rowid AS cursor, id, created_at AS createdAt, delta,
+			score_before AS scoreBefore, score_after AS scoreAfter, reason_code AS reasonCode,
+			reason, source, source_ref AS sourceRef, actor, expires_at AS expiresAt,
+			score_kind AS scoreKind FROM risk_ledger WHERE {' AND '.join(conditions)}
+			ORDER BY rowid DESC LIMIT ?""",
+			parameters,
+		)
+		has_more = len(rows) > limit
+		items = rows[:limit]
+		return {
+			"items": items,
+			"hasMore": has_more,
+			"nextCursor": int(items[-1]["cursor"]) if has_more and items else None,
+		}
+
 	def detail(self, subject_id: int) -> dict[str, Any] | None:
 		subject = self.subject_by_public_id(subject_id)
 		if not subject:
 			return None
-		ledger = self.database.query(
-			"""SELECT id, created_at AS createdAt, delta, score_before AS scoreBefore,
-			score_after AS scoreAfter, reason_code AS reasonCode, reason, source, source_ref AS sourceRef,
-			actor, expires_at AS expiresAt FROM risk_ledger WHERE subject_id = ?
-			ORDER BY created_at DESC, rowid DESC LIMIT 200""",
+		ledger_page = self.ledger_page(subject_id, limit=100)
+		ledger_total = self.database.query(
+			"SELECT COUNT(*) AS value FROM risk_ledger WHERE subject_id = ?",
 			(subject_id,),
-		)
+		)[0]["value"]
 		overrides = self.database.query(
 			"""SELECT id, override_type AS overrideType, value_integer AS value, scope_host AS scopeHost,
 			scope_path AS scopePath, reason, created_at AS createdAt, created_by AS createdBy,
@@ -544,7 +781,10 @@ class EntityRiskService:
 			"firstSeenAt": subject["first_seen_at"],
 			"lastSeenAt": subject["last_seen_at"],
 			"lastChangedAt": subject["last_changed_at"],
-			"ledger": ledger,
+			"ledger": ledger_page["items"],
+			"ledgerTotal": int(ledger_total),
+			"ledgerHasMore": ledger_page["hasMore"],
+			"ledgerNextCursor": ledger_page["nextCursor"],
 			"overrides": overrides,
 			"relations": relations,
 		}

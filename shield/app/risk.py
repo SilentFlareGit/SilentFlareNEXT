@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 from .geo import IpIntel
 
@@ -107,6 +108,25 @@ def score_request(
 	ua = headers.get("user-agent", "").lower()
 	add(any(marker in ua for marker in ("headless", "selenium", "playwright", "puppeteer")), "automation", "Automation browser signature")
 	add(not headers.get("user-agent") or not headers.get("accept"), "missing_headers", "Expected browser headers missing")
+	origin = headers.get("origin", "")
+	try:
+		origin_host = (urlsplit(origin).hostname or "").lower()
+	except ValueError:
+		origin_host = "invalid"
+	request_host = headers.get("host", "").split(":", 1)[0].lower()
+	abnormal_origin = bool(
+		origin
+		and (
+			origin_host == "invalid"
+			or not origin_host
+			or (
+				origin_host != request_host
+				and not origin_host.endswith(".silentflare.com")
+				and origin_host != "silentflare.com"
+			)
+		)
+	)
+	add(abnormal_origin, "abnormal_origin", "Abnormal request origin")
 	add(rate_exceeded, "rate_exceeded", "Rate policy exceeded")
 	add(list_status == "deny", "deny_list", "Matched deny list")
 	add(list_status == "allow", "allow_list", "Matched allow list")

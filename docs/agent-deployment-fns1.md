@@ -99,7 +99,7 @@ bash /opt/silentflare/app/shield/scripts/install-fns1-routing.sh
 
 The environment script copies existing host Turnstile settings without printing them. The routing script creates timestamped backups under `/etc/nginx/shield-backups`, runs `nginx -t`, reloads only on success, and restores the previous files on error. Public blog reads have the only process-down fail-open route. Account, API, Admin, and CMS requests fail closed; CMS connection upgrades use a direct Ghost exception because the current gateway is HTTP-only.
 
-When `server/api/app.py` changes, deploy and restart FastAPI before enabling Shield account-response buttons. Then deploy/rebuild Shield so the signed-command implementation and Shield migrations are active together. Shield 2.0 requires migrations `0009_entity_risk_ledger.sql` and `0010_risk_signal_queue.sql`; retain an online SQLite backup before applying them.
+When `server/api/app.py` changes, deploy and restart FastAPI before enabling Shield account-response buttons. Then deploy/rebuild Shield so the signed-command implementation and Shield migrations are active together. Shield 2.0 requires migrations `0009_entity_risk_ledger.sql`, `0010_risk_signal_queue.sql`, and `0011_complete_risk_ledger.sql`; retain an online SQLite backup before applying them.
 
 ## GitHub Actions Deployment
 

@@ -450,3 +450,4 @@ Add rule quality metrics, false-positive budgets, canary rules, historical basel
 - The original SilentFlare website remains operational after Nginx is pointed back to its original origins and Shield is stopped.
 - All five production hosts can traverse Shield without a public-port proxy loop, and blog reads remain available during a Shield process outage.
 - The live dashboard exposes only subject operations, versioned risk-factor weights, and one protection switch per configured site; all other automation remains internal.
+- The Subjects workspace keeps all eleven supported identity categories visible as direct controls and pages the complete append-only raw/effective score ledger, including gateway factors, account-posture factor changes, operator controls, cap/floor lifecycle, decay, and expiry.

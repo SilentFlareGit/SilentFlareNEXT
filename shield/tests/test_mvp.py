@@ -176,6 +176,47 @@ class ShieldMvpTests(unittest.TestCase):
 		service.revoke_override(int(override["id"]), "owner", "Trust window ended")
 		self.assertEqual(service.effective_score(updated), 80)
 
+	def test_effective_score_controls_record_apply_revoke_and_expiry(self):
+		service = EntityRiskService(self.database, KEY)
+		subject = service.ensure_subject("ip", "203.0.113.45")
+		service.adjust(
+			int(subject["id"]),
+			80,
+			reason_code="TEST_BASELINE",
+			reason="Establish test score",
+			source="test",
+			actor="test",
+		)
+		cap = service.add_override(
+			int(subject["id"]),
+			override_type="score_cap",
+			value=25,
+			reason="Verified temporary source",
+			actor="owner",
+			duration_seconds=60,
+		)
+		detail = service.detail(int(subject["id"]))
+		self.assertEqual(detail["ledger"][0]["scoreKind"], "effective")
+		self.assertEqual(detail["ledger"][0]["reasonCode"], "SCORE_CAP_APPLIED")
+		self.assertEqual((detail["ledger"][0]["scoreBefore"], detail["ledger"][0]["scoreAfter"]), (80, 25))
+		service.revoke_override(int(cap["id"]), "owner", "Temporary trust ended")
+		detail = service.detail(int(subject["id"]))
+		self.assertEqual(detail["ledger"][0]["reasonCode"], "SCORE_CAP_REVOKED")
+		self.assertEqual((detail["ledger"][0]["scoreBefore"], detail["ledger"][0]["scoreAfter"]), (25, 80))
+
+		expiring = service.add_override(
+			int(subject["id"]),
+			override_type="score_cap",
+			value=30,
+			reason="Short verification window",
+			actor="owner",
+			duration_seconds=60,
+		)
+		self.assertEqual(service.expire_due_overrides(int(expiring["expires_at"]) + 1), 1)
+		detail = service.detail(int(subject["id"]))
+		self.assertEqual(detail["ledger"][0]["reasonCode"], "SCORE_CAP_EXPIRED")
+		self.assertEqual((detail["ledger"][0]["scoreBefore"], detail["ledger"][0]["scoreAfter"]), (30, 80))
+
 	def test_gateway_signal_queue_is_applied_idempotently_by_worker(self):
 		service = EntityRiskService(self.database, KEY)
 		subject = service.ensure_subject("device", "device-reference")
@@ -192,6 +233,73 @@ class ShieldMvpTests(unittest.TestCase):
 		self.assertEqual(service.process_signal_queue(), 1)
 		self.assertEqual(service.process_signal_queue(), 0)
 		self.assertEqual(service.detail(int(subject["id"]))["currentScore"], 18)
+
+	def test_complete_ledger_is_available_through_cursor_pages(self):
+		service = EntityRiskService(self.database, KEY)
+		subject = service.ensure_subject("session", "ledger-pagination-session")
+		for index in range(205):
+			service.adjust(
+				int(subject["id"]),
+				1 if index % 2 == 0 else -1,
+				reason_code="PAGINATED_CHANGE",
+				reason=f"Score change {index}",
+				source="test",
+				actor="test",
+			)
+		detail = service.detail(int(subject["id"]))
+		self.assertEqual(detail["ledgerTotal"], 205)
+		self.assertEqual(len(detail["ledger"]), 100)
+		self.assertTrue(detail["ledgerHasMore"])
+		second = service.ledger_page(
+			int(subject["id"]),
+			before=detail["ledgerNextCursor"],
+			limit=100,
+		)
+		self.assertEqual(len(second["items"]), 100)
+		self.assertTrue(second["hasMore"])
+		third = service.ledger_page(
+			int(subject["id"]),
+			before=second["nextCursor"],
+			limit=100,
+		)
+		self.assertEqual(len(third["items"]), 5)
+		self.assertFalse(third["hasMore"])
+
+	def test_account_baseline_records_each_factor_increase_and_resolution(self):
+		service = EntityRiskService(self.database, KEY)
+		service.set_baseline(
+			"account",
+			"factor-ledger-account",
+			display="factor-ledger-account",
+			baseline=65,
+			reasons=["Two-factor authentication is not enabled", "Account is disabled"],
+			source_ref="posture:first",
+			factors={
+				"no_2fa": (5, "Two-factor authentication is not enabled"),
+				"disabled_account": (60, "Account is disabled"),
+			},
+		)
+		subject = service.ensure_subject("account", "factor-ledger-account")
+		detail = service.detail(int(subject["id"]))
+		self.assertEqual(detail["currentScore"], 65)
+		self.assertEqual(
+			{entry["reasonCode"] for entry in detail["ledger"]},
+			{"ACCOUNT_NO_2FA", "ACCOUNT_DISABLED_ACCOUNT"},
+		)
+		service.set_baseline(
+			"account",
+			"factor-ledger-account",
+			display="factor-ledger-account",
+			baseline=60,
+			reasons=["Account is disabled"],
+			source_ref="posture:second",
+			factors={"disabled_account": (60, "Account is disabled")},
+		)
+		detail = service.detail(int(subject["id"]))
+		self.assertEqual(detail["currentScore"], 60)
+		self.assertEqual(detail["ledger"][0]["reasonCode"], "ACCOUNT_NO_2FA")
+		self.assertEqual(detail["ledger"][0]["delta"], -5)
+		self.assertTrue(detail["ledger"][0]["reason"].startswith("Resolved:"))
 
 
 if __name__ == "__main__":
