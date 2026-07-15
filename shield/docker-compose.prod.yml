@@ -13,9 +13,7 @@ services:
       - 127.0.0.1
       - --port
       - "9080"
-      - --proxy-headers
-      - --forwarded-allow-ips
-      - 127.0.0.1
+      - --no-proxy-headers
     volumes:
       - shield-data:/app/data
     read_only: true

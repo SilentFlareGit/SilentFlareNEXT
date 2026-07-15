@@ -72,7 +72,8 @@ class EntityRiskService:
 			"""INSERT INTO risk_subjects(subject_type, subject_hash, display_value, first_seen_at,
 			last_seen_at, last_changed_at) VALUES (?, ?, ?, ?, ?, ?)
 			ON CONFLICT(subject_type, subject_hash) DO UPDATE SET
-			display_value=excluded.display_value, last_seen_at=excluded.last_seen_at""",
+			display_value=excluded.display_value, last_seen_at=excluded.last_seen_at,
+			provenance_status='verified'""",
 			(subject_type, digest, display[:160], now, now, now),
 		)
 		return self.database.query(
@@ -700,7 +701,7 @@ class EntityRiskService:
 		query: str = "",
 		limit: int = 100,
 	) -> list[dict[str, Any]]:
-		conditions = ["current_score >= ?"]
+		conditions = ["current_score >= ?", "provenance_status = 'verified'"]
 		parameters: list[Any] = [minimum_score]
 		if subject_type:
 			conditions.append("subject_type = ?")

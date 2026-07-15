@@ -9,7 +9,7 @@ from pathlib import Path
 from app.blocking import ban_error_code, normalize_ban_subject
 from app.database import Database
 from app.entity_risk import EntityRiskService
-from app.geo import IpIntel
+from app.geo import GeoService, IpIntel
 from app.rate_limit import RateLimiter
 from app.risk import score_request
 from app.rules import AccessListService, RequestContext, matches_expression
@@ -85,6 +85,54 @@ class ShieldMvpTests(unittest.TestCase):
 		result = score_request(intel, {"user-agent": "Playwright Headless", "accept": "*/*"}, {})
 		self.assertGreaterEqual(result.score, 60)
 		self.assertEqual(result.level, "restrict")
+
+	def test_geo_intel_requires_source_agreement_for_high_confidence(self):
+		service = GeoService(
+			self.database,
+			KEY,
+			"https://geo.test/{ip}",
+			"https://routing.test/{ip}",
+			3600,
+			False,
+		)
+		cloudflare = IpIntel(
+			"8.8.8.8",
+			country_code="US",
+			region="California",
+			region_code="CA",
+		)
+		provider = IpIntel(
+			"8.8.8.8",
+			country_code="US",
+			region="California",
+			asn="AS15169",
+			country_source="ipwho",
+			region_source="ipwho",
+			asn_source="ipwho",
+		)
+		intel = service._merge("8.8.8.8", cloudflare, provider, ["AS15169"], "8.8.8.0/24")
+		self.assertEqual(intel.country_confidence, "high")
+		self.assertEqual(intel.region_confidence, "high")
+		self.assertEqual(intel.asn_confidence, "high")
+		self.assertEqual(intel.network_prefix, "8.8.8.0/24")
+		self.assertEqual(intel.conflict_fields, [])
+
+	def test_geo_intel_exposes_conflicts_and_prefers_routing_asn(self):
+		service = GeoService(
+			self.database,
+			KEY,
+			"https://geo.test/{ip}",
+			"https://routing.test/{ip}",
+			3600,
+			False,
+		)
+		cloudflare = IpIntel("8.8.8.8", country_code="US", region="California")
+		provider = IpIntel("8.8.8.8", country_code="CA", region="Ontario", asn="AS64500")
+		intel = service._merge("8.8.8.8", cloudflare, provider, ["AS15169"], "8.8.8.0/24")
+		self.assertEqual(intel.country_code, "US")
+		self.assertEqual(intel.asn, "AS15169")
+		self.assertEqual(intel.country_confidence, "medium")
+		self.assertCountEqual(intel.conflict_fields, ["country", "region", "asn"])
 
 	def test_risk_thresholds_are_configurable(self):
 		intel = IpIntel("203.0.113.8", is_proxy=True)

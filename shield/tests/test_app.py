@@ -20,10 +20,11 @@ os.environ["SHIELD_COOKIE_SECURE"] = "false"
 
 from fastapi.testclient import TestClient
 import httpx
+from starlette.requests import Request
 
 from app.config import settings
 from app.database import stable_hash
-from app.main import _automatic_ban, _entity_subjects, _reconcile_entity_bans, _record_entity_signals, app
+from app.main import _automatic_ban, _client_identity, _entity_subjects, _reconcile_entity_bans, _record_entity_signals, app
 from app.rate_limit import RateHit
 from app.risk import RiskResult
 from app.rules import RequestContext, RuleDecision
@@ -71,6 +72,41 @@ class ShieldApplicationTests(unittest.TestCase):
 		ready = self.client.get("/__shield/health/ready")
 		self.assertEqual(ready.status_code, 200)
 		self.assertEqual(ready.json()["mode"], "observe")
+
+	def test_trusted_edge_header_is_the_only_forwarded_client_identity(self):
+		request = Request(
+			{
+				"type": "http",
+				"method": "GET",
+				"path": "/",
+				"headers": [
+					(b"x-sf-client-ip", b"8.8.8.8"),
+					(b"x-forwarded-for", b"1.1.1.1"),
+				],
+				"client": ("127.0.0.1", 12345),
+				"server": ("127.0.0.1", 9080),
+				"scheme": "http",
+			}
+		)
+		identity = _client_identity(request)
+		self.assertEqual(identity.ip, "8.8.8.8")
+		self.assertEqual(identity.source, "trusted_edge")
+
+	def test_untrusted_peer_cannot_spoof_edge_identity(self):
+		request = Request(
+			{
+				"type": "http",
+				"method": "GET",
+				"path": "/",
+				"headers": [(b"x-sf-client-ip", b"8.8.8.8")],
+				"client": ("203.0.113.10", 12345),
+				"server": ("127.0.0.1", 9080),
+				"scheme": "http",
+			}
+		)
+		identity = _client_identity(request)
+		self.assertEqual(identity.ip, "203.0.113.10")
+		self.assertEqual(identity.source, "direct_peer")
 
 	def test_admin_requires_authentication(self):
 		self.assertEqual(self.client.get("/__shield/api/admin/overview").status_code, 401)

@@ -10,6 +10,7 @@ import sqlite3
 import time
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,7 @@ BLOCK_HTML = (STATIC_ROOT / "blocked.html").read_text(encoding="utf-8").replace(
 	"__BLOCK_ASSET_VERSION__", BLOCK_ASSET_VERSION
 )
 HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade"}
+EDGE_IDENTITY_HEADERS = {"x-sf-client-ip", "x-sf-proxy-ip", "cf-connecting-ip"}
 SENSITIVE_PATHS = ("/auth/", "/accounts/register/", "/admin", "/comments/create")
 class AccessListInput(BaseModel):
 	kind: str = Field(pattern=r"^(allow|deny)$")
@@ -173,7 +175,14 @@ def build_services(config: Settings, *, migrate: bool = True):
 	key = config.internal_signing_key or "bypass-development-key"
 	return (
 		database,
-		GeoService(database, key, config.geo_url_template, config.geo_cache_ttl, config.allow_private_geo),
+		GeoService(
+			database,
+			key,
+			config.geo_url_template,
+			config.routing_url_template,
+			config.geo_cache_ttl,
+			config.allow_private_geo,
+		),
 		RuleEngine(database),
 		AccessListService(database, key),
 		RateLimiter(database, key),
@@ -221,17 +230,31 @@ def _trusted_peer(request: Request) -> bool:
 		return False
 
 
-def _client_ip(request: Request) -> str:
+@dataclass(frozen=True)
+class ClientIdentity:
+	ip: str
+	source: str
+
+
+def _client_identity(request: Request) -> ClientIdentity:
 	peer = request.client.host if request.client else "127.0.0.1"
 	if not _trusted_peer(request):
-		return peer
-	for candidate in (request.headers.get("cf-connecting-ip"), (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()):
+		return ClientIdentity(peer, "direct_peer")
+	for header, source in (
+		("x-sf-client-ip", "trusted_edge"),
+		("cf-connecting-ip", "cloudflare_legacy"),
+	):
+		candidate = request.headers.get(header, "").strip()
 		try:
 			if candidate:
-				return str(ipaddress.ip_address(candidate))
+				return ClientIdentity(str(ipaddress.ip_address(candidate)), source)
 		except ValueError:
 			continue
-	return peer
+	return ClientIdentity(peer, "trusted_proxy_peer")
+
+
+def _client_ip(request: Request) -> str:
+	return _client_identity(request).ip
 
 
 def _host(request: Request) -> str:
@@ -537,6 +560,7 @@ def _reconcile_entity_bans(database: Database, entities: EntityRiskService | Non
 	eligible = database.query(
 		"""SELECT id, subject_type, subject_hash, display_value, current_score FROM risk_subjects
 		WHERE subject_type IN ('ip', 'session', 'device', 'api_key', 'email', 'email_domain')
+		AND provenance_status = 'verified'
 		AND (current_score >= 80 OR EXISTS (
 			SELECT 1 FROM risk_overrides WHERE risk_overrides.subject_id = risk_subjects.id
 			AND override_type = 'score_floor' AND value_integer >= 80 AND revoked_at IS NULL
@@ -789,7 +813,8 @@ def _failure_response(host: str, path: str, method: str, request_id: str, fail_p
 
 def _memory_degraded_context(request: Request, request_id: str, host: str) -> tuple[RequestContext, RiskResult, bool]:
 	now = int(time.time())
-	ip = _client_ip(request)
+	identity = _client_identity(request)
+	ip = identity.ip
 	window = now // 60
 	key = (stable_hash(ip, settings.internal_signing_key), host, request.url.path, request.method, window)
 	counters = request.app.state.degraded_counters
@@ -800,7 +825,7 @@ def _memory_degraded_context(request: Request, request_id: str, host: str) -> tu
 	exceeded = counters[key] > limit
 	headers = {name.lower(): value for name, value in request.headers.items()}
 	risk = score_request(IpIntel(ip=ip), headers, {}, rate_exceeded=exceeded)
-	context = RequestContext(request_id, host, request.url.path, request.method, ip, device_id=_device_id(request, ip), risk_score=risk.score, rate_exceeded=exceeded)
+	context = RequestContext(request_id, host, request.url.path, request.method, ip, device_id=_device_id(request, ip), risk_score=risk.score, rate_exceeded=exceeded, extra={"client_ip_source": identity.source, "geo_source": "degraded", "geo_confidence": "unknown"})
 	events = request.app.state.degraded_events
 	events.append({"createdAt": now, "requestId": request_id, "host": host, "path": request.url.path, "method": request.method, "ipMasked": mask_ip(ip), "riskScore": risk.score, "reason": "database_unavailable"})
 	del events[:-1000]
@@ -1273,8 +1298,9 @@ def _event(database: Database, context: RequestContext, risk: RiskResult, rules:
 	database.execute(
 		"""INSERT INTO risk_events(id, created_at, trace_id, risk_level, risk_score, host, path, method,
 		ip_hash, ip_masked, country_code, region, asn, ip_type, account_id_hash, device_id_hash,
-		session_id_hash, matched_rules_json, reasons_json, actions_json, request_summary_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+		session_id_hash, matched_rules_json, reasons_json, actions_json, request_summary_json,
+		client_ip_source, geo_source, geo_confidence)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
 		(
 			context.request_id, int(time.time()), context.request_id, risk.level, risk.score, context.host,
 			context.path, context.method, stable_hash(context.ip, settings.internal_signing_key), mask_ip(context.ip),
@@ -1284,6 +1310,8 @@ def _event(database: Database, context: RequestContext, risk: RiskResult, rules:
 			stable_hash(context.session_id, settings.internal_signing_key) if context.session_id else None,
 			json.dumps(rules.matched_rules, separators=(",", ":")), json.dumps(risk.reasons, separators=(",", ":")),
 			json.dumps(actions, separators=(",", ":")), json.dumps(_safe_request_summary(request, body), separators=(",", ":")),
+			context.extra.get("client_ip_source", "unknown"), context.extra.get("geo_source", "unknown"),
+			context.extra.get("geo_confidence", "unknown"),
 		),
 	)
 	config = database.query("SELECT enabled, minimum_score FROM alert_config WHERE id = 1")
@@ -1328,7 +1356,13 @@ async def _proxy(request: Request, body: bytes, upstream: str, context: RequestC
 	url = f"{upstream}{request.url.path}"
 	if request.url.query:
 		url += f"?{request.url.query}"
-	headers = {name.lower(): value for name, value in request.headers.items() if name.lower() not in HOP_BY_HOP and name.lower() not in SHIELD_HEADERS}
+	headers = {
+		name.lower(): value
+		for name, value in request.headers.items()
+		if name.lower() not in HOP_BY_HOP
+		and name.lower() not in SHIELD_HEADERS
+		and name.lower() not in EDGE_IDENTITY_HEADERS
+	}
 	headers["host"] = _host(request)
 	headers["x-forwarded-proto"] = request.headers.get("x-forwarded-proto", request.url.scheme)
 	headers["x-forwarded-for"] = context.ip if context else _client_ip(request)
@@ -1359,14 +1393,16 @@ async def _proxy(request: Request, body: bytes, upstream: str, context: RequestC
 				request.app.state.database.execute(
 					"""INSERT INTO risk_events(id, created_at, trace_id, risk_level, risk_score, host, path, method,
 					ip_hash, ip_masked, country_code, region, asn, ip_type, device_id_hash, matched_rules_json,
-					reasons_json, actions_json, request_summary_json) VALUES (?, ?, ?, 'restrict', 65, ?, ?, ?, ?, ?,
-					?, ?, ?, ?, ?, '[]', ?, ?, ?)""",
+					reasons_json, actions_json, request_summary_json, client_ip_source, geo_source, geo_confidence)
+					VALUES (?, ?, ?, 'restrict', 65, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?)""",
 					(event_id, now, context.request_id, context.host, context.path, context.method,
 					stable_hash(context.ip, settings.internal_signing_key), mask_ip(context.ip), context.country,
 					context.region, context.asn, context.ip_type,
 					stable_hash(context.device_id, settings.internal_signing_key) if context.device_id else None,
 					json.dumps(["Repeated 404 responses indicate path scanning"]), json.dumps(actions),
-					json.dumps(_safe_request_summary(request, body), separators=(",", ":"))),
+					json.dumps(_safe_request_summary(request, body), separators=(",", ":")),
+					context.extra.get("client_ip_source", "unknown"), context.extra.get("geo_source", "unknown"),
+					context.extra.get("geo_confidence", "unknown")),
 				)
 				if "temporary_ban" in actions:
 					expires_at = now + max(hit.retry_after for hit in response_hits)
@@ -1858,13 +1894,13 @@ async def admin_account_response(account_id_hash: str, payload: AccountResponseI
 @app.get("/__shield/api/admin/events")
 async def admin_events(request: Request, limit: int = 100, minimum_score: int = 0):
 	await _admin(request)
-	return request.app.state.database.query("SELECT id, created_at, risk_level, risk_score, host, path, method, ip_masked, country_code, asn, ip_type, matched_rules_json, reasons_json, actions_json, review_status FROM risk_events WHERE risk_score >= ? ORDER BY created_at DESC LIMIT ?", (max(0, minimum_score), min(500, max(1, limit))))
+	return request.app.state.database.query("SELECT id, created_at, risk_level, risk_score, host, path, method, ip_masked, country_code, asn, ip_type, client_ip_source, geo_source, geo_confidence, matched_rules_json, reasons_json, actions_json, review_status FROM risk_events WHERE risk_score >= ? ORDER BY created_at DESC LIMIT ?", (max(0, minimum_score), min(500, max(1, limit))))
 
 
 @app.get("/__shield/api/admin/intel")
 async def admin_intel(request: Request, limit: int = 200):
 	await _admin(request)
-	return request.app.state.database.query("SELECT ip_masked, country_code, region, city, timezone, asn, isp, organization, ip_type, is_vpn, is_proxy, is_tor, is_crawler, is_malicious, risk_score, first_seen_at, last_seen_at FROM ip_intel ORDER BY last_seen_at DESC LIMIT ?", (min(500, max(1, limit)),))
+	return request.app.state.database.query("SELECT ip_masked, country_code, region, region_code, city, timezone, asn, network_prefix, isp, organization, ip_type, is_vpn, is_proxy, is_tor, is_crawler, is_malicious, risk_score, country_source, region_source, asn_source, country_confidence, region_confidence, asn_confidence, conflict_fields, first_seen_at, last_seen_at FROM ip_intel WHERE provenance_status = 'verified' ORDER BY last_seen_at DESC LIMIT ?", (min(500, max(1, limit)),))
 
 
 @app.get("/__shield/api/admin/entities")
@@ -1888,7 +1924,7 @@ async def admin_entities(
 	count_rows = request.app.state.database.query(
 		"""SELECT subject_type AS subjectType, COUNT(*) AS total,
 		SUM(CASE WHEN current_score >= 50 THEN 1 ELSE 0 END) AS elevated,
-		MAX(current_score) AS maximumScore FROM risk_subjects GROUP BY subject_type
+			MAX(current_score) AS maximumScore FROM risk_subjects WHERE provenance_status = 'verified' GROUP BY subject_type
 		ORDER BY CASE subject_type WHEN 'account' THEN 1 WHEN 'ip' THEN 2 WHEN 'asn' THEN 3
 		WHEN 'session' THEN 4 WHEN 'device' THEN 5 WHEN 'api_key' THEN 6 ELSE 20 END, subject_type"""
 	)
@@ -1914,6 +1950,31 @@ async def admin_entity_detail(subject_id: int, request: Request):
 	detail = request.app.state.entities.detail(subject_id)
 	if not detail:
 		raise HTTPException(status_code=404, detail="Risk subject not found")
+	subject = request.app.state.entities.subject_by_public_id(subject_id)
+	if subject and subject["subject_type"] == "ip":
+		rows = request.app.state.database.query(
+			"""SELECT country_code AS countryCode, region, region_code AS regionCode, city, asn,
+			network_prefix AS networkPrefix, country_source AS countrySource,
+			region_source AS regionSource, asn_source AS asnSource,
+			country_confidence AS countryConfidence, region_confidence AS regionConfidence,
+			asn_confidence AS asnConfidence, conflict_fields AS conflictFields,
+			last_seen_at AS lastSeenAt FROM ip_intel WHERE ip_hash = ? LIMIT 1""",
+			(subject["subject_hash"],),
+		)
+		if rows:
+			rows[0]["conflictFields"] = json.loads(rows[0]["conflictFields"] or "[]")
+			detail["intelligence"] = rows[0]
+	elif subject and subject["subject_type"] == "asn":
+		rows = request.app.state.database.query(
+			"""SELECT COUNT(*) AS observedIps, COUNT(DISTINCT country_code) AS observedCountries,
+			MAX(last_seen_at) AS lastSeenAt,
+			CASE WHEN SUM(CASE WHEN asn_confidence = 'high' THEN 1 ELSE 0 END) > 0
+			THEN 'high' WHEN COUNT(*) > 0 THEN 'medium' ELSE 'unknown' END AS asnConfidence
+			FROM ip_intel WHERE asn = ?""",
+			(subject["display_value"],),
+		)
+		if rows:
+			detail["intelligence"] = rows[0]
 	return detail
 
 
@@ -2383,14 +2444,22 @@ async def gateway(path: str, request: Request):
 	try:
 		mode = _service_mode(request.app.state.database, host)
 		fail_policy = _service_fail_policy(request.app.state.database, host)
+		identity = _client_identity(request)
+		ip = identity.ip
 		if mode == "bypass":
-			context = RequestContext(request_id, host, request.url.path, request.method, _client_ip(request))
+			context = RequestContext(
+				request_id,
+				host,
+				request.url.path,
+				request.method,
+				ip,
+				extra={"client_ip_source": identity.source, "geo_source": "bypass", "geo_confidence": "unknown"},
+			)
 			return await _proxy(request, body, upstream, context, RiskResult(0, "normal", []), "bypass")
-		ip = _client_ip(request)
 		headers = {name.lower(): value for name, value in request.headers.items()}
 		if not _trusted_peer(request):
 			headers = {name: value for name, value in headers.items() if not name.startswith("cf-")}
-		intel, _source = await request.app.state.geo.lookup(ip, headers)
+		intel, geo_source = await request.app.state.geo.lookup(ip, headers)
 		context = RequestContext(
 			request_id=request_id,
 			host=host,
@@ -2406,6 +2475,11 @@ async def gateway(path: str, request: Request):
 			email=_email_from_body(body, request.headers.get("content-type", "")),
 			api_key=_api_key(request),
 			user_agent=request.headers.get("user-agent", ""),
+			extra={
+				"client_ip_source": identity.source,
+				"geo_source": geo_source,
+				"geo_confidence": intel.country_confidence,
+			},
 		)
 		list_status, list_match = request.app.state.access.match(context)
 		ban = request.app.state.access.active_ban(context)

@@ -160,7 +160,9 @@ Policy actions can override the score. An allow list is evaluated before score e
 
 ## 7. Gateway and Reverse Proxy Design
 
-Nginx sends the original `Host`, normalized client forwarding chain, and scheme to Shield. Shield accepts forwarding headers only from configured trusted proxy CIDRs, removes every inbound `X-SF-Shield-*` value, resolves the host through an explicit upstream map, evaluates the request, creates new signed headers, and proxies with bounded connection/read timeouts.
+Nginx restores the visitor address only when the socket peer belongs to Cloudflare's published network list, then sends that address to Shield in the internal `X-SF-Client-IP` header. Uvicorn proxy-header rewriting is disabled so Shield can independently verify the Nginx socket peer before accepting this header. Shield ignores public `X-Forwarded-For` input, removes edge identity and inbound `X-SF-Shield-*` values before proxying, resolves the host through an explicit upstream map, evaluates the request, creates new signed headers, and proxies with bounded connection/read timeouts.
+
+Location and network identity use independent evidence. Cloudflare Managed Transform headers are fused with the cache-backed GeoIP provider; RIPEstat's routed-prefix observation validates the current origin ASN. The cache records a source and `high`, `medium`, `low`, or `unknown` confidence for country, region, and ASN separately. Conflicts remain visible to operators rather than being silently overwritten. Nginx's Cloudflare CIDRs are versioned in `shield/nginx/fns1/silentflare-cloudflare-real-ip.conf` and must be synchronized with Cloudflare's official IPv4 and IPv6 lists during routine edge maintenance.
 
 Origins are never public listeners. Firewall rules should allow the origin ports only from localhost/container networking. This is essential: if users can reach an origin directly, Shield is advisory rather than a perimeter.
 

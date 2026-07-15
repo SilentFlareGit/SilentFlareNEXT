@@ -29,6 +29,7 @@ TARGETS=(
 	/etc/nginx/sites-available/silentflare-api
 	/etc/nginx/sites-available/silentflare-cms
 	/etc/nginx/sites-available/silentflare-shield-portal
+	/etc/nginx/conf.d/silentflare-cloudflare-real-ip.conf
 	/etc/nginx/conf.d/silentflare-shield-origin.conf
 	/etc/nginx/snippets/silentflare-shield-blog.conf
 	/etc/nginx/snippets/silentflare-shield-api.conf
@@ -66,6 +67,7 @@ install -m 0644 "${SOURCE_DIR}/silentflare-admin.conf" /etc/nginx/sites-availabl
 install -m 0644 "${SOURCE_DIR}/silentflare-api.conf" /etc/nginx/sites-available/silentflare-api
 install -m 0644 "${SOURCE_DIR}/silentflare-cms.conf" /etc/nginx/sites-available/silentflare-cms
 install -m 0644 "${SOURCE_DIR}/silentflare-shield-portal.conf" /etc/nginx/sites-available/silentflare-shield-portal
+install -m 0644 "${SOURCE_DIR}/silentflare-cloudflare-real-ip.conf" /etc/nginx/conf.d/silentflare-cloudflare-real-ip.conf
 install -m 0644 "${SOURCE_DIR}/silentflare-shield-origin.conf" /etc/nginx/conf.d/silentflare-shield-origin.conf
 install -m 0644 "${SOURCE_DIR}/silentflare-shield-blog.conf" /etc/nginx/snippets/silentflare-shield-blog.conf
 install -m 0644 "${SOURCE_DIR}/silentflare-shield-api.conf" /etc/nginx/snippets/silentflare-shield-api.conf

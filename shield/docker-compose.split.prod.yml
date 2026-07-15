@@ -24,7 +24,7 @@ services:
 
   gateway:
     <<: *shield-common
-    command: ["uvicorn", "app.gateway.app:app", "--host", "127.0.0.1", "--port", "9080", "--proxy-headers", "--forwarded-allow-ips", "127.0.0.1"]
+    command: ["uvicorn", "app.gateway.app:app", "--host", "127.0.0.1", "--port", "9080", "--no-proxy-headers"]
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -37,7 +37,7 @@ services:
 
   control:
     <<: *shield-common
-    command: ["uvicorn", "app.control.app:app", "--host", "127.0.0.1", "--port", "9082", "--proxy-headers", "--forwarded-allow-ips", "127.0.0.1"]
+    command: ["uvicorn", "app.control.app:app", "--host", "127.0.0.1", "--port", "9082", "--no-proxy-headers"]
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -50,7 +50,7 @@ services:
 
   portal:
     <<: *shield-common
-    command: ["uvicorn", "app.portal.app:app", "--host", "127.0.0.1", "--port", "9083", "--proxy-headers", "--forwarded-allow-ips", "127.0.0.1"]
+    command: ["uvicorn", "app.portal.app:app", "--host", "127.0.0.1", "--port", "9083", "--no-proxy-headers"]
     depends_on:
       migrate:
         condition: service_completed_successfully

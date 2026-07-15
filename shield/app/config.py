@@ -88,6 +88,12 @@ class Settings:
 	geo_url_template: str = field(
 		default_factory=lambda: os.getenv("SHIELD_GEO_URL_TEMPLATE", "https://ipwho.is/{ip}")
 	)
+	routing_url_template: str = field(
+		default_factory=lambda: os.getenv(
+			"SHIELD_ROUTING_URL_TEMPLATE",
+			"https://stat.ripe.net/data/network-info/data.json?resource={ip}",
+		)
+	)
 	geo_cache_ttl: int = field(default_factory=lambda: _integer("SHIELD_GEO_CACHE_TTL", 86400))
 	proxy_timeout_seconds: int = field(default_factory=lambda: _integer("SHIELD_PROXY_TIMEOUT_SECONDS", 10))
 	max_body_bytes: int = field(default_factory=lambda: _integer("SHIELD_MAX_BODY_BYTES", 4_194_304))

@@ -43,6 +43,23 @@ type SubjectDetail = Subject & {
 	ledgerHasMore: boolean;
 	ledgerNextCursor?: number;
 	overrides: Override[];
+	intelligence?: {
+		countryCode?: string;
+		region?: string;
+		regionCode?: string;
+		city?: string;
+		asn?: string;
+		networkPrefix?: string;
+		countrySource?: string;
+		regionSource?: string;
+		asnSource?: string;
+		countryConfidence?: string;
+		regionConfidence?: string;
+		asnConfidence?: string;
+		conflictFields?: string[];
+		observedIps?: number;
+		observedCountries?: number;
+	};
 };
 type SubjectType = {
 	key: string;
@@ -355,9 +372,18 @@ onMount(loadSubjects);
 					<button class="close-button" onclick={() => (selected = null)} aria-label="Close subject details">
 						<Icon icon="material-symbols:close-rounded" />
 					</button>
-				</header>
+					</header>
 
-				<form
+					{#if selected.intelligence}
+						<section class="intelligence" aria-label="Network intelligence">
+							<div><small>Country</small><strong>{selected.intelligence.countryCode || "Unknown"}</strong><span>{selected.intelligence.countryConfidence || "unknown"} / {selected.intelligence.countrySource || "no source"}</span></div>
+							<div><small>Region</small><strong>{selected.intelligence.region || "Unknown"}{selected.intelligence.regionCode ? ` (${selected.intelligence.regionCode})` : ""}</strong><span>{selected.intelligence.regionConfidence || "unknown"} / {selected.intelligence.regionSource || "no source"}</span></div>
+							<div><small>ASN</small><strong>{selected.intelligence.asn || (selected.subjectType === "asn" ? selected.displayValue : "Unknown")}</strong><span>{selected.intelligence.asnConfidence || "unknown"} / {selected.intelligence.asnSource || `${selected.intelligence.observedIps || 0} observed IPs`}</span></div>
+							<div><small>{selected.subjectType === "asn" ? "Coverage" : "Prefix"}</small><strong>{selected.subjectType === "asn" ? `${selected.intelligence.observedCountries || 0} countries` : selected.intelligence.networkPrefix || "Not resolved"}</strong><span>{selected.intelligence.conflictFields?.length ? `Conflict: ${selected.intelligence.conflictFields.join(", ")}` : "No source conflict"}</span></div>
+						</section>
+					{/if}
+
+					<form
 					class="manual-control"
 					onsubmit={(event) => {
 						event.preventDefault();
@@ -448,6 +474,12 @@ onMount(loadSubjects);
 <style>
 	:global(*) { box-sizing: border-box; }
 	.subjects-workspace { min-width: 0; }
+	.intelligence { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 1px solid #d7e0e7; background: #f8fbfd; }
+	.intelligence > div { min-width: 0; padding: .75rem; border-right: 1px solid #e2e9ee; }
+	.intelligence > div:last-child { border-right: 0; }
+	.intelligence small, .intelligence span { display: block; color: #63798b; font-size: .72rem; overflow-wrap: anywhere; }
+	.intelligence strong { display: block; margin: .18rem 0; color: #183247; font-size: .86rem; overflow-wrap: anywhere; }
+	@media (max-width: 900px) { .intelligence { grid-template-columns: repeat(2, minmax(0, 1fr)); } .intelligence > div:nth-child(2) { border-right: 0; } }
 	.filters { display: grid; gap: .75rem; margin-bottom: 1rem; border: 1px solid #d7e0e7; background: #fff; padding: .75rem; }
 	.filters > header { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
 	.filters > header strong { font-size: .8rem; }
