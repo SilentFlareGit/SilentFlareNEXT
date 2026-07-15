@@ -3430,6 +3430,32 @@ def shield_account_snapshot(
 	return {"ok": True, "users": users, "generated_at": utc_now()}
 
 
+@app.get("/internal/shield/session")
+def shield_account_session(
+	request: Request,
+	x_sf_shield_timestamp: str | None = Header(default=None),
+	x_sf_shield_signature: str | None = Header(default=None),
+) -> dict[str, Any]:
+	if len(SHIELD_SYNC_SECRET) < 32:
+		raise HTTPException(status_code=503, detail="Shield synchronization is not configured")
+	try:
+		timestamp = int(x_sf_shield_timestamp or "")
+	except ValueError as error:
+		raise HTTPException(status_code=401, detail="Invalid Shield synchronization signature") from error
+	if abs(int(time.time()) - timestamp) > 60:
+		raise HTTPException(status_code=401, detail="Expired Shield synchronization signature")
+	message = f"GET\n/internal/shield/session\n{timestamp}"
+	expected = hmac.new(
+		SHIELD_SYNC_SECRET.encode("utf-8"),
+		message.encode("utf-8"),
+		hashlib.sha256,
+	).hexdigest()
+	if not x_sf_shield_signature or not hmac.compare_digest(x_sf_shield_signature, expected):
+		raise HTTPException(status_code=401, detail="Invalid Shield synchronization signature")
+	user = get_account_user(request)
+	return {"ok": True, "account_id": str(user["id"]) if user else None}
+
+
 @app.post("/internal/shield/respond")
 def shield_account_response(
 	payload: ShieldResponsePayload,

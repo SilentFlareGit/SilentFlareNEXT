@@ -36,6 +36,27 @@ type Override = {
 	expiresAt?: number;
 	revokedAt?: number;
 };
+type Evidence = {
+	id: number;
+	evidenceType: string;
+	displayValue: string;
+	firstSeenAt: number;
+	lastSeenAt: number;
+	observationCount: number;
+	confidence: number;
+};
+type LinkedSubject = {
+	id: number;
+	subjectType: "account" | "ip";
+	displayValue: string;
+	currentScore: number;
+	riskLevel: string;
+	firstSeenAt: number;
+	lastSeenAt: number;
+	requestCount: number;
+	authenticatedCount: number;
+	confidence: number;
+};
 type SubjectDetail = Subject & {
 	effectiveScore: number;
 	ledger: LedgerEntry[];
@@ -43,6 +64,19 @@ type SubjectDetail = Subject & {
 	ledgerHasMore: boolean;
 	ledgerNextCursor?: number;
 	overrides: Override[];
+	evidence: Evidence[];
+	linkedSubjects: LinkedSubject[];
+	posture?: {
+		accountLabel?: string;
+		role?: string;
+		countryCode?: string;
+		emailVerified?: number;
+		twoFactorEnabled?: number;
+		disabled?: number;
+		activeSessionCount?: number;
+		commentCount?: number;
+		lastSeenAt?: number;
+	};
 	intelligence?: {
 		countryCode?: string;
 		region?: string;
@@ -95,11 +129,11 @@ const activeOverrides = $derived(
 );
 const subjectTypeIcons: Record<string, string> = {
 	account: "material-symbols:person-outline-rounded",
+	ip: "material-symbols:lan-outline-rounded",
 	session: "material-symbols:login-rounded",
 	device: "material-symbols:devices-outline-rounded",
-	ip: "material-symbols:lan-outline-rounded",
 	cidr: "material-symbols:lan-outline-rounded",
-	asn: "material-symbols:lan-outline-rounded",
+	asn: "material-symbols:hub-outline-rounded",
 	email: "material-symbols:mail-outline-rounded",
 	email_domain: "material-symbols:alternate-email-rounded",
 	api_key: "material-symbols:key-outline-rounded",
@@ -163,7 +197,7 @@ async function chooseMinimum(value: number) {
 	await loadSubjects();
 }
 
-async function openSubject(subject: Subject) {
+async function openSubject(subject: { id: number }) {
 	detailLoading = true;
 	try {
 		selected = await api<SubjectDetail>(`/entities/${subject.id}`);
@@ -383,6 +417,50 @@ onMount(loadSubjects);
 						</section>
 					{/if}
 
+					{#if selected.posture}
+						<section class="posture" aria-label="Account posture">
+							<div><small>Account</small><strong>{selected.posture.accountLabel || selected.displayValue}</strong><span>{selected.posture.role || "user"}</span></div>
+							<div><small>Email</small><strong>{selected.posture.emailVerified ? "Verified" : "Unverified"}</strong><span>{selected.posture.countryCode || "No region"}</span></div>
+							<div><small>Two-factor</small><strong>{selected.posture.twoFactorEnabled ? "Enabled" : "Disabled"}</strong><span>{selected.posture.disabled ? "Account disabled" : "Account active"}</span></div>
+							<div><small>Activity</small><strong>{selected.posture.activeSessionCount || 0} sessions</strong><span>{selected.posture.commentCount || 0} comments</span></div>
+						</section>
+					{/if}
+
+					<section class="detail-section linked-section">
+						<header><h3>{selected.subjectType === "account" ? "Linked IP addresses" : "Linked accounts"}</h3><span>{selected.linkedSubjects.length}</span></header>
+						{#if selected.linkedSubjects.length === 0}
+							<p class="empty-line">No authenticated relationship has been observed.</p>
+						{:else}
+							<div class="linked-list">
+								{#each selected.linkedSubjects as linked (linked.id)}
+									<button type="button" onclick={() => openSubject(linked)}>
+										<span class={`score ${linked.riskLevel}`}>{linked.currentScore}</span>
+										<span><strong>{linked.displayValue}</strong><small>{linked.requestCount} requests / {linked.confidence}% confidence</small></span>
+										<time>{formatTime(linked.lastSeenAt)}</time>
+										<Icon icon="material-symbols:chevron-right-rounded" />
+									</button>
+								{/each}
+							</div>
+						{/if}
+					</section>
+
+					<section class="detail-section evidence-section">
+						<header><h3>Observed evidence</h3><span>{selected.evidence.length}</span></header>
+						{#if selected.evidence.length === 0}
+							<p class="empty-line">No supporting evidence has been observed.</p>
+						{:else}
+							<div class="evidence-list">
+								{#each selected.evidence as item (item.id)}
+									<div>
+										<span class="evidence-icon"><Icon icon={subjectTypeIcons[item.evidenceType] ?? "material-symbols:fact-check-outline-rounded"} /></span>
+										<span><strong>{item.displayValue || typeLabel(item.evidenceType)}</strong><small>{typeLabel(item.evidenceType)} / {item.observationCount} observations / {item.confidence}% confidence</small></span>
+										<time>{formatTime(item.lastSeenAt)}</time>
+									</div>
+								{/each}
+							</div>
+						{/if}
+					</section>
+
 					<form
 					class="manual-control"
 					onsubmit={(event) => {
@@ -474,17 +552,16 @@ onMount(loadSubjects);
 <style>
 	:global(*) { box-sizing: border-box; }
 	.subjects-workspace { min-width: 0; }
-	.intelligence { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 1px solid #d7e0e7; background: #f8fbfd; }
-	.intelligence > div { min-width: 0; padding: .75rem; border-right: 1px solid #e2e9ee; }
-	.intelligence > div:last-child { border-right: 0; }
-	.intelligence small, .intelligence span { display: block; color: #63798b; font-size: .72rem; overflow-wrap: anywhere; }
-	.intelligence strong { display: block; margin: .18rem 0; color: #183247; font-size: .86rem; overflow-wrap: anywhere; }
-	@media (max-width: 900px) { .intelligence { grid-template-columns: repeat(2, minmax(0, 1fr)); } .intelligence > div:nth-child(2) { border-right: 0; } }
+	.intelligence, .posture { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-bottom: 1px solid #d7e0e7; background: #f8fbfd; }
+	.intelligence > div, .posture > div { min-width: 0; padding: .75rem; border-right: 1px solid #e2e9ee; border-bottom: 1px solid #e2e9ee; }
+	.intelligence > div:nth-child(2n), .posture > div:nth-child(2n) { border-right: 0; }
+	.intelligence small, .intelligence span, .posture small, .posture span { display: block; color: #63798b; font-size: .72rem; overflow-wrap: anywhere; }
+	.intelligence strong, .posture strong { display: block; margin: .18rem 0; color: #183247; font-size: .86rem; overflow-wrap: anywhere; }
 	.filters { display: grid; gap: .75rem; margin-bottom: 1rem; border: 1px solid #d7e0e7; background: #fff; padding: .75rem; }
 	.filters > header { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
 	.filters > header strong { font-size: .8rem; }
 	.filters > header span { color: #718398; font-size: .75rem; }
-	.type-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .375rem; }
+	.type-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .375rem; }
 	.type-grid button { display: grid; grid-template-columns: 1.25rem minmax(0, 1fr); gap: .5rem; align-items: center; min-width: 0; border: 1px solid #d4dee6; background: #f9fbfc; color: #4d6275; padding: .45rem .6rem; text-align: left; }
 	.type-grid button:hover { border-color: #8dbbd9; background: #f1f8fc; }
 	.type-grid button.active { border-color: #2584c4; background: #eaf5fc; color: #176fa9; box-shadow: inset 0 0 0 1px #2584c4; }
@@ -548,6 +625,15 @@ onMount(loadSubjects);
 	.detail-section { border-bottom: 1px solid #dfe7ed; }
 	.detail-section > header { min-height: 3rem; display: flex; align-items: center; justify-content: space-between; padding: 0 1rem; }
 	.empty-line { margin: 0; border-top: 1px solid #edf1f4; color: #718398; padding: 1rem; }
+	.linked-list button { width: 100%; display: grid; grid-template-columns: 2.5rem minmax(0, 1fr) auto 1.25rem; gap: .75rem; align-items: center; border: 0; border-top: 1px solid #edf1f4; border-radius: 0; background: #fff; color: #182738; padding: .75rem 1rem; text-align: left; }
+	.linked-list button:hover { background: #f2f8fc; }
+	.linked-list button > span:nth-child(2), .evidence-list > div > span:nth-child(2) { display: grid; min-width: 0; gap: .2rem; }
+	.linked-list small, .linked-list time, .evidence-list small, .evidence-list time { color: #718398; font-size: .75rem; }
+	.linked-list time { display: none; }
+	.evidence-list > div { display: grid; grid-template-columns: 2.5rem minmax(0, 1fr); gap: .75rem; align-items: center; border-top: 1px solid #edf1f4; padding: .75rem 1rem; }
+	.evidence-icon { display: inline-grid; width: 2.5rem; height: 2.5rem; place-items: center; border-radius: .25rem; background: #edf4f8; color: #4b6d83; }
+	.evidence-icon :global(svg) { width: 1.25rem; height: 1.25rem; }
+	.evidence-list time { grid-column: 2; }
 	.override-list > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .35rem 1rem; border-top: 1px solid #edf1f4; padding: .75rem 1rem; }
 	.override-list span { display: flex; gap: .5rem; align-items: baseline; text-transform: capitalize; }
 	.override-list small, .override-list p, .override-list time { color: #718398; font-size: .75rem; }
@@ -563,7 +649,6 @@ onMount(loadSubjects);
 	.load-older { width: calc(100% - 2rem); margin: .75rem 1rem; border: 1px solid #cbd7e1; background: #fff; color: #425b70; font-weight: 700; }
 
 	@media (min-width: 48rem) {
-		.type-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 		.filter-tools { grid-template-columns: minmax(16rem, .8fr) minmax(18rem, 1.2fr); align-items: end; }
 		.subject-layout { grid-template-columns: minmax(20rem, 40%) minmax(0, 60%); min-height: 38rem; }
 		.subject-list { display: block !important; border-right: 1px solid #d7e0e7; }
@@ -578,9 +663,15 @@ onMount(loadSubjects);
 		.reason-field { min-width: 0; }
 		.ledger article { grid-template-columns: 2.75rem minmax(0, 1fr) auto; align-items: center; }
 		.ledger b { grid-column: 3; grid-row: 1; }
+		.linked-list time { display: block; }
+		.evidence-list > div { grid-template-columns: 2.5rem minmax(0, 1fr) auto; }
+		.evidence-list time { grid-column: 3; }
 	}
 
-	@media (min-width: 72rem) {
-		.type-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+	@media (min-width: 64rem) {
+		.intelligence, .posture { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+		.intelligence > div, .posture > div { border-bottom: 0; }
+		.intelligence > div:nth-child(2), .posture > div:nth-child(2) { border-right: 1px solid #e2e9ee; }
+		.intelligence > div:last-child, .posture > div:last-child { border-right: 0; }
 	}
 </style>

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import sqlite3
 import tempfile
@@ -14,6 +15,7 @@ os.environ["SHIELD_DATABASE_PATH"] = os.path.join(_temporary.name, "shield.db")
 os.environ["SHIELD_INTERNAL_SIGNING_KEY"] = "integration-signing-key-that-is-longer-than-thirty-two-characters"
 os.environ["SHIELD_ADMIN_INTROSPECTION_URL"] = "http://admin-session.test/auth/me"
 os.environ["SHIELD_ACCOUNT_SNAPSHOT_URL"] = "http://account-snapshot.test/admin/users"
+os.environ["SHIELD_ACCOUNT_SESSION_URL"] = "http://account-snapshot.test/internal/shield/session"
 os.environ["SHIELD_ACCOUNT_RESPONSE_URL"] = "http://account-snapshot.test/internal/shield/respond"
 os.environ["SHIELD_SYNC_SECRET"] = "integration-sync-key-that-is-longer-than-thirty-two-characters"
 os.environ["SHIELD_COOKIE_SECURE"] = "false"
@@ -24,7 +26,7 @@ from starlette.requests import Request
 
 from app.config import settings
 from app.database import stable_hash
-from app.main import _automatic_ban, _client_identity, _cloudflare_edge, _entity_subjects, _reconcile_entity_bans, _record_entity_signals, app
+from app.main import _automatic_ban, _client_identity, _cloudflare_edge, _entity_subjects, _reconcile_entity_bans, _record_entity_signals, _resolve_account, app
 from app.rate_limit import RateHit
 from app.risk import RiskResult
 from app.rules import RequestContext, RuleDecision
@@ -55,6 +57,9 @@ class ShieldApplicationTests(unittest.TestCase):
 				if request.url.path == "/internal/shield/respond":
 					cls.account_response_requests.append(request)
 					return httpx.Response(200, json={"ok": True, "status": "completed"})
+				if request.url.path == "/internal/shield/session":
+					account_id = "user-1" if "sf_account_session=valid-account" in request.headers.get("cookie", "") else None
+					return httpx.Response(200, json={"ok": True, "account_id": account_id})
 				return httpx.Response(200, json={"users": [{"id": "user-1", "username": "risk-user", "role": "user", "created_at": "2020-01-01T00:00:00+00:00", "email_verified_at": None, "totp_enabled": 0, "active_session_count": 2, "comment_count": 4}]})
 			if request.url.path == "/missing":
 				return httpx.Response(404, stream=MockStream(b"missing"), headers={"Content-Type": "text/plain"})
@@ -72,6 +77,37 @@ class ShieldApplicationTests(unittest.TestCase):
 		ready = self.client.get("/__shield/health/ready")
 		self.assertEqual(ready.status_code, 200)
 		self.assertEqual(ready.json()["mode"], "observe")
+
+	def test_account_session_resolution_links_only_account_and_ip_roots(self):
+		account_ref = asyncio.run(_resolve_account(app, "valid-account"))
+		self.assertEqual(account_ref, "user-1")
+		context = RequestContext(
+			request_id="account-ip-relation",
+			host="blog.silentflare.com",
+			path="/linked",
+			method="GET",
+			ip="203.0.113.199",
+			account_id=account_ref,
+			session_id="valid-account",
+			device_id="linked-device",
+			asn="AS64599",
+			country="US",
+			region="California",
+		)
+		subjects = _entity_subjects(app.state.entities, context)
+		self.assertEqual(set(subjects), {"account", "ip"})
+		detail = app.state.entities.detail(int(subjects["account"]["id"]))
+		self.assertEqual(detail["linkedSubjects"][0]["id"], subjects["ip"]["id"])
+		self.assertEqual(
+			{"session", "device", "asn", "country", "region"},
+			{item["evidenceType"] for item in detail["evidence"]} & {"session", "device", "asn", "country", "region"},
+		)
+		cache = app.state.database.query(
+			"SELECT session_hash, account_ref FROM session_account_cache WHERE account_ref = ?",
+			(account_ref,),
+		)
+		self.assertTrue(cache)
+		self.assertNotEqual(cache[0]["session_hash"], "valid-account")
 
 	def test_trusted_edge_header_is_the_only_forwarded_client_identity(self):
 		request = Request(
@@ -372,10 +408,10 @@ class ShieldApplicationTests(unittest.TestCase):
 		listing = self.client.get("/__shield/api/admin/entities?subject_type=ip", headers=headers)
 		self.assertEqual(listing.status_code, 200)
 		self.assertTrue(any(item["id"] == subject["id"] for item in listing.json()["items"]))
-		self.assertEqual(len(listing.json()["types"]), 11)
+		self.assertEqual(len(listing.json()["types"]), 2)
 		self.assertEqual(
 			{item["key"] for item in listing.json()["types"]},
-			{"account", "session", "device", "ip", "cidr", "asn", "email", "email_domain", "api_key", "country", "region"},
+			{"account", "ip"},
 		)
 
 	def test_every_gateway_factor_writes_subject_ledger_changes(self):
@@ -395,6 +431,7 @@ class ShieldApplicationTests(unittest.TestCase):
 			api_key="ledger-api-key",
 		)
 		subjects = _entity_subjects(app.state.entities, context)
+		self.assertEqual(set(subjects), {"account", "ip"})
 		risk = RiskResult(
 			20,
 			"observe",
@@ -444,11 +481,17 @@ class ShieldApplicationTests(unittest.TestCase):
 		self.assertTrue(
 			{"VPN_NETWORK", "PROXY_NETWORK", "DATACENTER_NETWORK", "MISSING_BROWSER_HEADERS", "ABNORMAL_ORIGIN", "AUTOMATION_SIGNATURE", "THREAT_INTELLIGENCE", "TOR_NETWORK", "DENY_LIST_MATCH", "RULE_MATCH"}.issubset(codes_by_type["ip"])
 		)
-		self.assertTrue({"NEW_DEVICE", "MISSING_BROWSER_HEADERS", "AUTOMATION_SIGNATURE"}.issubset(codes_by_type["device"]))
-		self.assertTrue({"VPN_NETWORK", "PROXY_NETWORK"}.issubset(codes_by_type["cidr"]))
-		self.assertTrue({"DATACENTER_NETWORK", "THREAT_INTELLIGENCE"}.issubset(codes_by_type["asn"]))
-		self.assertTrue({"ABNORMAL_ORIGIN", "RULE_MATCH"}.issubset(codes_by_type["session"]))
-		self.assertIn("RATE_LIMIT_EXCEEDED", codes_by_type["email"])
+		self.assertTrue(
+			{"NEW_DEVICE", "MISSING_BROWSER_HEADERS", "ABNORMAL_ORIGIN", "AUTOMATION_SIGNATURE", "RATE_LIMIT_EXCEEDED"}.issubset(codes_by_type["account"])
+		)
+		evidence_types = {
+			row["evidence_type"]
+			for row in app.state.database.query(
+				"SELECT evidence_type FROM risk_evidence WHERE root_subject_id = ?",
+				(subjects["account"]["id"],),
+			)
+		}
+		self.assertTrue({"session", "device", "cidr", "asn", "email", "email_domain", "api_key", "country", "region"}.issubset(evidence_types))
 
 	def test_simplified_console_updates_factor_versions_and_site_protection(self):
 		headers = {"Cookie": "sf_bot_session=valid-admin", "X-CSRF-Token": "admin-csrf"}
@@ -531,13 +574,14 @@ class ShieldApplicationTests(unittest.TestCase):
 			self.assertEqual(response.status_code, 200)
 			self.assertEqual(response.text, "split-gateway-ok")
 
-	def test_automatic_account_policy_bans_correlated_session_once(self):
+	def test_automatic_account_policy_bans_account_root_once(self):
 		context = RequestContext(
 			request_id="automatic-ban-test",
 			host="api.silentflare.com",
 			path="/comments",
 			method="POST",
 			ip="203.0.113.22",
+			account_id="account-ban-test",
 			session_id="opaque-test-session",
 		)
 		hit = RateHit(4, "Comments per account", "account", "temporary_ban", 30, 21600)
@@ -548,8 +592,7 @@ class ShieldApplicationTests(unittest.TestCase):
 			("Automatic policy: Comments per account",),
 		)
 		self.assertEqual(len(rows), 1)
-		self.assertEqual(rows[0]["subject_type"], "session")
-		self.assertEqual(rows[0]["subject_display"], "Correlated session")
+		self.assertEqual(rows[0]["subject_type"], "account")
 		self.assertGreaterEqual(rows[0]["expires_at"], int(time.time()) + 21590)
 
 	def test_high_risk_entity_is_automatically_banned_and_released(self):

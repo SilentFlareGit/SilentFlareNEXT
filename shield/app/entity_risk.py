@@ -12,18 +12,12 @@ from .database import Database, stable_hash
 
 SUBJECT_TYPE_CATALOG = (
 	("account", "Accounts"),
-	("session", "Sessions"),
-	("device", "Devices"),
 	("ip", "IP addresses"),
-	("cidr", "CIDR ranges"),
-	("asn", "ASNs"),
-	("email", "Emails"),
-	("email_domain", "Email domains"),
-	("api_key", "API keys"),
-	("country", "Countries"),
-	("region", "Regions"),
 )
-SUBJECT_TYPES = {key for key, _label in SUBJECT_TYPE_CATALOG}
+ROOT_SUBJECT_TYPES = {key for key, _label in SUBJECT_TYPE_CATALOG}
+SUBJECT_TYPES = ROOT_SUBJECT_TYPES | {
+	"session", "device", "cidr", "asn", "email", "email_domain", "api_key", "country", "region",
+}
 
 
 def entity_level(score: int) -> str:
@@ -66,15 +60,17 @@ class EntityRiskService:
 		normalized = self._normalized(subject_type, value)
 		digest = stable_hash(normalized, self.hash_key)
 		now = int(time.time())
+		explicit_display = bool(display)
 		if not display:
 			display = ban_subject_display(subject_type, normalized)
 		self.database.execute(
 			"""INSERT INTO risk_subjects(subject_type, subject_hash, display_value, first_seen_at,
 			last_seen_at, last_changed_at) VALUES (?, ?, ?, ?, ?, ?)
 			ON CONFLICT(subject_type, subject_hash) DO UPDATE SET
-			display_value=excluded.display_value, last_seen_at=excluded.last_seen_at,
+			display_value=CASE WHEN ? THEN excluded.display_value ELSE risk_subjects.display_value END,
+			last_seen_at=excluded.last_seen_at,
 			provenance_status='verified'""",
-			(subject_type, digest, display[:160], now, now, now),
+			(subject_type, digest, display[:160], now, now, now, int(explicit_display)),
 		)
 		return self.database.query(
 			"SELECT * FROM risk_subjects WHERE subject_type = ? AND subject_hash = ? LIMIT 1",
@@ -701,14 +697,18 @@ class EntityRiskService:
 		query: str = "",
 		limit: int = 100,
 	) -> list[dict[str, Any]]:
-		conditions = ["current_score >= ?", "provenance_status = 'verified'"]
+		conditions = ["current_score >= ?", "provenance_status = 'verified'", "subject_type IN ('account', 'ip')"]
 		parameters: list[Any] = [minimum_score]
 		if subject_type:
 			conditions.append("subject_type = ?")
 			parameters.append(subject_type)
 		if query:
-			conditions.append("LOWER(display_value) LIKE ?")
-			parameters.append(f"%{query.lower()}%")
+			conditions.append(
+				"(LOWER(display_value) LIKE ? OR EXISTS (SELECT 1 FROM risk_evidence "
+				"WHERE root_subject_id = risk_subjects.id AND LOWER(display_value) LIKE ?))"
+			)
+			needle = f"%{query.lower()}%"
+			parameters.extend((needle, needle))
 		parameters.append(min(500, max(1, limit)))
 		return self.database.query(
 			f"""SELECT id, subject_type AS subjectType, display_value AS displayValue,
@@ -772,6 +772,46 @@ class EntityRiskService:
 			ORDER BY last_seen_at DESC LIMIT 100""",
 			(subject_id, subject_id, subject_id),
 		)
+		evidence = self.database.query(
+			"""SELECT id, evidence_type AS evidenceType, display_value AS displayValue,
+			first_seen_at AS firstSeenAt, last_seen_at AS lastSeenAt,
+			observation_count AS observationCount, confidence, metadata_json AS metadata
+			FROM risk_evidence WHERE root_subject_id = ?
+			ORDER BY last_seen_at DESC, observation_count DESC LIMIT 300""",
+			(subject_id,),
+		)
+		for item in evidence:
+			try:
+				item["metadata"] = json.loads(item["metadata"] or "{}")
+			except (TypeError, json.JSONDecodeError):
+				item["metadata"] = {}
+		if subject["subject_type"] == "account":
+			linked_subjects = self.database.query(
+				"""SELECT ip.id, ip.subject_type AS subjectType, ip.display_value AS displayValue,
+				ip.current_score AS currentScore, ip.risk_level AS riskLevel,
+				relation.first_seen_at AS firstSeenAt, relation.last_seen_at AS lastSeenAt,
+				relation.request_count AS requestCount, relation.authenticated_count AS authenticatedCount,
+				relation.confidence
+				FROM account_ip_relations AS relation JOIN risk_subjects AS ip ON ip.id = relation.ip_subject_id
+				WHERE relation.account_subject_id = ? AND ip.provenance_status = 'verified'
+				ORDER BY relation.last_seen_at DESC LIMIT 200""",
+				(subject_id,),
+			)
+		elif subject["subject_type"] == "ip":
+			linked_subjects = self.database.query(
+				"""SELECT account.id, account.subject_type AS subjectType,
+				account.display_value AS displayValue, account.current_score AS currentScore,
+				account.risk_level AS riskLevel, relation.first_seen_at AS firstSeenAt,
+				relation.last_seen_at AS lastSeenAt, relation.request_count AS requestCount,
+				relation.authenticated_count AS authenticatedCount, relation.confidence
+				FROM account_ip_relations AS relation
+				JOIN risk_subjects AS account ON account.id = relation.account_subject_id
+				WHERE relation.ip_subject_id = ? AND account.provenance_status = 'verified'
+				ORDER BY relation.last_seen_at DESC LIMIT 200""",
+				(subject_id,),
+			)
+		else:
+			linked_subjects = []
 		return {
 			"id": subject["id"],
 			"subjectType": subject["subject_type"],
@@ -788,7 +828,70 @@ class EntityRiskService:
 			"ledgerNextCursor": ledger_page["nextCursor"],
 			"overrides": overrides,
 			"relations": relations,
+			"evidence": evidence,
+			"linkedSubjects": linked_subjects,
 		}
+
+	def observe_evidence(
+		self,
+		root_subject_id: int,
+		evidence_type: str,
+		value: str,
+		*,
+		display: str = "",
+		confidence: int = 100,
+		metadata: dict[str, Any] | None = None,
+	) -> dict[str, Any] | None:
+		value = value.strip()
+		if not value or evidence_type in ROOT_SUBJECT_TYPES:
+			return None
+		root = self.subject_by_public_id(root_subject_id)
+		if not root or root["subject_type"] not in ROOT_SUBJECT_TYPES:
+			return None
+		now = int(time.time())
+		digest = stable_hash(value, self.hash_key)
+		rows = self.database.query(
+			"SELECT id, first_seen_at FROM risk_evidence WHERE root_subject_id = ? AND evidence_type = ? AND evidence_hash = ? LIMIT 1",
+			(root_subject_id, evidence_type[:60], digest),
+		)
+		is_new = not rows
+		self.database.execute(
+			"""INSERT INTO risk_evidence(root_subject_id, evidence_type, evidence_hash, display_value,
+			first_seen_at, last_seen_at, observation_count, confidence, metadata_json)
+			VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+			ON CONFLICT(root_subject_id, evidence_type, evidence_hash) DO UPDATE SET
+			display_value=excluded.display_value, last_seen_at=excluded.last_seen_at,
+			observation_count=risk_evidence.observation_count + 1,
+			confidence=MAX(risk_evidence.confidence, excluded.confidence),
+			metadata_json=excluded.metadata_json""",
+			(
+				root_subject_id, evidence_type[:60], digest, display[:160], now, now,
+				max(0, min(100, confidence)), json.dumps(metadata or {}, separators=(",", ":")),
+			),
+		)
+		item = self.database.query(
+			"SELECT id, first_seen_at AS firstSeenAt, last_seen_at AS lastSeenAt, observation_count AS observationCount FROM risk_evidence WHERE root_subject_id = ? AND evidence_type = ? AND evidence_hash = ? LIMIT 1",
+			(root_subject_id, evidence_type[:60], digest),
+		)[0]
+		item["isNew"] = is_new
+		return item
+
+	def relate_account_ip(self, account_subject_id: int, ip_subject_id: int, *, authenticated: bool = True) -> None:
+		account = self.subject_by_public_id(account_subject_id)
+		ip = self.subject_by_public_id(ip_subject_id)
+		if not account or not ip or account["subject_type"] != "account" or ip["subject_type"] != "ip":
+			return
+		now = int(time.time())
+		self.database.execute(
+			"""INSERT INTO account_ip_relations(account_subject_id, ip_subject_id, first_seen_at,
+			last_seen_at, request_count, authenticated_count, confidence)
+			VALUES (?, ?, ?, ?, 1, ?, 100)
+			ON CONFLICT(account_subject_id, ip_subject_id) DO UPDATE SET
+			last_seen_at=excluded.last_seen_at, request_count=account_ip_relations.request_count + 1,
+			authenticated_count=account_ip_relations.authenticated_count + excluded.authenticated_count,
+			confidence=MAX(account_ip_relations.confidence, excluded.confidence)""",
+			(account_subject_id, ip_subject_id, now, now, 1 if authenticated else 0),
+		)
 
 	def relate(self, left_id: int, right_id: int, relation_type: str, confidence: int = 100) -> None:
 		if left_id == right_id:

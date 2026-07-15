@@ -16,7 +16,7 @@ The MVP includes:
 - A real Security workspace inside SilentFlare Admin with live trends, contextual event actions, automated policies, service coverage, and account-risk projections synchronized from FastAPI without sharing the business database.
 - Network intelligence, access-list and ban operations, signed account/session response commands, risk-model simulation/versioning/rollback, configurable alerts, and rolling daily reports.
 - A public `shield.silentflare.com` decision portal with signed case links, stable public ban IDs, and subject/duration-specific error codes.
-- Independent Account, Session, Device, IP, CIDR, ASN, email, API-key, and geography risk subjects with append-only score ledgers, automatic decay, operator adjustments, and scoped exemptions.
+- Two operator-visible risk roots, Account and IP, with sessions, devices, CIDR, ASN, email/domain, API-key, and geography retained as linked evidence under both roots.
 - Split gateway, control, portal, and worker entry points that keep Shield deployable as an external security exoskeleton; only `ShieldDashboard.svelte` and its entity explorer are integrated into SilentFlare Admin.
 - SQLite/WAL persistence, migrations, health probes, Docker Compose, and an Nginx reference configuration.
 
@@ -67,7 +67,7 @@ The split deployment uses one image with four least-purpose commands. `gateway` 
 
 ## Entity Risk Ledger
 
-Every observed risk subject has an independent score from 0 to 100. Changes are written to the append-only `risk_ledger` with before/after values, delta, raw/effective score kind, reason code, human reason, source, actor, expiry, and parent event. Gateway factors, account-posture factors, manual adjustments, cap/floor activation, revocation, expiry, decay, and automatic expiry all produce explicit entries rather than silently changing a score. The Admin workspace pages the complete history instead of truncating it to the latest rows.
+Every Account and IP root has an independent score from 0 to 100. Changes are written to the append-only `risk_ledger` with before/after values, delta, raw/effective score kind, reason code, human reason, source, actor, expiry, and parent event. Gateway factors, account-posture factors, manual adjustments, cap/floor activation, revocation, expiry, decay, and automatic expiry all produce explicit entries rather than silently changing a score. Supporting identity and network facts are pseudonymous evidence, not independently adjustable scores. The Admin workspace pages the complete history instead of truncating it to the latest rows.
 
 Admin operators can apply an exact temporary positive or negative adjustment, a score cap or floor, or a scoped rule/response exemption. Authentication, authorization, CSRF, Admin-session enforcement, and the Admin/CMS non-bypassable perimeter are never disabled by a response exemption.
 
@@ -81,7 +81,7 @@ Admin operators can apply an exact temporary positive or negative adjustment, a 
 6. Keep login, registration, comments, Admin, CMS, and sensitive API routes fail closed.
 7. Keep the existing SilentFlare Admin login gate and its Telegram/TOTP verification enabled; Shield does not issue a second administrator credential.
 
-The Admin Security workspace has three operator surfaces: `Subjects`, `Risk factors`, and `Sites`. Subjects exposes all eleven supported categories as always-visible, directly selectable controls, searches every risk identity, pages its complete score ledger, and applies audited temporary adjustments, caps, floors, or response exemptions. Risk factors publish the complete weight set as a simulated and versioned configuration. Sites apply one audited on/off protection decision per configured hostname. Rate policies, decay, correlation, threat intelligence, alerts, account synchronization, and automated response remain internal Shield jobs instead of dashboard configuration.
+The Admin Security workspace has three operator surfaces: `Subjects`, `Risk factors`, and `Sites`. Subjects exposes Account and IP as always-visible, directly selectable controls, searches root labels and linked evidence, pages each root's complete score ledger, and applies audited temporary adjustments, caps, floors, or response exemptions. Account and IP details show their bidirectional authenticated relationships and supporting evidence. Risk factors publish the complete weight set as a simulated and versioned configuration. Sites apply one audited on/off protection decision per configured hostname. Rate policies, decay, correlation, threat intelligence, alerts, account synchronization, and automated response remain internal Shield jobs instead of dashboard configuration.
 
 Shield synchronizes a minimal account projection from a private timestamped and HMAC-signed FastAPI snapshot every minute. It stores stable keyed account hashes, usernames as operator labels, security posture, activity counts, and derived risk metadata only. It never copies passwords, email addresses, session tokens, verification material, or authentication secrets. A site is reported as connected only after its edge route actually traverses Shield. The site switch changes Shield enforcement state but never rewrites Nginx or Cloudflare.
 

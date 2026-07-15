@@ -75,6 +75,12 @@ class Settings:
 			"http://host.docker.internal:9010/internal/shield/accounts",
 		)
 	)
+	account_session_url: str = field(
+		default_factory=lambda: os.getenv(
+			"SHIELD_ACCOUNT_SESSION_URL",
+			"http://host.docker.internal:9010/internal/shield/session",
+		)
+	)
 	account_response_url: str = field(
 		default_factory=lambda: os.getenv(
 			"SHIELD_ACCOUNT_RESPONSE_URL",
@@ -84,6 +90,9 @@ class Settings:
 	sync_secret: str = field(default_factory=lambda: os.getenv("SHIELD_SYNC_SECRET", ""))
 	account_sync_interval: int = field(
 		default_factory=lambda: _integer("SHIELD_ACCOUNT_SYNC_INTERVAL", 60)
+	)
+	account_session_cache_ttl: int = field(
+		default_factory=lambda: _integer("SHIELD_ACCOUNT_SESSION_CACHE_TTL", 300)
 	)
 	cookie_secure: bool = field(default_factory=lambda: _boolean("SHIELD_COOKIE_SECURE", True))
 	turnstile_site_key: str = field(default_factory=lambda: os.getenv("SHIELD_TURNSTILE_SITE_KEY", ""))

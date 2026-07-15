@@ -459,6 +459,55 @@ async def _sync_account_projections(application: FastAPI, session_token: str = "
 		return {"status": "failed", "recordCount": 0, "completedAt": int(time.time())}
 
 
+async def _resolve_account(application: FastAPI, session_token: str) -> str:
+	if not session_token or len(settings.sync_secret) < 32:
+		return ""
+	db = application.state.database
+	now = int(time.time())
+	session_hash = stable_hash(session_token, settings.internal_signing_key)
+	cached = db.query(
+		"SELECT account_ref, expires_at FROM session_account_cache WHERE session_hash = ? LIMIT 1",
+		(session_hash,),
+	)
+	if cached and int(cached[0]["expires_at"]) > now:
+		return str(cached[0]["account_ref"] or "")
+	timestamp = str(now)
+	canonical = f"GET\n/internal/shield/session\n{timestamp}"
+	signature = hmac.new(
+		settings.sync_secret.encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256
+	).hexdigest()
+	account_ref = ""
+	try:
+		response = await application.state.client.get(
+			settings.account_session_url,
+			headers={
+				"Accept": "application/json",
+				"Cookie": f"sf_account_session={session_token}",
+				"Host": "api.silentflare.com",
+				"X-SF-Shield-Timestamp": timestamp,
+				"X-SF-Shield-Signature": signature,
+			},
+		)
+		if response.status_code == 200:
+			account_ref = str(response.json().get("account_id") or "")[:100]
+	except (httpx.HTTPError, json.JSONDecodeError, ValueError):
+		return ""
+	ttl = max(30, min(3600, settings.account_session_cache_ttl))
+	db.execute(
+		"""INSERT INTO session_account_cache(session_hash, account_ref, account_id_hash, expires_at, last_seen_at)
+		VALUES (?, ?, ?, ?, ?) ON CONFLICT(session_hash) DO UPDATE SET account_ref=excluded.account_ref,
+		account_id_hash=excluded.account_id_hash, expires_at=excluded.expires_at, last_seen_at=excluded.last_seen_at""",
+		(
+			session_hash,
+			account_ref or None,
+			stable_hash(account_ref, settings.internal_signing_key) if account_ref else None,
+			now + ttl,
+			now,
+		),
+	)
+	return account_ref
+
+
 async def _account_sync_loop(application: FastAPI) -> None:
 	while True:
 		try:
@@ -574,7 +623,7 @@ def _reconcile_entity_bans(database: Database, entities: EntityRiskService | Non
 	entities = entities or EntityRiskService(database, settings.internal_signing_key)
 	eligible = database.query(
 		"""SELECT id, subject_type, subject_hash, display_value, current_score FROM risk_subjects
-		WHERE subject_type IN ('ip', 'session', 'device', 'api_key', 'email', 'email_domain')
+		WHERE subject_type IN ('account', 'ip')
 		AND provenance_status = 'verified'
 		AND (current_score >= 80 OR EXISTS (
 			SELECT 1 FROM risk_overrides WHERE risk_overrides.subject_id = risk_subjects.id
@@ -744,6 +793,9 @@ async def _operations_loop(application: FastAPI) -> None:
 			automated += await _reconcile_account_responses(application)
 			application.state.database.execute("DELETE FROM rate_counters WHERE updated_at < ?", (int(time.time()) - 2592000,))
 			application.state.database.execute(
+				"DELETE FROM session_account_cache WHERE expires_at < ?", (int(time.time()) - 86400,)
+			)
+			application.state.database.execute(
 				"UPDATE automation_runs SET completed_at = ?, status = 'completed', processed_count = ? WHERE id = ?",
 				(int(time.time()), decayed + automated, run_id),
 			)
@@ -906,8 +958,6 @@ def _block_case_url(
 	if not subject_type and context:
 		for candidate, value in (
 			("account", context.account_id),
-			("session", context.session_id),
-			("device", context.device_id),
 			("ip", context.ip),
 		):
 			if value:
@@ -1107,37 +1157,45 @@ def _entity_subjects(service: EntityRiskService, context: RequestContext) -> dic
 	except ValueError:
 		cidr = ""
 	email_domain = context.email.rsplit("@", 1)[-1] if "@" in context.email else ""
-	values = {
-		"account": context.account_id,
-		"session": context.session_id,
-		"device": context.device_id,
-		"ip": context.ip,
-		"cidr": cidr,
-		"asn": context.asn,
-		"email": context.email,
-		"email_domain": email_domain,
-		"api_key": context.api_key,
-		"country": context.country,
-		"region": context.region,
-	}
 	subjects: dict[str, dict[str, Any]] = {}
-	for subject_type, value in values.items():
+	try:
+		subjects["ip"] = service.ensure_subject("ip", context.ip, display=mask_ip(context.ip))
+	except ValueError:
+		return subjects
+	if context.account_id:
+		try:
+			subjects["account"] = service.ensure_subject("account", context.account_id)
+		except ValueError:
+			pass
+	account = subjects.get("account")
+	ip = subjects["ip"]
+	if account:
+		service.relate_account_ip(int(account["id"]), int(ip["id"]), authenticated=True)
+	facets = (
+		("session", context.session_id, "Correlated session", 100),
+		("device", context.device_id, "Correlated device", 90),
+		("cidr", cidr, cidr, 100),
+		("asn", context.asn, context.asn, 90),
+		("email", context.email, "Observed email", 100),
+		("email_domain", email_domain, email_domain, 100),
+		("api_key", context.api_key, "Correlated API key", 100),
+		("country", context.country, context.country, 85),
+		("region", context.region, context.region, 75),
+	)
+	for evidence_type, value, display, confidence in facets:
 		if not value:
 			continue
-		display = mask_ip(value) if subject_type == "ip" else ""
-		try:
-			subjects[subject_type] = service.ensure_subject(subject_type, value, display=display)
-		except ValueError:
-			continue
-	primary = subjects.get("account") or subjects.get("session") or subjects.get("device") or subjects.get("ip")
-	if primary:
-		for subject_type, subject in subjects.items():
-			if subject_type not in {"account", "session", "device", "ip"}:
-				service.relate(int(primary["id"]), int(subject["id"]), f"observed_with_{subject_type}", 80)
-		for subject_type in ("account", "session", "device", "ip"):
-			subject = subjects.get(subject_type)
-			if subject and subject["id"] != primary["id"]:
-				service.relate(int(primary["id"]), int(subject["id"]), "request_identity", 100)
+		metadata = {"requestId": context.request_id, "host": context.host}
+		observed = service.observe_evidence(
+			int(ip["id"]), evidence_type, value, display=display, confidence=confidence, metadata=metadata
+		)
+		if evidence_type == "device" and observed and observed["isNew"]:
+			context.extra["new_device_evidence_id"] = int(observed["id"])
+		if account:
+			service.observe_evidence(
+				int(account["id"]), evidence_type, value, display=display,
+				confidence=confidence, metadata=metadata,
+			)
 	return subjects
 
 
@@ -1148,28 +1206,17 @@ def _apply_entity_score(
 	weights: dict[str, int],
 ) -> dict[str, dict[str, Any]]:
 	subjects = _entity_subjects(service, context)
-	device = subjects.get("device")
-	if device and int(device["first_seen_at"]) >= int(time.time()) - 5:
+	if context.extra.get("new_device_evidence_id"):
 		new_device_weight = int((DEFAULT_WEIGHTS | weights)["new_device"])
 		if new_device_weight:
 			risk.score = max(0, min(100, risk.score + new_device_weight))
 			risk.level = entity_level(risk.score)
 			risk.reasons.append("New device observed")
-	primary_scores = [
+	root_scores = [
 		service.effective_score(subject, context.host, context.path)
-		for name, subject in subjects.items()
-		if name in {"account", "session", "device", "ip", "api_key"}
+		for subject in subjects.values()
 	]
-	context_score = 0
-	if subjects.get("asn"):
-		context_score += int(service.effective_score(subjects["asn"], context.host, context.path) * 0.2)
-	if subjects.get("cidr"):
-		context_score += int(service.effective_score(subjects["cidr"], context.host, context.path) * 0.2)
-	if subjects.get("country"):
-		context_score += int(service.effective_score(subjects["country"], context.host, context.path) * 0.1)
-	if subjects.get("email_domain"):
-		context_score += int(service.effective_score(subjects["email_domain"], context.host, context.path) * 0.1)
-	entity_score = min(100, max(primary_scores or [0]) + min(15, context_score))
+	entity_score = max(root_scores or [0])
 	if entity_score > risk.score:
 		risk.score = entity_score
 		risk.level = entity_level(entity_score)
@@ -1206,25 +1253,7 @@ def _record_entity_signals(
 	) -> None:
 		if delta == 0:
 			return
-		try:
-			address = ipaddress.ip_address(context.ip)
-			cidr = str(ipaddress.ip_network(f"{address}/{24 if address.version == 4 else 48}", strict=False))
-		except ValueError:
-			cidr = ""
-		value = {
-			"account": context.account_id,
-			"session": context.session_id,
-			"device": context.device_id,
-			"ip": context.ip,
-			"cidr": cidr,
-			"asn": context.asn,
-			"email": context.email,
-			"email_domain": context.email.rsplit("@", 1)[-1] if "@" in context.email else "",
-			"api_key": context.api_key,
-			"country": context.country,
-			"region": context.region,
-		}.get(subject_type, "")
-		if not value or subject_type not in subjects:
+		if subject_type not in {"account", "ip"} or subject_type not in subjects:
 			return
 		service.enqueue_signal(
 			int(subjects[subject_type]["id"]),
@@ -1236,75 +1265,67 @@ def _record_entity_signals(
 			decay_steps=steps,
 		)
 
+	def signal_roots(
+		delta: int,
+		code: str,
+		reason: str,
+		duration: int,
+		steps: int = 4,
+		source_ref: str | None = None,
+		account_ratio: float = 0.3,
+	) -> None:
+		signal("ip", delta, code, reason, duration, steps, source_ref)
+		if subjects.get("account") and account_ratio:
+			account_delta = int(round(delta * account_ratio))
+			if account_delta == 0 and delta:
+				account_delta = 1 if delta > 0 else -1
+			signal(
+				"account", account_delta, code, f"{reason} (linked IP)", duration, steps, source_ref
+			)
+
 	reasons = set(risk.reasons)
 	if "VPN network" in reasons:
-		signal("ip", weighted("vpn", 0.5), "VPN_NETWORK", "VPN network observed", 86400)
-		signal("cidr", weighted("vpn", 0.15), "VPN_NETWORK", "VPN source observed in CIDR", 43200)
+		signal_roots(weighted("vpn", 0.5), "VPN_NETWORK", "VPN network observed", 86400, account_ratio=0.2)
 	if "Proxy network" in reasons:
-		signal("ip", weighted("proxy", 0.5), "PROXY_NETWORK", "Proxy network observed", 86400)
-		signal("cidr", weighted("proxy", 0.15), "PROXY_NETWORK", "Proxy source observed in CIDR", 43200)
+		signal_roots(weighted("proxy", 0.5), "PROXY_NETWORK", "Proxy network observed", 86400, account_ratio=0.2)
 	if "Data center network" in reasons:
-		signal("ip", weighted("datacenter", 0.5), "DATACENTER_NETWORK", "Data center network observed", 86400)
-		signal("asn", weighted("datacenter", 0.2), "DATACENTER_NETWORK", "Data center source observed in ASN", 86400)
+		signal_roots(weighted("datacenter", 0.5), "DATACENTER_NETWORK", "Data center network observed", 86400, account_ratio=0.2)
 	if "Expected browser headers missing" in reasons:
-		signal("device", weighted("missing_headers", 0.7), "MISSING_BROWSER_HEADERS", "Expected browser headers missing", 21600)
-		signal("ip", weighted("missing_headers", 0.3), "MISSING_BROWSER_HEADERS", "Expected browser headers missing", 21600)
+		signal_roots(weighted("missing_headers", 0.7), "MISSING_BROWSER_HEADERS", "Expected browser headers missing (device evidence)", 21600, account_ratio=0.5)
 	if "Abnormal request origin" in reasons:
-		signal("session", weighted("abnormal_origin", 0.7), "ABNORMAL_ORIGIN", "Abnormal request origin", 43200)
-		signal("ip", weighted("abnormal_origin", 0.3), "ABNORMAL_ORIGIN", "Abnormal request origin", 43200)
-	if "New device observed" in reasons and subjects.get("device"):
-		signal(
-			"device",
-			weighted("new_device"),
-			"NEW_DEVICE",
-			"New device observed",
-			86400,
-			4,
-			f"new-device:{subjects['device']['id']}",
+		signal_roots(weighted("abnormal_origin", 0.7), "ABNORMAL_ORIGIN", "Abnormal request origin (session evidence)", 43200, account_ratio=0.5)
+	if "New device observed" in reasons and context.extra.get("new_device_evidence_id"):
+		signal_roots(
+			weighted("new_device"), "NEW_DEVICE", "New device evidence observed", 86400, 4,
+			f"new-device:{context.extra['new_device_evidence_id']}", 0.5,
 		)
-		if subjects.get("account"):
-			signal(
-				"account",
-				weighted("new_device", 0.5),
-				"NEW_DEVICE",
-				"New device observed for account",
-				86400,
-				4,
-				f"new-device:{subjects['device']['id']}",
-			)
 	if rates:
 		for hit in rates:
 			reference = f"{context.request_id}:rate:{hit.policy_id}"
-			signal("ip", weighted("rate_exceeded", 0.4), "RATE_LIMIT_EXCEEDED", hit.policy_name, 86400, 4, reference)
-			signal("cidr", weighted("rate_exceeded", 0.12), "RATE_LIMIT_EXCEEDED", hit.policy_name, 43200, 4, reference)
-			dimension = hit.dimension
-			if dimension == "account" and not context.account_id:
-				dimension = "session" if context.session_id else "ip"
-			if dimension in {"account", "session", "device", "email", "country", "asn"}:
-				signal(dimension, weighted("rate_exceeded", 0.32), "RATE_LIMIT_EXCEEDED", hit.policy_name, 43200, 4, reference)
+			signal_roots(
+				weighted("rate_exceeded", 0.4), "RATE_LIMIT_EXCEEDED", hit.policy_name,
+				86400, 4, reference, 0.8 if hit.dimension == "account" else 0.35,
+			)
 	if "Automation browser signature" in reasons:
-		signal("device", weighted("automation", 0.82), "AUTOMATION_SIGNATURE", "Automation browser signature", 43200)
-		signal("ip", weighted("automation", 0.36), "AUTOMATION_SIGNATURE", "Automation browser signature", 43200)
+		signal_roots(weighted("automation", 0.82), "AUTOMATION_SIGNATURE", "Automation browser signature (device evidence)", 43200, account_ratio=0.5)
 	if "Known malicious IP" in reasons:
-		signal("ip", weighted("malicious_ip", 0.8), "THREAT_INTELLIGENCE", "Known malicious IP intelligence", 604800, 7)
-		signal("asn", weighted("malicious_ip", 0.1), "THREAT_INTELLIGENCE", "Malicious source observed in ASN", 86400)
+		signal_roots(weighted("malicious_ip", 0.8), "THREAT_INTELLIGENCE", "Known malicious IP intelligence", 604800, 7, account_ratio=0.15)
 	if "Tor exit node" in reasons:
-		signal("ip", weighted("tor", 0.43), "TOR_NETWORK", "Tor exit node", 86400)
+		signal_roots(weighted("tor", 0.43), "TOR_NETWORK", "Tor exit node", 86400, account_ratio=0.2)
 	if list_match:
 		list_subject_type = str(list_match.get("subject_type") or "")
-		if list_subject_type in subjects and list_match.get("kind") in {"allow", "deny"}:
+		if list_match.get("kind") in {"allow", "deny"}:
 			kind = str(list_match["kind"])
-			signal(
-				list_subject_type,
+			signal_roots(
 				weighted("allow_list" if kind == "allow" else "deny_list"),
 				"ALLOW_LIST_MATCH" if kind == "allow" else "DENY_LIST_MATCH",
-				"Matched allow list" if kind == "allow" else "Matched deny list",
+				f"Matched {list_subject_type or 'request'} {kind} list evidence",
 				86400,
 				1,
+				account_ratio=1 if list_subject_type == "account" else 0.3,
 			)
 	if rules.matched_rules:
-		signal("ip", weighted("rule_match"), "RULE_MATCH", f"Matched rule {rules.matched_rules[0]['name']}", 86400)
-		signal("session", weighted("rule_match", 0.625), "RULE_MATCH", f"Matched rule {rules.matched_rules[0]['name']}", 43200)
+		signal_roots(weighted("rule_match"), "RULE_MATCH", f"Matched rule {rules.matched_rules[0]['name']}", 86400, account_ratio=0.625)
 
 
 def _event(database: Database, context: RequestContext, risk: RiskResult, rules: RuleDecision, actions: list[str], request: Request, body: bytes) -> None:
@@ -1344,12 +1365,8 @@ def _automatic_ban(database: Database, context: RequestContext, hits: list[RateH
 	if not ban_hits:
 		return
 	hit = max(ban_hits, key=lambda item: max(item.retry_after, item.cooldown_seconds))
-	if hit.dimension in {"account", "session"} and context.session_id:
-		subject_type, raw_value = "session", context.session_id
-	elif hit.dimension == "device" and context.device_id:
-		subject_type, raw_value = "device", context.device_id
-	elif hit.dimension == "email" and context.email:
-		subject_type, raw_value = "email", context.email
+	if hit.dimension == "account" and context.account_id:
+		subject_type, raw_value = "account", context.account_id
 	else:
 		subject_type, raw_value = "ip", context.ip
 	normalized = normalize_ban_subject(subject_type, raw_value)
@@ -1918,6 +1935,15 @@ async def admin_intel(request: Request, limit: int = 200):
 	return request.app.state.database.query("SELECT ip_masked, country_code, region, region_code, city, timezone, asn, network_prefix, isp, organization, ip_type, is_vpn, is_proxy, is_tor, is_crawler, is_malicious, risk_score, country_source, region_source, asn_source, country_confidence, region_confidence, asn_confidence, conflict_fields, first_seen_at, last_seen_at FROM ip_intel WHERE provenance_status = 'verified' ORDER BY last_seen_at DESC LIMIT ?", (min(500, max(1, limit)),))
 
 
+def _root_risk_subject(request: Request, subject_id: int) -> dict[str, Any] | None:
+	subject = request.app.state.entities.subject_by_public_id(subject_id)
+	if not subject or subject["subject_type"] not in {"account", "ip"}:
+		return None
+	if subject.get("provenance_status") != "verified":
+		return None
+	return subject
+
+
 @app.get("/__shield/api/admin/entities")
 async def admin_entities(
 	request: Request,
@@ -1939,9 +1965,9 @@ async def admin_entities(
 	count_rows = request.app.state.database.query(
 		"""SELECT subject_type AS subjectType, COUNT(*) AS total,
 		SUM(CASE WHEN current_score >= 50 THEN 1 ELSE 0 END) AS elevated,
-			MAX(current_score) AS maximumScore FROM risk_subjects WHERE provenance_status = 'verified' GROUP BY subject_type
-		ORDER BY CASE subject_type WHEN 'account' THEN 1 WHEN 'ip' THEN 2 WHEN 'asn' THEN 3
-		WHEN 'session' THEN 4 WHEN 'device' THEN 5 WHEN 'api_key' THEN 6 ELSE 20 END, subject_type"""
+			MAX(current_score) AS maximumScore FROM risk_subjects
+		WHERE provenance_status = 'verified' AND subject_type IN ('account', 'ip')
+		GROUP BY subject_type ORDER BY CASE subject_type WHEN 'account' THEN 1 ELSE 2 END"""
 	)
 	counts_by_type = {row["subjectType"]: row for row in count_rows}
 	types = []
@@ -1962,10 +1988,12 @@ async def admin_entities(
 @app.get("/__shield/api/admin/entities/{subject_id}")
 async def admin_entity_detail(subject_id: int, request: Request):
 	await _admin(request)
+	subject = _root_risk_subject(request, subject_id)
+	if not subject:
+		raise HTTPException(status_code=404, detail="Risk subject not found")
 	detail = request.app.state.entities.detail(subject_id)
 	if not detail:
 		raise HTTPException(status_code=404, detail="Risk subject not found")
-	subject = request.app.state.entities.subject_by_public_id(subject_id)
 	if subject and subject["subject_type"] == "ip":
 		rows = request.app.state.database.query(
 			"""SELECT country_code AS countryCode, region, region_code AS regionCode, city, asn,
@@ -1979,24 +2007,24 @@ async def admin_entity_detail(subject_id: int, request: Request):
 		if rows:
 			rows[0]["conflictFields"] = json.loads(rows[0]["conflictFields"] or "[]")
 			detail["intelligence"] = rows[0]
-	elif subject and subject["subject_type"] == "asn":
+	elif subject and subject["subject_type"] == "account":
 		rows = request.app.state.database.query(
-			"""SELECT COUNT(*) AS observedIps, COUNT(DISTINCT country_code) AS observedCountries,
-			MAX(last_seen_at) AS lastSeenAt,
-			CASE WHEN SUM(CASE WHEN asn_confidence = 'high' THEN 1 ELSE 0 END) > 0
-			THEN 'high' WHEN COUNT(*) > 0 THEN 'medium' ELSE 'unknown' END AS asnConfidence
-			FROM ip_intel WHERE asn = ?""",
-			(subject["display_value"],),
+			"""SELECT account_label AS accountLabel, role, country_code AS countryCode,
+			email_verified AS emailVerified, two_factor_enabled AS twoFactorEnabled,
+			disabled, active_session_count AS activeSessionCount, comment_count AS commentCount,
+			last_seen_at AS lastSeenAt, last_synced_at AS lastSyncedAt
+			FROM account_projections WHERE account_id_hash = ? LIMIT 1""",
+			(subject["subject_hash"],),
 		)
 		if rows:
-			detail["intelligence"] = rows[0]
+			detail["posture"] = rows[0]
 	return detail
 
 
 @app.get("/__shield/api/admin/entities/{subject_id}/ledger")
 async def admin_entity_ledger(subject_id: int, request: Request, before: int | None = None, limit: int = 100):
 	await _admin(request)
-	if not request.app.state.entities.subject_by_public_id(subject_id):
+	if not _root_risk_subject(request, subject_id):
 		raise HTTPException(status_code=404, detail="Risk subject not found")
 	return request.app.state.entities.ledger_page(subject_id, before=before, limit=limit)
 
@@ -2004,7 +2032,7 @@ async def admin_entity_ledger(subject_id: int, request: Request, before: int | N
 @app.post("/__shield/api/admin/entities/{subject_id}/adjust")
 async def admin_entity_adjust(subject_id: int, payload: EntityAdjustmentInput, request: Request):
 	actor, _ = await _admin(request, csrf=True)
-	if not request.app.state.entities.subject_by_public_id(subject_id):
+	if not _root_risk_subject(request, subject_id):
 		raise HTTPException(status_code=404, detail="Risk subject not found")
 	try:
 		override = request.app.state.entities.add_override(
@@ -2030,7 +2058,7 @@ async def admin_entity_adjust(subject_id: int, payload: EntityAdjustmentInput, r
 @app.post("/__shield/api/admin/entities/{subject_id}/overrides")
 async def admin_entity_override(subject_id: int, payload: EntityOverrideInput, request: Request):
 	actor, _ = await _admin(request, csrf=True)
-	if not request.app.state.entities.subject_by_public_id(subject_id):
+	if not _root_risk_subject(request, subject_id):
 		raise HTTPException(status_code=404, detail="Risk subject not found")
 	if payload.override_type in {"score_cap", "score_floor"} and payload.value is None:
 		raise HTTPException(status_code=422, detail="Score cap and floor require a value")
@@ -2372,19 +2400,26 @@ async def verify_challenge(request: Request):
 	signal_ref = f"challenge:{stable_hash(token, settings.internal_signing_key)[:20]}"
 	weights = DEFAULT_WEIGHTS | request.app.state.database.setting("risk_weights", {})
 	factor_key = "challenge_passed" if result.get("success") else "challenge_failed"
-	challenge_values = (
-		("ip", _client_ip(request), mask_ip(_client_ip(request)), 1.0),
-		("device", _device_id(request, _client_ip(request)), "", 0.65),
-		("session", request.cookies.get("sf_account_session", ""), "", 0.65),
-	)
-	for subject_type, value, display, ratio in challenge_values:
-		if not value:
-			continue
-		try:
-			subject = request.app.state.entities.ensure_subject(subject_type, value, display=display)
-		except ValueError:
-			continue
-		delta = int(round(weights[factor_key] * ratio))
+	ip_value = _client_ip(request)
+	session_token = request.cookies.get("sf_account_session", "")
+	account_ref = await _resolve_account(request.app, session_token)
+	root_subjects = [request.app.state.entities.ensure_subject("ip", ip_value, display=mask_ip(ip_value))]
+	if account_ref:
+		account = request.app.state.entities.ensure_subject("account", account_ref)
+		root_subjects.append(account)
+		request.app.state.entities.relate_account_ip(int(account["id"]), int(root_subjects[0]["id"]))
+	for evidence_type, value, display in (
+		("device", _device_id(request, ip_value), "Correlated device"),
+		("session", session_token, "Correlated session"),
+	):
+		if value:
+			for subject in root_subjects:
+				request.app.state.entities.observe_evidence(
+					int(subject["id"]), evidence_type, value, display=display,
+					metadata={"source": "challenge"},
+				)
+	for index, subject in enumerate(root_subjects):
+		delta = int(round(weights[factor_key] * (1 if index == 0 else 0.65)))
 		if delta == 0:
 			continue
 		request.app.state.entities.enqueue_signal(
@@ -2475,6 +2510,7 @@ async def gateway(path: str, request: Request):
 		if not _cloudflare_edge(request):
 			headers = {name: value for name, value in headers.items() if not name.startswith("cf-")}
 		intel, geo_source = await request.app.state.geo.lookup(ip, headers)
+		session_token = request.cookies.get("sf_account_session", "")
 		context = RequestContext(
 			request_id=request_id,
 			host=host,
@@ -2485,7 +2521,7 @@ async def gateway(path: str, request: Request):
 			region=intel.region,
 			asn=intel.asn,
 			ip_type=intel.ip_type,
-			session_id=request.cookies.get("sf_account_session", ""),
+			session_id=session_token,
 			device_id=_device_id(request, ip),
 			email=_email_from_body(body, request.headers.get("content-type", "")),
 			api_key=_api_key(request),
@@ -2496,6 +2532,7 @@ async def gateway(path: str, request: Request):
 				"geo_confidence": intel.country_confidence,
 			},
 		)
+		context.account_id = await _resolve_account(request.app, session_token)
 		list_status, list_match = request.app.state.access.match(context)
 		ban = request.app.state.access.active_ban(context)
 		rates = request.app.state.limiter.check(context)
@@ -2514,8 +2551,7 @@ async def gateway(path: str, request: Request):
 				request.app.state.entities.matching_rule_exemption(
 					int(subject["id"]), matched_rule_ids, context.host, context.path
 				)
-				for subject_type, subject in entity_subjects.items()
-				if subject_type in {"account", "session", "device", "ip", "api_key"}
+				for subject in entity_subjects.values()
 			)
 		)
 		if rule_exempt:
@@ -2540,8 +2576,7 @@ async def gateway(path: str, request: Request):
 			request.app.state.entities.active_override(
 				int(subject["id"]), "response_exemption", context.host, context.path
 			)
-			for subject_type, subject in entity_subjects.items()
-			if subject_type in {"account", "session", "device", "ip", "api_key"}
+			for subject in entity_subjects.values()
 		)
 		if response_exempt and not ban and list_status != "deny" and host not in {"admin.silentflare.com", "cms.silentflare.com"}:
 			actions = ["allow"]
