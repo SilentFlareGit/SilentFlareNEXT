@@ -236,14 +236,29 @@ class ClientIdentity:
 	source: str
 
 
+def _cloudflare_edge(request: Request) -> bool:
+	if not _trusted_peer(request):
+		return False
+	try:
+		peer = ipaddress.ip_address(request.headers.get("x-sf-proxy-ip", ""))
+		return any(
+			peer in ipaddress.ip_network(cidr, strict=False)
+			for cidr in settings.cloudflare_proxy_cidrs
+		)
+	except ValueError:
+		return False
+
+
 def _client_identity(request: Request) -> ClientIdentity:
 	peer = request.client.host if request.client else "127.0.0.1"
 	if not _trusted_peer(request):
 		return ClientIdentity(peer, "direct_peer")
-	for header, source in (
-		("x-sf-client-ip", "trusted_edge"),
-		("cf-connecting-ip", "cloudflare_legacy"),
-	):
+	candidates = [
+		("x-sf-client-ip", "cloudflare_edge" if _cloudflare_edge(request) else "trusted_nginx"),
+	]
+	if _cloudflare_edge(request):
+		candidates.append(("cf-connecting-ip", "cloudflare_legacy"))
+	for header, source in candidates:
 		candidate = request.headers.get(header, "").strip()
 		try:
 			if candidate:
@@ -2457,7 +2472,7 @@ async def gateway(path: str, request: Request):
 			)
 			return await _proxy(request, body, upstream, context, RiskResult(0, "normal", []), "bypass")
 		headers = {name.lower(): value for name, value in request.headers.items()}
-		if not _trusted_peer(request):
+		if not _cloudflare_edge(request):
 			headers = {name: value for name, value in headers.items() if not name.startswith("cf-")}
 		intel, geo_source = await request.app.state.geo.lookup(ip, headers)
 		context = RequestContext(

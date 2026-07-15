@@ -24,7 +24,7 @@ from starlette.requests import Request
 
 from app.config import settings
 from app.database import stable_hash
-from app.main import _automatic_ban, _client_identity, _entity_subjects, _reconcile_entity_bans, _record_entity_signals, app
+from app.main import _automatic_ban, _client_identity, _cloudflare_edge, _entity_subjects, _reconcile_entity_bans, _record_entity_signals, app
 from app.rate_limit import RateHit
 from app.risk import RiskResult
 from app.rules import RequestContext, RuleDecision
@@ -81,6 +81,7 @@ class ShieldApplicationTests(unittest.TestCase):
 				"path": "/",
 				"headers": [
 					(b"x-sf-client-ip", b"8.8.8.8"),
+					(b"x-sf-proxy-ip", b"172.64.10.20"),
 					(b"x-forwarded-for", b"1.1.1.1"),
 				],
 				"client": ("127.0.0.1", 12345),
@@ -90,7 +91,27 @@ class ShieldApplicationTests(unittest.TestCase):
 		)
 		identity = _client_identity(request)
 		self.assertEqual(identity.ip, "8.8.8.8")
-		self.assertEqual(identity.source, "trusted_edge")
+		self.assertEqual(identity.source, "cloudflare_edge")
+		self.assertTrue(_cloudflare_edge(request))
+
+	def test_direct_origin_request_cannot_supply_cloudflare_geo_evidence(self):
+		request = Request(
+			{
+				"type": "http",
+				"method": "GET",
+				"path": "/",
+				"headers": [
+					(b"x-sf-client-ip", b"203.0.113.10"),
+					(b"x-sf-proxy-ip", b"203.0.113.10"),
+					(b"cf-ipcountry", b"US"),
+				],
+				"client": ("127.0.0.1", 12345),
+				"server": ("127.0.0.1", 9080),
+				"scheme": "http",
+			}
+		)
+		self.assertFalse(_cloudflare_edge(request))
+		self.assertEqual(_client_identity(request).source, "trusted_nginx")
 
 	def test_untrusted_peer_cannot_spoof_edge_identity(self):
 		request = Request(
