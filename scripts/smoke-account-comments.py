@@ -371,6 +371,24 @@ def main() -> None:
 		)
 		if reply["comment"]["rootId"] != created_comment["comment"]["id"]:
 			raise AssertionError("comment reply was not attached to its root thread")
+		nested_reply = module.comment_create(
+			module.CommentCreatePayload(
+				postSlug="smoke-post",
+				content="Nested threaded reply",
+				turnstileToken="comment-ok",
+				parentId=reply["comment"]["id"],
+			),
+			StubRequest(
+				{module.ACCOUNT_SESSION_COOKIE: cookie},
+				{"cf-connecting-ip": "8.8.4.4"},
+			),
+			session["csrf"],
+		)
+		if (
+			nested_reply["comment"]["parentId"] != reply["comment"]["id"]
+			or nested_reply["comment"]["rootId"] != created_comment["comment"]["id"]
+		):
+			raise AssertionError("nested reply ancestry was not preserved")
 		second_root = module.comment_create(
 			module.CommentCreatePayload(
 				postSlug="smoke-post",
@@ -385,7 +403,7 @@ def main() -> None:
 		)
 		first_page = module.comments("smoke-post", limit=1)
 		if (
-			first_page["totalCount"] != 3
+			first_page["totalCount"] != 4
 			or len(first_page["items"]) != 1
 			or not first_page["nextCursor"]
 		):
@@ -406,6 +424,11 @@ def main() -> None:
 			StubRequest({module.ACCOUNT_SESSION_COOKIE: cookie}),
 			session["csrf"],
 		)
+		module.comment_delete(
+			reply["comment"]["id"],
+			StubRequest({module.ACCOUNT_SESSION_COOKIE: cookie}),
+			session["csrf"],
+		)
 		thread_page = module.comments("smoke-post", limit=10)
 		deleted_root = next(
 			item
@@ -414,8 +437,13 @@ def main() -> None:
 		)
 		if not deleted_root["isDeleted"] or deleted_root["content"]:
 			raise AssertionError("deleted thread root did not become a safe tombstone")
-		if deleted_root["replies"][0]["id"] != reply["comment"]["id"]:
-			raise AssertionError("reply disappeared after its root was soft-deleted")
+		if (
+			deleted_root["replies"][0]["id"] != reply["comment"]["id"]
+			or not deleted_root["replies"][0]["isDeleted"]
+		):
+			raise AssertionError("deleted reply ancestor did not remain as a tombstone")
+		if deleted_root["replies"][0]["replies"][0]["id"] != nested_reply["comment"]["id"]:
+			raise AssertionError("nested reply disappeared from its parent branch")
 
 		module.require_admin_console_session = lambda *_args, **_kwargs: {"bot_id": module.ADMIN_AUTH_ID}
 		module.admin_comment_restore(
@@ -531,7 +559,7 @@ def main() -> None:
 			tos_count = connection.execute("SELECT COUNT(*) FROM tos_acceptances").fetchone()[0]
 			if code or not code_hash:
 				raise AssertionError("verification code was not stored hash-only")
-			if comment_count != 3 or tos_count != 1:
+			if comment_count != 4 or tos_count != 1:
 				raise AssertionError("comment or TOS audit record was not persisted")
 
 		del module

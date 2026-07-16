@@ -73,8 +73,8 @@ Accounts is a standalone account workspace. Do not restore the public blog navba
 ## Blog Discussion And Markdown Contract
 
 - A Ghost post owns only its content and slug. SilentFlare FastAPI owns Discussion identities, comment records, authorization, and mutations keyed by that slug.
-- The post Discussion surface shows the exact live comment count, an icon-only refresh command, the authenticated Markdown composer, cursor-paginated root threads, and one level of replies. Unauthenticated users receive the canonical Auth redirect with the current post URL as `return_url`.
-- Replies use the existing `parent_id` plus `root_id`. A reply to another reply is normalized to the same root so the public UI never nests more than one level. A deleted root with published replies remains as a content-free tombstone so its replies do not become orphaned.
+- The post Discussion surface shows the exact live comment count, an icon-only refresh command, the authenticated Markdown composer, cursor-paginated root threads, and recursively nested replies. Each comment initially shows at most five direct replies and exposes an accessible expand/collapse command for the remainder. Unauthenticated users receive the canonical Auth redirect with the current post URL as `return_url`.
+- Replies use `parent_id` for their direct parent and `root_id` for root-thread pagination. Replies may nest without an application-level depth limit. A deleted ancestor with published descendants remains as a content-free tombstone so its branch does not become orphaned.
 - The shared editor has explicit Write and Preview modes, a 1000-character counter, and controls for bold, italic, inline code, quote, bulleted list, and link insertion. It is used for both publishing and inline editing.
 - Markdown source is stored as normalized text limited to 1-1000 characters. Rendering uses `markdown-it` with raw HTML disabled, image syntax disabled, line breaks and linkification enabled, and generated links forced to a new tab with `nofollow noopener noreferrer`.
 - Published comments render paragraphs, lists, quotes, compact headings, links, inline code, and fenced code without allowing user HTML. Do not replace this renderer with untrusted direct `{@html}` content.
@@ -142,7 +142,7 @@ Accounts is a standalone account workspace. Do not restore the public blog navba
 - `POST /accounts/danger/delete/cancel`: clears pending or approved deletion-review state before final deletion.
 - Legacy `POST /account/auth/register` and `POST /account/auth/login` return `410`; do not re-enable them.
 - `GET /comments?postSlug=...&limit=...&cursor=...`: public root-thread page for a Ghost post slug. It returns `items`, exact `totalCount`, `threadCount`, and `nextCursor`, plus a flattened `comments` compatibility projection.
-- `POST /comments/create`: authenticated public-user comment or one-level reply creation with Turnstile, CSRF, and account/IP rate limits. `parentId` is optional.
+- `POST /comments/create`: authenticated public-user comment or recursively nested reply creation with Turnstile, CSRF, and account/IP rate limits. `parentId` is optional.
 - `PATCH /comments/{comment_id}`: authenticated Markdown source update with CSRF for the author or a local `admin` role user.
 - `DELETE /comments/{comment_id}`: authenticated public-user soft delete with CSRF for the author or a local `admin` role user.
 - Public-account deletes and Owner moderation are recorded in `comment_moderation_events`; edits preserve the previous source in `comment_revisions`.

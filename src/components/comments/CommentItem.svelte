@@ -12,14 +12,12 @@ import MarkdownEditor from "./MarkdownEditor.svelte";
 let {
 	comment,
 	currentUser,
-	isReply = false,
 	onDeleted,
 	onUpdated,
 	onReply,
 }: {
 	comment: CommentRecord;
 	currentUser: CurrentUser | null;
-	isReply?: boolean;
 	onDeleted: () => void | Promise<void>;
 	onUpdated: () => void | Promise<void>;
 	onReply?: () => void;
@@ -138,9 +136,12 @@ function requestDelete() {
 						<p class="max-w-full truncate font-bold text-90">{authorName}</p>
 						{#if comment.author.displayName}<span class="truncate text-sm text-50">@{comment.author.username}</span>{/if}
 					</div>
-					<p class="text-sm text-50">
+					<p class="flex flex-wrap items-center gap-x-1.5 text-sm text-50">
 						<time datetime={comment.createdAt} title={formatTime(comment.createdAt)}>{formatRelativeTime(comment.createdAt)}</time>
-						{#if wasEdited}<span aria-label="Edited"> · Edited</span>{/if}
+						{#if wasEdited}
+							<span aria-hidden="true">/</span>
+							<span>Edited <time datetime={comment.updatedAt} title={formatTime(comment.updatedAt)}>{formatRelativeTime(comment.updatedAt)}</time></span>
+						{/if}
 					</p>
 				</div>
 
@@ -172,7 +173,7 @@ function requestDelete() {
 				<p class="mt-3 italic text-50">This comment was deleted.</p>
 			{:else}
 				<div class="mt-3"><CommentMarkdown content={comment.content} /></div>
-				{#if !isReply && currentUser && onReply}
+				{#if currentUser && onReply}
 					<button class="mt-2 flex min-h-11 items-center gap-2 rounded-lg px-2 text-sm font-bold text-50 hover:bg-[var(--btn-plain-bg-hover)] hover:text-[var(--primary)]" type="button" onclick={onReply}>
 						<Icon icon="material-symbols:reply-rounded" class="text-[1.15rem]" />Reply
 					</button>

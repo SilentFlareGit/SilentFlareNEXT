@@ -2214,6 +2214,42 @@ def comment_payload(row: dict[str, Any]) -> dict[str, Any]:
 	}
 
 
+def comment_reply_tree(
+	root_id: str,
+	reply_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+	rows_by_parent: dict[str, list[dict[str, Any]]] = {}
+	for row in reply_rows:
+		parent_id = str(row.get("parent_id") or "")
+		rows_by_parent.setdefault(parent_id, []).append(row)
+
+	def children(parent_id: str, ancestors: frozenset[str]) -> list[dict[str, Any]]:
+		items: list[dict[str, Any]] = []
+		for row in rows_by_parent.get(parent_id, []):
+			comment_id = str(row["id"])
+			if comment_id in ancestors:
+				continue
+			replies = children(comment_id, ancestors | {comment_id})
+			item = comment_payload(row)
+			if item["isDeleted"] and not replies:
+				continue
+			items.append({**item, "replies": replies})
+		return items
+
+	return children(root_id, frozenset({root_id}))
+
+
+def flatten_comment_tree(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+	flat: list[dict[str, Any]] = []
+	stack = list(reversed(items))
+	while stack:
+		item = stack.pop()
+		replies = item.get("replies", [])
+		flat.append({key: value for key, value in item.items() if key != "replies"})
+		stack.extend(reversed(replies))
+	return flat
+
+
 def chat_bot_control_configured() -> bool:
 	if CHAT_BOT_CONTROL_MODE == "local":
 		return True
@@ -3362,22 +3398,30 @@ def comments(
 			FROM comments
 			INNER JOIN users ON users.id = comments.user_id
 			WHERE comments.root_id IN ({placeholders})
-				AND comments.status = 'published'
-				AND comments.deleted_at IS NULL
+				AND (
+					(comments.status = 'published' AND comments.deleted_at IS NULL)
+					OR comments.status = 'deleted'
+					OR comments.deleted_at IS NOT NULL
+				)
 			ORDER BY comments.created_at ASC, comments.id ASC
 			""",
 			root_ids,
 		)
-	replies_by_root: dict[str, list[dict[str, Any]]] = {root_id: [] for root_id in root_ids}
-	for row in reply_rows:
-		replies_by_root.setdefault(str(row["root_id"]), []).append(comment_payload(row))
+	reply_rows_by_root: dict[str, list[dict[str, Any]]] = {
+		root_id: [] for root_id in root_ids
+	}
+	for reply_row in reply_rows:
+		reply_rows_by_root.setdefault(str(reply_row["root_id"]), []).append(reply_row)
 	items: list[dict[str, Any]] = []
-	flat_comments: list[dict[str, Any]] = []
 	for row in root_rows:
 		root = comment_payload(row)
-		replies = replies_by_root.get(str(row["id"]), [])
+		root_id = str(row["id"])
+		replies = comment_reply_tree(
+			root_id,
+			reply_rows_by_root.get(root_id, []),
+		)
 		items.append({**root, "replies": replies})
-		flat_comments.extend([root, *replies])
+	flat_comments = flatten_comment_tree(items)
 	total_rows = d1_query(
 		"""
 		SELECT COUNT(*) AS count
@@ -3463,7 +3507,7 @@ def comment_create(
 		):
 			raise HTTPException(status_code=404, detail="Parent comment not found")
 		root_id = str(parent_rows[0].get("root_id") or parent_rows[0]["id"])
-		parent_id = root_id
+		parent_id = requested_parent_id
 	now = utc_now()
 	comment_id = str(uuid.uuid4())
 	d1_query(
