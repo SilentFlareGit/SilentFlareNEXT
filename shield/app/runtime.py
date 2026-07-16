@@ -23,4 +23,6 @@ def create_role_app(role: str, route_filter: RouteFilter) -> FastAPI:
 	for route in main.app.routes:
 		if isinstance(route, APIRoute) and route_filter(route.path):
 			application.router.routes.append(route)
+	if role == "gateway":
+		main.add_gateway_cors(application)
 	return application

@@ -19,6 +19,7 @@ from urllib.parse import quote, urlparse
 import httpx
 import pycountry
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
@@ -57,6 +58,33 @@ BLOCK_HTML = (STATIC_ROOT / "blocked.html").read_text(encoding="utf-8").replace(
 HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade"}
 EDGE_IDENTITY_HEADERS = {"x-sf-client-ip", "x-sf-proxy-ip", "cf-connecting-ip"}
 SENSITIVE_PATHS = ("/auth/", "/accounts/register/", "/admin", "/comments/create")
+API_CORS_ALLOWED_ORIGINS = (
+	"https://blog.silentflare.com",
+	"https://admin.silentflare.com",
+	"https://accounts.silentflare.com",
+	"https://tgbot.silentflare.com",
+	"https://tgbotmanagement.silentflare.com",
+	"https://auth.silentflare.com",
+	"http://blog.silentflare.com",
+	"http://admin.silentflare.com",
+	"http://accounts.silentflare.com",
+	"http://tgbot.silentflare.com",
+	"http://tgbotmanagement.silentflare.com",
+	"http://auth.silentflare.com",
+)
+PUBLIC_API_READ_PATHS = frozenset({"/auth/session", "/comments", "/site/settings"})
+
+
+def add_gateway_cors(application: FastAPI) -> None:
+	application.add_middleware(
+		CORSMiddleware,
+		allow_origins=API_CORS_ALLOWED_ORIGINS,
+		allow_credentials=True,
+		allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+		allow_headers=["Content-Type", "X-Admin-Token", "X-CSRF-Token"],
+	)
+
+
 class AccessListInput(BaseModel):
 	kind: str = Field(pattern=r"^(allow|deny)$")
 	subject_type: str = Field(pattern=r"^(ip|cidr|asn|country|region|account)$")
@@ -229,6 +257,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="SilentFlare Shield", version="0.1.0", docs_url=None, redoc_url=None, lifespan=lifespan)
+add_gateway_cors(app)
 
 
 def _trusted_peer(request: Request) -> bool:
@@ -1248,6 +1277,20 @@ def _apply_entity_score(
 		risk.level = entity_level(entity_score)
 		risk.reasons.append("Existing subject risk score")
 	return subjects
+
+
+def _enforcement_risk(
+	context: RequestContext,
+	request_risk: RiskResult,
+	combined_risk: RiskResult,
+) -> RiskResult:
+	if (
+		context.host == "api.silentflare.com"
+		and context.method in {"GET", "HEAD"}
+		and context.path in PUBLIC_API_READ_PATHS
+	):
+		return request_risk
+	return combined_risk
 
 
 def _record_entity_signals(
@@ -2759,6 +2802,7 @@ async def gateway(path: str, request: Request):
 		weights = request.app.state.database.setting("risk_weights", {})
 		thresholds = request.app.state.database.setting("risk_thresholds", {})
 		risk = score_request(intel, headers, weights, thresholds, list_status, bool(rates))
+		request_risk = RiskResult(risk.score, risk.level, list(risk.reasons))
 		entity_subjects = _apply_entity_score(request.app.state.entities, context, risk, weights)
 		context.risk_score = risk.score
 		rule_decision = request.app.state.rules.evaluate(context, mode)
@@ -2789,7 +2833,16 @@ async def gateway(path: str, request: Request):
 			and clearance.get("path") == request.url.path
 		)
 		challenge_passed = challenge_passed or clearance_passed
-		actions = _actions(mode, risk, list_status, ban, rates, rule_decision, challenge_passed, [geo_action] if geo_action else [])
+		actions = _actions(
+			mode,
+			_enforcement_risk(context, request_risk, risk),
+			list_status,
+			ban,
+			rates,
+			rule_decision,
+			challenge_passed,
+			[geo_action] if geo_action else [],
+		)
 		response_exempt = any(
 			request.app.state.entities.active_override(
 				int(subject["id"]), "response_exemption", context.host, context.path

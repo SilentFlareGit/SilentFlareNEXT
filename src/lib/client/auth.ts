@@ -22,7 +22,8 @@ async function fetchJson<T>(url: string, init: RequestInit = {}): Promise<T> {
 		...init,
 		credentials: "include",
 		headers: {
-			"content-type": "application/json",
+			Accept: "application/json",
+			...(init.body ? { "content-type": "application/json" } : {}),
 			...(init.headers ?? {}),
 		},
 	});

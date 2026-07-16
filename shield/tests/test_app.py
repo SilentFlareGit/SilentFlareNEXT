@@ -26,7 +26,7 @@ from starlette.requests import Request
 
 from app.config import settings
 from app.database import stable_hash
-from app.main import _apply_geo_policy_risk, _automatic_ban, _client_identity, _cloudflare_edge, _entity_subjects, _geo_policy_action, _reconcile_entity_bans, _record_entity_signals, _resolve_account, app
+from app.main import _apply_geo_policy_risk, _automatic_ban, _client_identity, _cloudflare_edge, _enforcement_risk, _entity_subjects, _geo_policy_action, _reconcile_entity_bans, _record_entity_signals, _resolve_account, app
 from app.rate_limit import RateHit
 from app.risk import RiskResult
 from app.rules import RequestContext, RuleDecision
@@ -678,6 +678,48 @@ class ShieldApplicationTests(unittest.TestCase):
 			response = gateway_client.get("/split-runtime", headers={"Host": "blog.silentflare.com"})
 			self.assertEqual(response.status_code, 200)
 			self.assertEqual(response.text, "split-gateway-ok")
+
+	def test_split_gateway_handles_trusted_api_cors_before_risk_scoring(self):
+		from app.gateway.app import app as gateway_app
+
+		with TestClient(gateway_app) as gateway_client:
+			response = gateway_client.options(
+				"/auth/session",
+				headers={
+					"Host": "api.silentflare.com",
+					"Origin": "https://blog.silentflare.com",
+					"Access-Control-Request-Method": "GET",
+					"Access-Control-Request-Headers": "content-type",
+				},
+			)
+			self.assertEqual(response.status_code, 200)
+			self.assertEqual(
+				response.headers["access-control-allow-origin"],
+				"https://blog.silentflare.com",
+			)
+			self.assertEqual(response.headers["access-control-allow-credentials"], "true")
+
+	def test_public_api_reads_do_not_enforce_accumulated_subject_risk(self):
+		request_risk = RiskResult(0, "normal", [])
+		combined_risk = RiskResult(50, "verify", ["Existing subject risk score"])
+		for path in ("/auth/session", "/comments", "/site/settings"):
+			context = RequestContext(
+				request_id="public-read-risk",
+				host="api.silentflare.com",
+				path=path,
+				method="GET",
+				ip="203.0.113.80",
+			)
+			self.assertIs(_enforcement_risk(context, request_risk, combined_risk), request_risk)
+
+		mutation = RequestContext(
+			request_id="comment-mutation-risk",
+			host="api.silentflare.com",
+			path="/comments/create",
+			method="POST",
+			ip="203.0.113.80",
+		)
+		self.assertIs(_enforcement_risk(mutation, request_risk, combined_risk), combined_risk)
 
 	def test_automatic_account_policy_bans_account_root_once(self):
 		context = RequestContext(
