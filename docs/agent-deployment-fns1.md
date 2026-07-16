@@ -52,6 +52,10 @@ ssh -i $key root@167.233.129.17 'systemctl restart silentflare-api.service; syst
 
 Expected API service status: `active`.
 
+When Blog comment publishing is added or moved to a new hostname, audit `TURNSTILE_EXPECTED_HOSTNAMES` in `/opt/silentflare/api/api.env` without printing secrets or tokens. `blog.silentflare.com` must be allowed for the production Discussion widget, alongside every Auth or Accounts hostname that renders Turnstile. Back up `api.env`, update only the hostname list, restart `silentflare-api.service`, and verify a real authenticated browser publication. A successful widget followed by `Human verification failed` usually means the returned hostname is missing from this allowlist.
+
+Comment changes can span both deployment units. Deploy and restart `server/api/app.py` first when the endpoint contract changes, then let the static Astro release deploy the Svelte client. Verify create, edit, and delete in production only after both versions are active; remove the test comment when finished.
+
 The deploy script also does not manage Nginx subsite configuration. When account/admin routing changes, update these files manually on FNS1 and test/reload Nginx:
 
 ```text

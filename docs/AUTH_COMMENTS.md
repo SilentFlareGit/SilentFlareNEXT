@@ -14,7 +14,7 @@ Backend-only values for `/opt/silentflare/api/api.env`:
 
 ```env
 TURNSTILE_SECRET_KEY=
-TURNSTILE_EXPECTED_HOSTNAMES=accounts.silentflare.com,silentflare.com,www.silentflare.com
+TURNSTILE_EXPECTED_HOSTNAMES=auth.silentflare.com,accounts.silentflare.com,blog.silentflare.com,silentflare.com,www.silentflare.com
 # Legacy fallback if TURNSTILE_EXPECTED_HOSTNAMES is unset:
 # TURNSTILE_EXPECTED_HOSTNAME=accounts.silentflare.com
 SESSION_SECRET=
@@ -54,12 +54,24 @@ POST /accounts/danger/delete/cancel
 
 GET  /comments?postSlug=...
 POST /comments/create
+PATCH /comments/{comment_id}
 DELETE /comments/{comment_id}
 ```
 
 `auth.silentflare.com` and `accounts.silentflare.com` call FastAPI through their same-origin `/auth-api/` and `/accounts-api/` proxies. Blog pages call comments through the public API path. `ACCOUNT_COOKIE_DOMAIN=.silentflare.com` lets the HttpOnly account session work across SilentFlare subdomains.
 
-Registration, password login, and comment creation must submit a Turnstile token. After Cloudflare siteverify succeeds, the API validates the returned `hostname` against the configured allowlist. Legacy `/account/auth/register` and `/account/auth/login` return `410` and must not be used by new clients.
+Registration, password login, and comment creation must submit a Turnstile token. After Cloudflare siteverify succeeds, the API validates the returned `hostname` against the configured allowlist. Every hostname that renders one of those widgets must be present; in particular, Blog comment publishing requires `blog.silentflare.com`. Legacy `/account/auth/register` and `/account/auth/login` return `410` and must not be used by new clients.
+
+## Blog Discussion And Markdown
+
+- `CommentSection.svelte` loads the public account session and the comments for the current Ghost post slug. It owns the count, refresh command, authenticated/unauthenticated state, and list refresh lifecycle.
+- `MarkdownEditor.svelte` provides Write and Preview modes, a 1000-character limit, and formatting commands for bold, italic, inline code, quotes, bulleted lists, and links. The same editor is used to create and edit comments.
+- `CommentMarkdown.svelte` renders stored Markdown source through `src/lib/client/comment-markdown.ts`. Raw HTML and images are disabled. Links open in a new tab with `nofollow noopener noreferrer`.
+- The API stores normalized Markdown source, not rendered HTML. Comment content must contain 1-1000 characters after normalization.
+- Creation requires an authenticated account session, CSRF, and Turnstile. Editing and soft deletion require the account session and CSRF.
+- `PATCH /comments/{comment_id}` is allowed only for the author or a local public-account `admin`, and only while the comment is published and not deleted. It returns the updated public comment payload.
+- The UI marks a comment as edited when its update timestamp differs from its creation timestamp.
+- Create, edit, and delete callbacks await a fresh comment-list request before clearing their busy state. This prevents a successful mutation from leaving stale content on screen.
 
 ## Account Center And Deletion
 
@@ -85,7 +97,8 @@ The test uses a temporary SQLite database and a mocked successful Turnstile resp
 - registration without Turnstile returns `403`;
 - mocked successful Turnstile allows registration and login to proceed;
 - mocked successful Turnstile allows authenticated comment creation;
-- the comment is written to the local database.
+- Markdown source is written to the local database;
+- an authenticated Markdown edit persists and is returned by the comment API.
 
 ## Manual API Checks
 
@@ -103,12 +116,14 @@ Browser test flow:
 2. Use `Sign in`, or open `https://auth.silentflare.com/`.
 3. Register through Accounts when needed, then sign in through Auth.
 4. Confirm `/auth-api/auth/session` returns `configured: true` and an authenticated user in the browser network tab.
-5. Publish a comment from the post comment form.
-6. Refresh comments and confirm the comment appears without exposing email.
-7. Delete your own comment and confirm it disappears.
-8. Log out from Account Center and confirm `/auth-api/auth/session` returns `user: null`.
-9. In Sessions, confirm individual revocation works and `Sign out all` does not request an email code.
-10. In Danger Zone, confirm deletion is disabled without 2FA; with 2FA enabled, complete email verification, authenticator verification, and confirmation text, then verify Admin shows a pending review request.
+5. Publish Markdown containing bold text, a quote, a list, and a safe link from the post Discussion form.
+6. Confirm the comment appears automatically, renders the supported Markdown, and does not expose email or raw audit data.
+7. Edit the comment inline, save it, and confirm the rendered content and `Edited` marker update without pressing the manual refresh command.
+8. Test the editor at desktop and mobile widths; the toolbar must wrap without horizontal overflow and icon actions must remain usable.
+9. Delete your own comment and confirm the count and empty state update automatically.
+10. Log out from Account Center and confirm `/auth-api/auth/session` returns `user: null`.
+11. In Sessions, confirm individual revocation works and `Sign out all` does not request an email code.
+12. In Danger Zone, confirm deletion is disabled without 2FA; with 2FA enabled, complete email verification, authenticator verification, and confirmation text, then verify Admin shows a pending review request.
 
 ## Security Notes
 
@@ -118,5 +133,5 @@ Browser test flow:
 - Sensitive email proofs are action-bound, short-lived, single-use, and stored only as keyed hashes.
 - TOTP secrets are encrypted and authenticated at rest. Never expose them through account or admin responses.
 - Deletion review state is administrative metadata; email codes, proof tokens, and TOTP codes must never be stored with the review request.
-- Comments are stored and rendered as plain text; the frontend does not use unsafe HTML.
+- Comments are stored as Markdown source. The renderer disables raw HTML and images and never injects the source directly as HTML.
 - Keep `/opt/silentflare/api/account.db` and `/opt/silentflare/api/api.env` out of the repository.

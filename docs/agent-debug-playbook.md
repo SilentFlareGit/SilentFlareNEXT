@@ -35,7 +35,9 @@ corepack pnpm test:smoke:account-comments
 
 This smoke test also covers the Admin Telegram web-login gate: Owner enable, fixed one-hour Admin session expiry, Owner disable, and immediate Admin session/challenge revocation.
 
-This uses a temporary local database and mocked Turnstile success. It must verify missing Turnstile returns `403` and mocked successful Turnstile can proceed through registration, login, and comment creation.
+This uses a temporary local database and mocked Turnstile success. It must verify missing Turnstile returns `403`, mocked successful Turnstile can proceed through registration, login, and Markdown comment creation, and an authenticated Markdown edit is persisted and returned.
+
+For a Discussion UI change, production browser QA should cover Markdown preview, real comment publication, rendered Markdown, inline editing, the `Edited` marker, automatic list refresh after every mutation, deletion cleanup, and both desktop and mobile widths. Remove any test comment before finishing. If publication returns `Human verification failed` while the widget succeeds, audit the configured Turnstile hostname allowlist without printing the secret and confirm `blog.silentflare.com` is present.
 
 Standard local validation without real Ghost:
 

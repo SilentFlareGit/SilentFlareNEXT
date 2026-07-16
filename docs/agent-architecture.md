@@ -24,6 +24,7 @@ The front end may only use a Ghost Content API key. Ghost Admin API keys are for
 - `/admin/`: owner/admin console for public user and comment management, served from `admin.silentflare.com`.
 - `/bots/`: bot-management console, served from `tgbot.silentflare.com` and `tgbotmanagement.silentflare.com`.
 - Blog routes stay public-renderer routes and must not directly host account forms or admin data management.
+- Ghost post pages may embed the SilentFlare-owned Discussion client. Ghost supplies the post slug only; FastAPI owns comment storage and mutations, while the Svelte client owns Markdown editing, safe rendering, and responsive interaction.
 
 ## Data Layer Rules
 

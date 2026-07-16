@@ -28,7 +28,10 @@ Public users share one opaque API-issued session cookie across `.silentflare.com
 - Admin page: `src/pages/admin/index.astro`.
 - Admin app: `src/components/admin/AdminApp.svelte`.
 - Blog navbar account entry: `src/components/auth/UserMenu.svelte`.
-- Blog comment login redirect: `src/components/comments/CommentSection.svelte`.
+- Blog Discussion orchestration and login redirect: `src/components/comments/CommentSection.svelte`.
+- Comment publishing and editing UI: `src/components/comments/CommentForm.svelte`, `src/components/comments/CommentItem.svelte`, and `src/components/comments/MarkdownEditor.svelte`.
+- Safe comment rendering: `src/components/comments/CommentMarkdown.svelte` and `src/lib/client/comment-markdown.ts`.
+- Comment API client: `src/lib/client/comments.ts`.
 
 Accounts is a standalone account workspace. Do not restore the public blog navbar/banner above it. Admin is a standalone, light-only owner workspace and must not show bot backup, chat, health-dashboard, or unrelated operational controls.
 
@@ -66,6 +69,19 @@ Accounts is a standalone account workspace. Do not restore the public blog navba
 - Direct unauthenticated visits to Accounts redirect to Auth with Accounts as the safe `return_url`.
 - Auth's create-account command navigates to Accounts registration. Auth must not render registration itself.
 - Comment prompts use the same auth redirect. Comment writes require the all-site session, Turnstile, and `X-CSRF-Token`.
+
+## Blog Discussion And Markdown Contract
+
+- A Ghost post owns only its content and slug. SilentFlare FastAPI owns Discussion identities, comment records, authorization, and mutations keyed by that slug.
+- The post Discussion surface shows the live comment count, an icon-only refresh command, the authenticated Markdown composer, and the comment list. Unauthenticated users receive the canonical Auth redirect with the current post URL as `return_url`.
+- The shared editor has explicit Write and Preview modes, a 1000-character counter, and controls for bold, italic, inline code, quote, bulleted list, and link insertion. It is used for both publishing and inline editing.
+- Markdown source is stored as normalized text limited to 1-1000 characters. Rendering uses `markdown-it` with raw HTML disabled, image syntax disabled, line breaks and linkification enabled, and generated links forced to a new tab with `nofollow noopener noreferrer`.
+- Published comments render paragraphs, lists, quotes, compact headings, links, inline code, and fenced code without allowing user HTML. Do not replace this renderer with untrusted direct `{@html}` content.
+- A comment author or a local public-account `admin` may edit a published, non-deleted comment. The UI displays `Edited` when `updatedAt` differs from `createdAt`.
+- A comment author or local public-account `admin` may soft-delete a comment. Admin-console moderation remains a separate owner action.
+- Publishing requires Turnstile, the all-site account session, and CSRF. Editing and deletion require the account session and CSRF; they do not request a new Turnstile token.
+- After create, edit, or delete succeeds, the mutation UI must await `loadComments()` before leaving its busy state. Fire-and-forget refresh callbacks cause stale content and must not be restored.
+- Editor controls and comment actions must remain usable at mobile width, preserve 44 px touch targets for primary icon actions, wrap the formatting toolbar, and avoid document-level horizontal overflow.
 
 `return_url` must be HTTPS and its hostname must be exactly `silentflare.com` or end with `.silentflare.com`; credentials, explicit ports, lookalike suffixes, and external hosts fall back to Accounts.
 
