@@ -6,9 +6,13 @@ import MarkdownEditor from "./MarkdownEditor.svelte";
 
 let {
 	postSlug,
+	parentId = null,
+	compact = false,
 	onCreated,
 }: {
 	postSlug: string;
+	parentId?: string | null;
+	compact?: boolean;
 	onCreated: () => void | Promise<void>;
 } = $props();
 
@@ -38,11 +42,16 @@ async function submit() {
 
 	loading = true;
 	try {
-		await createComment({ postSlug, content: trimmed, turnstileToken });
+		await createComment({
+			postSlug,
+			content: trimmed,
+			turnstileToken,
+			parentId,
+		});
 		content = "";
 		turnstileToken = "";
 		resetKey += 1;
-		success = "Comment published.";
+		success = parentId ? "Reply published." : "Comment published.";
 		await onCreated();
 	} catch (err) {
 		error = err instanceof Error ? err.message : "Could not publish comment";
@@ -54,7 +63,7 @@ async function submit() {
 </script>
 
 <form class="flex flex-col gap-4" onsubmit={(event) => { event.preventDefault(); void submit(); }}>
-	<MarkdownEditor bind:value={content} />
+	<MarkdownEditor bind:value={content} label={parentId ? "Reply" : "Comment"} minHeightClass={compact ? "min-h-28" : "min-h-36"} placeholder={parentId ? "Write a reply..." : "Join the discussion..."} />
 	<div class="flex justify-center sm:justify-end">
 		<TurnstileWidget action="comment" resetKey={resetKey} onTokenChange={(token) => { turnstileToken = token; }} />
 	</div>
@@ -66,6 +75,6 @@ async function submit() {
 	{/if}
 	<button class="btn-regular min-h-11 rounded-lg px-4 font-bold active:scale-95 disabled:cursor-not-allowed disabled:opacity-60" type="submit" disabled={loading || !content.trim()}>
 		<Icon icon="material-symbols:send-rounded" class="mr-2 text-[1.15rem]" />
-		{loading ? "Publishing..." : "Publish comment"}
+		{loading ? "Publishing..." : parentId ? "Publish reply" : "Publish comment"}
 	</button>
 </form>

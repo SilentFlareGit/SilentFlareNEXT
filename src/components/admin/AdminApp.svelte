@@ -83,6 +83,11 @@ type CommentRow = {
 	updated_at: string;
 	deleted_at: string | null;
 	created_ip?: string;
+	parent_id?: string | null;
+	root_id?: string | null;
+	last_moderation_action?: string;
+	last_moderation_reason?: string;
+	revision_count?: number;
 };
 type AdminStatus = {
 	d1_configured?: boolean;
@@ -117,6 +122,14 @@ let selectedUserPreferences = $state<AccountPreferences | null>(null);
 let selectedUserSecurityEvents = $state<SecurityEvent[]>([]);
 let search = $state("");
 let postSlugFilter = $state("");
+let commentStatusFilter = $state<"all" | "published" | "deleted">("all");
+let commentTotal = $state(0);
+let commentNextCursor = $state<string | null>(null);
+let loadingMoreComments = $state(false);
+let moderationTarget = $state<CommentRow | null>(null);
+let moderationAction = $state<"delete" | "restore">("delete");
+let moderationReason = $state("");
+let moderating = $state(false);
 let loading = $state(false);
 let actionMessage = $state("");
 let sessionCheckTimer: number | undefined;
@@ -246,20 +259,35 @@ async function loadUsers() {
 		loading = false;
 	}
 }
-async function loadComments() {
-	loading = true;
-	const query = postSlugFilter.trim()
-		? `?post_slug=${encodeURIComponent(postSlugFilter.trim())}`
-		: "";
+async function loadComments(append = false) {
+	if (append) loadingMoreComments = true;
+	else loading = true;
+	const params = new URLSearchParams({
+		status: commentStatusFilter,
+		limit: "50",
+	});
+	if (postSlugFilter.trim()) {
+		params.set("post_slug", postSlugFilter.trim());
+	}
+	if (append && commentNextCursor) {
+		params.set("cursor", commentNextCursor);
+	}
 	try {
-		const data = await api<{ comments: CommentRow[] }>(
-			`/admin/comments${query}`,
-		);
-		comments = data.comments ?? [];
+		const data = await api<{
+			comments: CommentRow[];
+			totalCount?: number;
+			nextCursor?: string | null;
+		}>(`/admin/comments?${params}`);
+		comments = append
+			? [...comments, ...(data.comments ?? [])]
+			: (data.comments ?? []);
+		commentTotal = data.totalCount ?? comments.length;
+		commentNextCursor = data.nextCursor ?? null;
 	} catch (error) {
 		showError(error);
 	} finally {
-		loading = false;
+		if (append) loadingMoreComments = false;
+		else loading = false;
 	}
 }
 async function selectUser(user: UserRow) {
@@ -333,21 +361,34 @@ async function deletionReview(user: UserRow, action: "approve" | "reject") {
 		showError(error);
 	}
 }
-async function commentAction(
+function requestCommentAction(
 	comment: CommentRow,
 	action: "delete" | "restore",
 ) {
+	moderationTarget = comment;
+	moderationAction = action;
+	moderationReason = "";
+}
+async function submitCommentAction() {
+	if (!moderationTarget || !moderationReason.trim() || moderating) return;
+	moderating = true;
 	try {
-		await api(`/admin/comments/${encodeURIComponent(comment.id)}/${action}`, {
-			method: "POST",
-			csrf: true,
-			body: "{}",
-		});
-		actionMessage = `Comment ${action}d.`;
+		await api(
+			`/admin/comments/${encodeURIComponent(moderationTarget.id)}/${moderationAction}`,
+			{
+				method: "POST",
+				csrf: true,
+				body: JSON.stringify({ reason: moderationReason.trim() }),
+			},
+		);
+		actionMessage = `Comment ${moderationAction}d.`;
 		actionTone = "success";
 		await loadComments();
+		moderationTarget = null;
 	} catch (error) {
 		showError(error);
+	} finally {
+		moderating = false;
 	}
 }
 async function logout() {
@@ -395,8 +436,31 @@ onDestroy(() => {
 				<div class="metrics"><div><span>Total users</span><strong>{users.length}</strong></div><div><span>Active sessions</span><strong>{users.reduce((sum, user) => sum + Number(user.active_session_count ?? 0), 0)}</strong></div><div><span>Disabled</span><strong>{disabledCount}</strong></div></div>
 				<div class="table-wrap"><table><thead><tr><th>User</th><th>Location / IP</th><th>Security</th><th>Registered</th><th>Activity</th><th></th></tr></thead><tbody>{#if loading}<tr><td colspan="6">Loading users...</td></tr>{:else}{#each visibleUsers as user}<tr><td><button class="user-cell" onclick={() => selectUser(user)}>{#if user.avatar_url}<img src={user.avatar_url} alt=""/>{:else}<span>{initials(user)}</span>{/if}<div><strong>{user.display_name || user.username}</strong><small>@{user.username}<br/>{user.email}</small></div></button></td><td><strong>{countryFlag(user.display_region_code)} {user.display_region || "Unknown"}</strong><small>{user.last_seen_ip || user.registration_ip || "IP not recorded"}</small></td><td><div class="badges"><i>{user.role}</i>{#if user.email_verified_at}<i>verified</i>{/if}{#if user.totp_enabled}<i>2FA</i>{/if}{#if user.profile_public === 0}<i>private</i>{/if}{#if user.security_email === 0}<i>no security mail</i>{/if}{#if user.deletion_review_status}<i class="danger">deletion {user.deletion_review_status}</i>{/if}{#if user.disabled_at}<i class="danger">disabled</i>{/if}</div></td><td>{formatTime(user.created_at)}</td><td><strong>{user.comment_count ?? 0} comments</strong><small>{user.active_session_count ?? 0} active sessions</small></td><td><button class="icon-button" title="View user" onclick={() => selectUser(user)}><Icon icon="material-symbols:chevron-right-rounded"/></button></td></tr>{/each}{/if}</tbody></table></div>
 			{:else if activeTab === "comments"}
-				<form class="filter" onsubmit={(event) => { event.preventDefault(); loadComments(); }}><input class="field" bind:value={postSlugFilter} placeholder="Filter by post slug"/><button class="secondary" type="submit">Apply filter</button></form>
-				<div class="comment-list">{#if loading}<p>Loading comments...</p>{:else}{#each visibleComments as comment}<article><div class="comment-meta"><strong>{comment.display_name || comment.username}</strong><span>{comment.email}</span><i>{comment.status}</i><time>{formatTime(comment.created_at)}</time></div><p>{comment.content}</p><footer><span><Icon icon="material-symbols:article-outline-rounded"/>{comment.post_slug}</span><span><Icon icon="material-symbols:location-on-outline-rounded"/>{comment.created_ip || "IP not recorded"}</span><button class={comment.deleted_at ? "secondary" : "danger-button"} onclick={() => commentAction(comment, comment.deleted_at ? "restore" : "delete")}>{comment.deleted_at ? "Restore" : "Delete"}</button></footer></article>{/each}{/if}</div>
+				<form class="filter comment-filter" onsubmit={(event) => { event.preventDefault(); loadComments(); }}>
+					<input class="field" bind:value={postSlugFilter} placeholder="Filter by post slug"/>
+					<select class="field" bind:value={commentStatusFilter} aria-label="Comment status">
+						<option value="all">All statuses</option>
+						<option value="published">Published</option>
+						<option value="deleted">Deleted</option>
+					</select>
+					<button class="secondary" type="submit">Apply filter</button>
+				</form>
+				<p class="result-count">{commentTotal} matching comments</p>
+				<div class="comment-list">
+					{#if loading}
+						<p>Loading comments...</p>
+					{:else}
+						{#each visibleComments as comment}
+							<article>
+								<div class="comment-meta"><strong>{comment.display_name || comment.username}</strong><span>{comment.email}</span><i>{comment.status}</i>{#if comment.parent_id}<i>reply</i>{/if}<time>{formatTime(comment.created_at)}</time></div>
+								<p>{comment.content}</p>
+								{#if comment.last_moderation_reason}<small class="moderation-note"><strong>{comment.last_moderation_action}</strong> · {comment.last_moderation_reason}</small>{/if}
+								<footer><span><Icon icon="material-symbols:article-outline-rounded"/>{comment.post_slug}</span><span><Icon icon="material-symbols:history-rounded"/>{comment.revision_count ?? 0} revisions</span><span><Icon icon="material-symbols:location-on-outline-rounded"/>{comment.created_ip || "IP not recorded"}</span><button class={comment.deleted_at ? "secondary" : "danger-button"} onclick={() => requestCommentAction(comment, comment.deleted_at ? "restore" : "delete")}>{comment.deleted_at ? "Restore" : "Delete"}</button></footer>
+							</article>
+						{/each}
+					{/if}
+				</div>
+				{#if commentNextCursor}<div class="load-more"><button class="secondary" disabled={loadingMoreComments} onclick={() => loadComments(true)}>{loadingMoreComments ? "Loading..." : "Load more"}</button></div>{/if}
 			{:else if activeTab === "shield"}
 				<ShieldDashboard {csrf} />
 			{:else}
@@ -421,16 +485,25 @@ onDestroy(() => {
 			<div class="drawer-actions"><button class="secondary" onclick={() => setRole(selectedUser!, selectedUser!.role === "admin" ? "user" : "admin")}>{selectedUser.role === "admin" ? "Set as user" : "Set as admin"}</button><button class="danger-button" onclick={() => userAction(selectedUser!, selectedUser!.disabled_at ? "enable" : "disable")}>{selectedUser.disabled_at ? "Enable account" : "Disable account"}</button></div>
 		</aside>
 	{/if}
+	{#if moderationTarget}
+		<div class="modal-backdrop" role="presentation" onclick={() => { if (!moderating) moderationTarget = null; }}></div>
+		<section class="moderation-modal" role="dialog" aria-modal="true" aria-labelledby="moderation-title">
+			<div class="moderation-modal-head"><div><p class="eyebrow">COMMENT MODERATION</p><h2 id="moderation-title">{moderationAction === "delete" ? "Delete comment" : "Restore comment"}</h2></div><button class="icon-button" title="Close" disabled={moderating} onclick={() => moderationTarget = null}><Icon icon="material-symbols:close-rounded"/></button></div>
+			<p class="moderation-preview">{moderationTarget.content}</p>
+			<label><span>Reason</span><textarea class="field" bind:value={moderationReason} maxlength="300" placeholder="Record why this moderation action is needed"></textarea></label>
+			<div class="moderation-actions"><button class="secondary" disabled={moderating} onclick={() => moderationTarget = null}>Cancel</button><button class={moderationAction === "delete" ? "danger-button" : "primary moderation-primary"} disabled={moderating || !moderationReason.trim()} onclick={submitCommentAction}>{moderating ? "Saving..." : moderationAction === "delete" ? "Delete comment" : "Restore comment"}</button></div>
+		</section>
+	{/if}
 {/if}
 </main>
 
 <style>
-:global(body){margin:0;background:#edf3f8;color:#182230}.admin-shell{min-height:100vh;overflow-x:hidden;font-family:Roboto,Arial,sans-serif}.wordmark{display:flex;align-items:center;gap:.6rem;color:#182230;font-weight:700;text-decoration:none}.wordmark span{display:grid;width:2rem;height:2rem;place-items:center;border-radius:6px;background:#55a7ed;color:white}.wordmark b{color:#718096;font-weight:500}.login-wrap{display:grid;min-height:100vh;place-items:center;padding:1.5rem}.login-panel{display:grid;width:min(58rem,100%);overflow:hidden;border:1px solid #dce5ed;border-radius:8px;background:white;box-shadow:0 18px 50px rgba(33,56,79,.12);grid-template-columns:1fr 24rem}.login-panel>.wordmark{grid-column:1/-1;padding:1.5rem 2rem;border-bottom:1px solid #e5ebf0}.login-copy{padding:4rem 3rem;background:#f7fafc}.login-copy h1,.page-head h1{margin:.35rem 0;font-size:2rem;letter-spacing:0}.login-copy p{color:#607080;line-height:1.7}.eyebrow{margin:0;color:#438fd0;font-size:.72rem;font-weight:800;letter-spacing:0}.login-form{padding:3rem 2rem}.login-icon{font-size:2rem;color:#4b9fe8}.login-form h2{margin:.8rem 0 .4rem;font-size:1.25rem}.login-form>p{color:#607080;line-height:1.6}.mode-tabs{display:grid;grid-template-columns:1fr 1fr;margin-bottom:2rem;padding:3px;border-radius:7px;background:#edf3f8}.mode-tabs button{min-height:2.5rem;border:0;border-radius:5px;background:transparent}.mode-tabs button.active{background:white;box-shadow:0 1px 4px #ccd7e0}.primary,.secondary,.danger-button{display:inline-flex;min-height:2.7rem;align-items:center;justify-content:center;gap:.5rem;border:1px solid transparent;border-radius:6px;padding:0 1rem;font-weight:700;cursor:pointer}.primary{width:100%;margin-top:1rem;background:#4b9fe8;color:white}.secondary{border-color:#cfdbe5;background:white;color:#304356}.danger-button{background:#fff1f1;color:#b63b3b;border-color:#f1caca}.field{box-sizing:border-box;width:100%;min-height:2.75rem;border:1px solid #cfdbe5;border-radius:6px;padding:0 .8rem;background:white}.notice{margin-top:1rem;padding:.75rem;border:1px solid #d8e2ea;border-radius:6px;background:#f7fafc;color:#526575;font-size:.88rem}.notice.error{border-color:#f0caca;background:#fff1f1;color:#a73333}.notice.warning{border-color:#eed9a8;background:#fff9e9;color:#855d13}.notice.success{border-color:#bde3cf;background:#effaf4;color:#237047}header{display:flex;height:4.25rem;align-items:center;justify-content:space-between;border-bottom:1px solid #dce5ed;background:white;padding:0 2rem}.header-actions{display:flex;gap:.5rem}.icon-button{display:inline-grid;width:2.5rem;height:2.5rem;place-items:center;border:1px solid #d6e0e8;border-radius:6px;background:white;color:#526575;font-size:1.25rem;cursor:pointer}.workspace{display:grid;min-height:calc(100vh - 4.25rem);grid-template-columns:14rem 1fr}aside{border-right:1px solid #dce5ed;background:#f7fafc;padding:1.5rem 1rem}.nav-label{padding:0 .75rem;color:#8391a0;font-size:.7rem;font-weight:800;text-transform:uppercase}.workspace aside button{display:flex;width:100%;min-height:2.8rem;align-items:center;gap:.65rem;border:0;border-radius:6px;padding:0 .75rem;background:transparent;color:#526575;font-weight:700;cursor:pointer}.workspace aside button.active{background:#e5f2fd;color:#287dbf}.workspace aside button span{margin-left:auto;font-size:.78rem}.storage{display:flex;gap:.65rem;margin-top:2rem;padding:1rem .75rem;border-top:1px solid #dce5ed}.storage i{width:.55rem;height:.55rem;margin-top:.25rem;border-radius:50%;background:#d95c5c}.storage i.ok{background:#40a66b}.storage strong,.storage small{display:block}.storage strong{font-size:.8rem}.storage small{margin-top:.25rem;color:#8391a0;font-size:.72rem}.content{min-width:0;padding:2rem}.page-head{display:flex;align-items:end;justify-content:space-between;gap:1rem;margin-bottom:1.5rem}.search{display:flex;width:min(22rem,100%);height:2.75rem;align-items:center;gap:.5rem;border:1px solid #d4dfe8;border-radius:6px;background:white;padding:0 .8rem;color:#8391a0}.search input{width:100%;border:0;outline:0}.metrics{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid #dce5ed;border-radius:8px;background:white;margin-bottom:1rem}.metrics div{padding:1rem 1.25rem;border-right:1px solid #e3eaf0}.metrics div:last-child{border:0}.metrics span,.metrics strong{display:block}.metrics span{color:#718096;font-size:.78rem}.metrics strong{margin-top:.35rem;font-size:1.45rem}.table-wrap{overflow:auto;border:1px solid #dce5ed;border-radius:8px;background:white}table{width:100%;border-collapse:collapse;white-space:nowrap}th,td{padding:.9rem 1rem;border-bottom:1px solid #e7edf2;text-align:left;font-size:.82rem}th{background:#f8fafc;color:#718096;font-size:.7rem;text-transform:uppercase}td>small,td>strong{display:block}td>small{margin-top:.25rem;color:#7a8997}.user-cell{display:flex;align-items:center;gap:.7rem;border:0;background:transparent;text-align:left;cursor:pointer}.user-cell>span,.user-cell img{width:2.3rem;height:2.3rem;border-radius:50%;object-fit:cover}.user-cell>span{display:grid;place-items:center;background:#dcedfb;color:#287dbf;font-weight:800}.user-cell strong,.user-cell small{display:block}.user-cell small{margin-top:.15rem;color:#718096}.badges{display:flex;gap:.3rem}.badges i{border-radius:4px;background:#e9f4fd;color:#287dbf;padding:.2rem .4rem;font-size:.66rem;font-style:normal}.badges i.danger{background:#fff0f0;color:#b53b3b}.filter{display:flex;max-width:34rem;gap:.6rem;margin-bottom:1rem}.comment-list{display:grid;gap:.75rem}.comment-list article{border:1px solid #dce5ed;border-radius:8px;background:white;padding:1.15rem}.comment-meta{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem}.comment-meta span,.comment-meta time{color:#718096;font-size:.78rem}.comment-meta i{border-radius:4px;background:#edf5fb;color:#287dbf;padding:.2rem .4rem;font-size:.7rem;font-style:normal}.comment-list article>p{line-height:1.65;white-space:pre-wrap}.comment-list footer{display:flex;align-items:center;gap:1rem;border-top:1px solid #e7edf2;padding-top:.8rem;color:#718096;font-size:.78rem}.comment-list footer span{display:flex;align-items:center;gap:.3rem}.comment-list footer button{margin-left:auto}.drawer-backdrop{position:fixed;inset:0;background:rgba(25,36,48,.35)}.drawer{position:fixed;z-index:2;top:0;right:0;box-sizing:border-box;width:min(34rem,100%);height:100vh;overflow:auto;border:0;border-left:1px solid #dce5ed;background:white;padding:0}.drawer-head{position:sticky;top:0;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #e1e8ee;background:white;padding:1.25rem 1.5rem}.drawer-head h2{margin:.3rem 0 0}.drawer-body{display:grid;gap:1.5rem;padding:1.5rem}.drawer-body section{border-bottom:1px solid #e5ebf0;padding-bottom:1.2rem}.drawer-body h3{font-size:.9rem}dl{margin:0}dl div{display:grid;grid-template-columns:8rem 1fr;gap:1rem;padding:.55rem 0}dt{color:#718096;font-size:.78rem}dd{margin:0;font-size:.82rem}.break{overflow-wrap:anywhere}.mini-comment{margin-top:.7rem;border-left:3px solid #b7d9f5;padding:.2rem 0 .2rem .8rem}.mini-comment p{margin:.3rem 0;font-size:.82rem}.mini-comment small{color:#718096}.drawer-actions{position:sticky;bottom:0;display:flex;justify-content:flex-end;gap:.6rem;border-top:1px solid #e1e8ee;background:white;padding:1rem 1.5rem}
+:global(body){margin:0;background:#edf3f8;color:#182230}.admin-shell{min-height:100vh;overflow-x:hidden;font-family:Roboto,Arial,sans-serif}.wordmark{display:flex;align-items:center;gap:.6rem;color:#182230;font-weight:700;text-decoration:none}.wordmark span{display:grid;width:2rem;height:2rem;place-items:center;border-radius:6px;background:#55a7ed;color:white}.wordmark b{color:#718096;font-weight:500}.login-wrap{display:grid;min-height:100vh;place-items:center;padding:1.5rem}.login-panel{display:grid;width:min(58rem,100%);overflow:hidden;border:1px solid #dce5ed;border-radius:8px;background:white;box-shadow:0 18px 50px rgba(33,56,79,.12);grid-template-columns:1fr 24rem}.login-panel>.wordmark{grid-column:1/-1;padding:1.5rem 2rem;border-bottom:1px solid #e5ebf0}.login-copy{padding:4rem 3rem;background:#f7fafc}.login-copy h1,.page-head h1{margin:.35rem 0;font-size:2rem;letter-spacing:0}.login-copy p{color:#607080;line-height:1.7}.eyebrow{margin:0;color:#438fd0;font-size:.72rem;font-weight:800;letter-spacing:0}.login-form{padding:3rem 2rem}.login-icon{font-size:2rem;color:#4b9fe8}.login-form h2{margin:.8rem 0 .4rem;font-size:1.25rem}.login-form>p{color:#607080;line-height:1.6}.mode-tabs{display:grid;grid-template-columns:1fr 1fr;margin-bottom:2rem;padding:3px;border-radius:7px;background:#edf3f8}.mode-tabs button{min-height:2.5rem;border:0;border-radius:5px;background:transparent}.mode-tabs button.active{background:white;box-shadow:0 1px 4px #ccd7e0}.primary,.secondary,.danger-button{display:inline-flex;min-height:2.7rem;align-items:center;justify-content:center;gap:.5rem;border:1px solid transparent;border-radius:6px;padding:0 1rem;font-weight:700;cursor:pointer}.primary{width:100%;margin-top:1rem;background:#4b9fe8;color:white}.secondary{border-color:#cfdbe5;background:white;color:#304356}.danger-button{background:#fff1f1;color:#b63b3b;border-color:#f1caca}.field{box-sizing:border-box;width:100%;min-height:2.75rem;border:1px solid #cfdbe5;border-radius:6px;padding:0 .8rem;background:white}.notice{margin-top:1rem;padding:.75rem;border:1px solid #d8e2ea;border-radius:6px;background:#f7fafc;color:#526575;font-size:.88rem}.notice.error{border-color:#f0caca;background:#fff1f1;color:#a73333}.notice.warning{border-color:#eed9a8;background:#fff9e9;color:#855d13}.notice.success{border-color:#bde3cf;background:#effaf4;color:#237047}header{display:flex;height:4.25rem;align-items:center;justify-content:space-between;border-bottom:1px solid #dce5ed;background:white;padding:0 2rem}.header-actions{display:flex;gap:.5rem}.icon-button{display:inline-grid;width:2.5rem;height:2.5rem;place-items:center;border:1px solid #d6e0e8;border-radius:6px;background:white;color:#526575;font-size:1.25rem;cursor:pointer}.workspace{display:grid;min-height:calc(100vh - 4.25rem);grid-template-columns:14rem 1fr}aside{border-right:1px solid #dce5ed;background:#f7fafc;padding:1.5rem 1rem}.nav-label{padding:0 .75rem;color:#8391a0;font-size:.7rem;font-weight:800;text-transform:uppercase}.workspace aside button{display:flex;width:100%;min-height:2.8rem;align-items:center;gap:.65rem;border:0;border-radius:6px;padding:0 .75rem;background:transparent;color:#526575;font-weight:700;cursor:pointer}.workspace aside button.active{background:#e5f2fd;color:#287dbf}.workspace aside button span{margin-left:auto;font-size:.78rem}.storage{display:flex;gap:.65rem;margin-top:2rem;padding:1rem .75rem;border-top:1px solid #dce5ed}.storage i{width:.55rem;height:.55rem;margin-top:.25rem;border-radius:50%;background:#d95c5c}.storage i.ok{background:#40a66b}.storage strong,.storage small{display:block}.storage strong{font-size:.8rem}.storage small{margin-top:.25rem;color:#8391a0;font-size:.72rem}.content{min-width:0;padding:2rem}.page-head{display:flex;align-items:end;justify-content:space-between;gap:1rem;margin-bottom:1.5rem}.search{display:flex;width:min(22rem,100%);height:2.75rem;align-items:center;gap:.5rem;border:1px solid #d4dfe8;border-radius:6px;background:white;padding:0 .8rem;color:#8391a0}.search input{width:100%;border:0;outline:0}.metrics{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid #dce5ed;border-radius:8px;background:white;margin-bottom:1rem}.metrics div{padding:1rem 1.25rem;border-right:1px solid #e3eaf0}.metrics div:last-child{border:0}.metrics span,.metrics strong{display:block}.metrics span{color:#718096;font-size:.78rem}.metrics strong{margin-top:.35rem;font-size:1.45rem}.table-wrap{overflow:auto;border:1px solid #dce5ed;border-radius:8px;background:white}table{width:100%;border-collapse:collapse;white-space:nowrap}th,td{padding:.9rem 1rem;border-bottom:1px solid #e7edf2;text-align:left;font-size:.82rem}th{background:#f8fafc;color:#718096;font-size:.7rem;text-transform:uppercase}td>small,td>strong{display:block}td>small{margin-top:.25rem;color:#7a8997}.user-cell{display:flex;align-items:center;gap:.7rem;border:0;background:transparent;text-align:left;cursor:pointer}.user-cell>span,.user-cell img{width:2.3rem;height:2.3rem;border-radius:50%;object-fit:cover}.user-cell>span{display:grid;place-items:center;background:#dcedfb;color:#287dbf;font-weight:800}.user-cell strong,.user-cell small{display:block}.user-cell small{margin-top:.15rem;color:#718096}.badges{display:flex;gap:.3rem}.badges i{border-radius:4px;background:#e9f4fd;color:#287dbf;padding:.2rem .4rem;font-size:.66rem;font-style:normal}.badges i.danger{background:#fff0f0;color:#b53b3b}.filter{display:flex;max-width:34rem;gap:.6rem;margin-bottom:1rem}.comment-list{display:grid;gap:.75rem}.comment-list article{border:1px solid #dce5ed;border-radius:8px;background:white;padding:1.15rem}.comment-meta{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem}.comment-meta span,.comment-meta time{color:#718096;font-size:.78rem}.comment-meta i{border-radius:4px;background:#edf5fb;color:#287dbf;padding:.2rem .4rem;font-size:.7rem;font-style:normal}.comment-list article>p{line-height:1.65;white-space:pre-wrap}.comment-list footer{display:flex;align-items:center;gap:1rem;border-top:1px solid #e7edf2;padding-top:.8rem;color:#718096;font-size:.78rem}.comment-list footer span{display:flex;align-items:center;gap:.3rem}.comment-list footer button{margin-left:auto}.comment-filter{max-width:48rem}.comment-filter select{max-width:12rem}.result-count{margin:-.35rem 0 1rem;color:#718096;font-size:.78rem}.moderation-note{display:block;margin:.8rem 0;color:#718096}.load-more{display:flex;justify-content:center;margin-top:1rem}.modal-backdrop{position:fixed;z-index:20;inset:0;background:rgba(25,36,48,.42)}.moderation-modal{position:fixed;z-index:21;top:50%;left:50%;box-sizing:border-box;width:min(32rem,calc(100% - 2rem));transform:translate(-50%,-50%);border:1px solid #dce5ed;border-radius:8px;background:white;padding:1.25rem;box-shadow:0 1.5rem 4rem rgba(25,36,48,.24)}.moderation-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem}.moderation-modal-head h2{margin:.3rem 0}.moderation-preview{max-height:8rem;overflow:auto;border-left:3px solid #b7d9f5;padding-left:.8rem;white-space:pre-wrap;color:#526575}.moderation-modal label span{display:block;margin-bottom:.4rem;font-size:.78rem;font-weight:700}.moderation-modal textarea{min-height:7rem;padding:.7rem;resize:vertical;font:inherit}.moderation-actions{display:flex;justify-content:flex-end;gap:.6rem;margin-top:1rem}.moderation-primary{width:auto;margin:0}.drawer-backdrop{position:fixed;inset:0;background:rgba(25,36,48,.35)}.drawer{position:fixed;z-index:2;top:0;right:0;box-sizing:border-box;width:min(34rem,100%);height:100vh;overflow:auto;border:0;border-left:1px solid #dce5ed;background:white;padding:0}.drawer-head{position:sticky;top:0;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #e1e8ee;background:white;padding:1.25rem 1.5rem}.drawer-head h2{margin:.3rem 0 0}.drawer-body{display:grid;gap:1.5rem;padding:1.5rem}.drawer-body section{border-bottom:1px solid #e5ebf0;padding-bottom:1.2rem}.drawer-body h3{font-size:.9rem}dl{margin:0}dl div{display:grid;grid-template-columns:8rem 1fr;gap:1rem;padding:.55rem 0}dt{color:#718096;font-size:.78rem}dd{margin:0;font-size:.82rem}.break{overflow-wrap:anywhere}.mini-comment{margin-top:.7rem;border-left:3px solid #b7d9f5;padding:.2rem 0 .2rem .8rem}.mini-comment p{margin:.3rem 0;font-size:.82rem}.mini-comment small{color:#718096}.drawer-actions{position:sticky;bottom:0;display:flex;justify-content:flex-end;gap:.6rem;border-top:1px solid #e1e8ee;background:white;padding:1rem 1.5rem}
 	.drawer-badges{flex-wrap:wrap}.drawer-empty{color:#718096}
 	.deletion-review{border:1px solid #f1caca!important;border-radius:8px;padding:1rem!important;background:#fff8f8}.deletion-review p{margin:.4rem 0}.deletion-review small{color:#718096}.deletion-review>div{display:flex;gap:.6rem;margin-top:1rem}
 .workspace,.content{background:#edf3f8}
 .session-check{min-height:100svh;display:grid;align-content:center;justify-items:center;gap:1rem;color:#617487}.session-check span{width:2rem;height:2rem;border:2px solid #cddce7;border-top-color:#4b9fe8;border-radius:50%;animation:spin .8s linear infinite}.session-check p{margin:0;font-size:.9rem}.content{box-sizing:border-box;width:100%;max-width:96rem;margin:0 auto}.icon-button,.workspace aside button,.primary,.secondary,.danger-button{min-height:2.75rem}.search input{min-width:0;background:transparent;font:inherit}@keyframes spin{to{transform:rotate(360deg)}}
 @media(max-width:800px){.workspace{grid-template-columns:1fr}.workspace>aside{display:flex;position:sticky;top:0;z-index:1;border-right:0;border-bottom:1px solid #dce5ed;padding:.5rem}.workspace>aside .nav-label,.storage{display:none}.workspace>aside button{flex:1;width:auto;min-height:3.5rem;justify-content:center}.content{padding:1rem}.page-head{align-items:stretch;flex-direction:column}.metrics{grid-template-columns:1fr 1fr}.metrics div:last-child{grid-column:1/-1;border-top:1px solid #e3eaf0}.comment-list footer{align-items:flex-start;flex-direction:column}.comment-list footer button{margin-left:0;width:100%}header{padding:0 1rem}}
-@media(max-width:480px){header{height:3.75rem}.wordmark b{display:none}.workspace{min-height:calc(100vh - 3.75rem)}.workspace>aside{display:grid;position:static;grid-template-columns:repeat(2,minmax(0,1fr));gap:.25rem}.workspace>aside button{min-width:0;font-size:.8rem}.metrics strong{font-size:1.25rem}.drawer-actions{display:grid;grid-template-columns:1fr}.drawer-actions button{width:100%}dl div{grid-template-columns:1fr;gap:.2rem}.filter{flex-direction:column}.filter .secondary{width:100%}}
+@media(max-width:480px){header{height:3.75rem}.wordmark b{display:none}.workspace{min-height:calc(100vh - 3.75rem)}.workspace>aside{display:grid;position:static;grid-template-columns:repeat(2,minmax(0,1fr));gap:.25rem}.workspace>aside button{min-width:0;font-size:.8rem}.metrics strong{font-size:1.25rem}.drawer-actions{display:grid;grid-template-columns:1fr}.drawer-actions button{width:100%}dl div{grid-template-columns:1fr;gap:.2rem}.filter{flex-direction:column}.filter .secondary,.comment-filter select{width:100%;max-width:none}.moderation-actions{display:grid;grid-template-columns:1fr}.moderation-actions button{width:100%}}
 @media(prefers-reduced-motion:reduce){.session-check span{animation:none}}
 </style>

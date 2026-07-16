@@ -73,14 +73,15 @@ Accounts is a standalone account workspace. Do not restore the public blog navba
 ## Blog Discussion And Markdown Contract
 
 - A Ghost post owns only its content and slug. SilentFlare FastAPI owns Discussion identities, comment records, authorization, and mutations keyed by that slug.
-- The post Discussion surface shows the live comment count, an icon-only refresh command, the authenticated Markdown composer, and the comment list. Unauthenticated users receive the canonical Auth redirect with the current post URL as `return_url`.
+- The post Discussion surface shows the exact live comment count, an icon-only refresh command, the authenticated Markdown composer, cursor-paginated root threads, and one level of replies. Unauthenticated users receive the canonical Auth redirect with the current post URL as `return_url`.
+- Replies use the existing `parent_id` plus `root_id`. A reply to another reply is normalized to the same root so the public UI never nests more than one level. A deleted root with published replies remains as a content-free tombstone so its replies do not become orphaned.
 - The shared editor has explicit Write and Preview modes, a 1000-character counter, and controls for bold, italic, inline code, quote, bulleted list, and link insertion. It is used for both publishing and inline editing.
 - Markdown source is stored as normalized text limited to 1-1000 characters. Rendering uses `markdown-it` with raw HTML disabled, image syntax disabled, line breaks and linkification enabled, and generated links forced to a new tab with `nofollow noopener noreferrer`.
 - Published comments render paragraphs, lists, quotes, compact headings, links, inline code, and fenced code without allowing user HTML. Do not replace this renderer with untrusted direct `{@html}` content.
 - A comment author or a local public-account `admin` may edit a published, non-deleted comment. The UI displays `Edited` when `updatedAt` differs from `createdAt`.
 - A comment author or local public-account `admin` may soft-delete a comment. Admin-console moderation remains a separate owner action.
 - Publishing requires Turnstile, the all-site account session, and CSRF. Editing and deletion require the account session and CSRF; they do not request a new Turnstile token.
-- After create, edit, or delete succeeds, the mutation UI must await `loadComments()` before leaving its busy state. Fire-and-forget refresh callbacks cause stale content and must not be restored.
+- After create, reply, edit, or delete succeeds, the mutation UI must await `loadComments()` before leaving its busy state. Fire-and-forget refresh callbacks cause stale content and must not be restored.
 - Editor controls and comment actions must remain usable at mobile width, preserve 44 px touch targets for primary icon actions, wrap the formatting toolbar, and avoid document-level horizontal overflow.
 
 `return_url` must be HTTPS and its hostname must be exactly `silentflare.com` or end with `.silentflare.com`; credentials, explicit ports, lookalike suffixes, and external hosts fall back to Accounts.
@@ -140,10 +141,11 @@ Accounts is a standalone account workspace. Do not restore the public blog navba
 - `POST /accounts/danger/delete`: deletion requests require action-bound email verification, enabled 2FA, a valid current authenticator code, and confirmation text. Requests wait for administrator approval; approval starts the seven-day cooling period. Users can cancel before deletion runs.
 - `POST /accounts/danger/delete/cancel`: clears pending or approved deletion-review state before final deletion.
 - Legacy `POST /account/auth/register` and `POST /account/auth/login` return `410`; do not re-enable them.
-- `GET /comments?postSlug=...`: public comment list for a Ghost post slug.
-- `POST /comments/create`: authenticated public-user comment creation with Turnstile and CSRF.
+- `GET /comments?postSlug=...&limit=...&cursor=...`: public root-thread page for a Ghost post slug. It returns `items`, exact `totalCount`, `threadCount`, and `nextCursor`, plus a flattened `comments` compatibility projection.
+- `POST /comments/create`: authenticated public-user comment or one-level reply creation with Turnstile, CSRF, and account/IP rate limits. `parentId` is optional.
 - `PATCH /comments/{comment_id}`: authenticated Markdown source update with CSRF for the author or a local `admin` role user.
 - `DELETE /comments/{comment_id}`: authenticated public-user soft delete with CSRF for the author or a local `admin` role user.
+- Public-account deletes and Owner moderation are recorded in `comment_moderation_events`; edits preserve the previous source in `comment_revisions`.
 
 ## Current Admin Behavior
 
@@ -190,6 +192,7 @@ Accounts is a standalone account workspace. Do not restore the public blog navba
 - `migrations/0003_unified_auth.sql` is the unified auth schema reference; `ensure_account_db()` applies equivalent idempotent runtime changes.
 - `migrations/0004_account_avatar_region.sql` covers API-owned avatar/region metadata.
 - `migrations/0005_admin_user_audit.sql` is the schema reference for admin audit fields; `ensure_account_db()` applies equivalent idempotent runtime changes.
+- `migrations/0007_comment_discussions.sql` is the schema reference for root-thread pagination, edit revisions, and moderation audit records; `ensure_account_db()` applies equivalent idempotent runtime changes.
 - `ensure_account_db()` also maintains `deletion_requested_at`, `deletion_review_status`, `deletion_approved_at`, and `deletion_scheduled_for`. Only rows with approved status and a due schedule may be finalized.
 
 Production readiness caveat: `GET https://auth.silentflare.com/auth-api/auth/session` must return `configured:true`. `emailConfigured:false` means password/session flows may work but email-code login and registration cannot send mail. Real email flows require the email API variables on FNS1 and a verified sender domain; verify real inbox delivery before declaring email ready.

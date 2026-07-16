@@ -356,8 +356,84 @@ def main() -> None:
 		)
 		if updated_comment["comment"]["content"] != "**Updated smoke comment**\n\n- item":
 			raise AssertionError("comment Markdown update was not persisted")
+		reply = module.comment_create(
+			module.CommentCreatePayload(
+				postSlug="smoke-post",
+				content="Threaded reply",
+				turnstileToken="comment-ok",
+				parentId=created_comment["comment"]["id"],
+			),
+			StubRequest(
+				{module.ACCOUNT_SESSION_COOKIE: cookie},
+				{"cf-connecting-ip": "8.8.4.4"},
+			),
+			session["csrf"],
+		)
+		if reply["comment"]["rootId"] != created_comment["comment"]["id"]:
+			raise AssertionError("comment reply was not attached to its root thread")
+		second_root = module.comment_create(
+			module.CommentCreatePayload(
+				postSlug="smoke-post",
+				content="Second root comment",
+				turnstileToken="comment-ok",
+			),
+			StubRequest(
+				{module.ACCOUNT_SESSION_COOKIE: cookie},
+				{"cf-connecting-ip": "8.8.4.4"},
+			),
+			session["csrf"],
+		)
+		first_page = module.comments("smoke-post", limit=1)
+		if (
+			first_page["totalCount"] != 3
+			or len(first_page["items"]) != 1
+			or not first_page["nextCursor"]
+		):
+			raise AssertionError("comment count or first cursor page was incorrect")
+		second_page = module.comments(
+			"smoke-post",
+			cursor=first_page["nextCursor"],
+			limit=1,
+		)
+		if (
+			len(second_page["items"]) != 1
+			or second_page["items"][0]["id"] != second_root["comment"]["id"]
+		):
+			raise AssertionError("comment cursor did not return the next root thread")
+
+		module.comment_delete(
+			created_comment["comment"]["id"],
+			StubRequest({module.ACCOUNT_SESSION_COOKIE: cookie}),
+			session["csrf"],
+		)
+		thread_page = module.comments("smoke-post", limit=10)
+		deleted_root = next(
+			item
+			for item in thread_page["items"]
+			if item["id"] == created_comment["comment"]["id"]
+		)
+		if not deleted_root["isDeleted"] or deleted_root["content"]:
+			raise AssertionError("deleted thread root did not become a safe tombstone")
+		if deleted_root["replies"][0]["id"] != reply["comment"]["id"]:
+			raise AssertionError("reply disappeared after its root was soft-deleted")
 
 		module.require_admin_console_session = lambda *_args, **_kwargs: {"bot_id": module.ADMIN_AUTH_ID}
+		module.admin_comment_restore(
+			created_comment["comment"]["id"],
+			StubRequest(),
+			module.CommentModerationPayload(reason="Smoke restore audit"),
+		)
+		moderated = module.admin_comments(StubRequest(), status="all")
+		moderated_root = next(
+			item
+			for item in moderated["comments"]
+			if item["id"] == created_comment["comment"]["id"]
+		)
+		if (
+			moderated_root["revision_count"] != 1
+			or moderated_root["last_moderation_reason"] != "Smoke restore audit"
+		):
+			raise AssertionError("comment revision or moderation audit was not exposed")
 		admin_users = module.admin_users(StubRequest())["users"]
 		if admin_users[0].get("registration_ip") != "8.8.8.8":
 			raise AssertionError("admin user audit did not expose the registration IP")
@@ -455,7 +531,7 @@ def main() -> None:
 			tos_count = connection.execute("SELECT COUNT(*) FROM tos_acceptances").fetchone()[0]
 			if code or not code_hash:
 				raise AssertionError("verification code was not stored hash-only")
-			if comment_count != 1 or tos_count != 1:
+			if comment_count != 3 or tos_count != 1:
 				raise AssertionError("comment or TOS audit record was not persisted")
 
 		del module

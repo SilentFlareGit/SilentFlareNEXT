@@ -138,6 +138,11 @@ AUTH_EMAIL_SEND_COOLDOWN = int(os.getenv("AUTH_EMAIL_SEND_COOLDOWN", "60"))
 AUTH_EMAIL_SEND_LIMIT = int(os.getenv("AUTH_EMAIL_SEND_LIMIT", "5"))
 AUTH_CODE_ATTEMPT_LIMIT = int(os.getenv("AUTH_CODE_ATTEMPT_LIMIT", "5"))
 AUTH_FLOW_TTL = int(os.getenv("AUTH_FLOW_TTL", "1200"))
+COMMENT_CREATE_USER_LIMIT = int(os.getenv("COMMENT_CREATE_USER_LIMIT", "12"))
+COMMENT_CREATE_IP_LIMIT = int(os.getenv("COMMENT_CREATE_IP_LIMIT", "24"))
+COMMENT_CREATE_WINDOW_SECONDS = int(
+	os.getenv("COMMENT_CREATE_WINDOW_SECONDS", "300")
+)
 IP_GEO_CACHE: dict[str, dict[str, Any]] = {}
 
 app = FastAPI(title=APP_NAME)
@@ -459,10 +464,15 @@ class CommentCreatePayload(BaseModel):
 	postSlug: str
 	content: str
 	turnstileToken: str | None = None
+	parentId: str | None = None
 
 
 class CommentUpdatePayload(BaseModel):
 	content: str
+
+
+class CommentModerationPayload(BaseModel):
+	reason: str = ""
 
 
 def cleanup_sessions() -> None:
@@ -1051,13 +1061,37 @@ def ensure_account_db() -> None:
 				post_slug TEXT NOT NULL,
 				user_id TEXT NOT NULL,
 				parent_id TEXT,
+				root_id TEXT,
 				content TEXT NOT NULL,
 				status TEXT NOT NULL DEFAULT 'published',
 				created_at TEXT NOT NULL,
 				updated_at TEXT NOT NULL,
 				deleted_at TEXT,
+				created_ip TEXT,
 				FOREIGN KEY(user_id) REFERENCES users(id),
-				FOREIGN KEY(parent_id) REFERENCES comments(id)
+				FOREIGN KEY(parent_id) REFERENCES comments(id),
+				FOREIGN KEY(root_id) REFERENCES comments(id)
+			);
+
+			CREATE TABLE IF NOT EXISTS comment_revisions (
+				id TEXT PRIMARY KEY,
+				comment_id TEXT NOT NULL,
+				actor_user_id TEXT NOT NULL,
+				content TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				FOREIGN KEY(comment_id) REFERENCES comments(id),
+				FOREIGN KEY(actor_user_id) REFERENCES users(id)
+			);
+
+			CREATE TABLE IF NOT EXISTS comment_moderation_events (
+				id TEXT PRIMARY KEY,
+				comment_id TEXT NOT NULL,
+				actor_type TEXT NOT NULL,
+				actor_id TEXT NOT NULL,
+				action TEXT NOT NULL,
+				reason TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				FOREIGN KEY(comment_id) REFERENCES comments(id)
 			);
 
 			CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
@@ -1211,6 +1245,23 @@ def ensure_account_db() -> None:
 		except sqlite3.OperationalError as exc:
 			if "duplicate column name" not in str(exc).lower():
 				raise
+		try:
+			connection.execute("ALTER TABLE comments ADD COLUMN root_id TEXT")
+		except sqlite3.OperationalError as exc:
+			if "duplicate column name" not in str(exc).lower():
+				raise
+		connection.executescript(
+			"""
+			CREATE INDEX IF NOT EXISTS idx_comments_thread_page
+				ON comments(post_slug, root_id, status, created_at, id);
+			CREATE INDEX IF NOT EXISTS idx_comments_root_id
+				ON comments(root_id, created_at, id);
+			CREATE INDEX IF NOT EXISTS idx_comment_revisions_comment
+				ON comment_revisions(comment_id, created_at);
+			CREATE INDEX IF NOT EXISTS idx_comment_moderation_comment
+				ON comment_moderation_events(comment_id, created_at);
+			"""
+		)
 		for column_name, column_type in (
 			("last_seen_at", "TEXT"),
 			("display_region", "TEXT"),
@@ -1242,6 +1293,24 @@ def local_db_query(sql: str, params: list[Any] | None = None) -> list[dict[str, 
 				cursor.close()
 	except sqlite3.Error as exc:
 		raise HTTPException(status_code=500, detail="Local account database query failed") from exc
+
+
+def local_db_transaction(
+	statements: list[tuple[str, list[Any]]],
+) -> None:
+	try:
+		ensure_account_db()
+		with sqlite3.connect(ACCOUNT_DB_PATH) as connection:
+			connection.execute("PRAGMA foreign_keys = ON")
+			connection.execute("BEGIN IMMEDIATE")
+			for sql, params in statements:
+				connection.execute(sql, params)
+			connection.commit()
+	except sqlite3.Error as exc:
+		raise HTTPException(
+			status_code=500,
+			detail="Local account database transaction failed",
+		) from exc
 
 
 def d1_configured() -> bool:
@@ -2087,16 +2156,61 @@ def normalize_post_slug(post_slug: str) -> str:
 	return normalized
 
 
+def normalize_comment_page_limit(limit: int, maximum: int = 200) -> int:
+	return max(1, min(limit, maximum))
+
+
+def encode_comment_cursor(created_at: str, comment_id: str) -> str:
+	payload = json.dumps(
+		{"createdAt": created_at, "id": comment_id},
+		separators=(",", ":"),
+	).encode("utf-8")
+	return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def decode_comment_cursor(cursor: str | None) -> tuple[str, str] | None:
+	clean = (cursor or "").strip()
+	if not clean:
+		return None
+	try:
+		padding = "=" * (-len(clean) % 4)
+		payload = json.loads(base64.urlsafe_b64decode(clean + padding))
+		created_at = str(payload["createdAt"])
+		comment_id = str(payload["id"])
+	except (ValueError, KeyError, TypeError, json.JSONDecodeError, binascii.Error) as exc:
+		raise HTTPException(status_code=400, detail="Invalid comment cursor") from exc
+	if not created_at or not comment_id:
+		raise HTTPException(status_code=400, detail="Invalid comment cursor")
+	return created_at, comment_id
+
+
+def normalize_moderation_reason(reason: str, fallback: str = "Owner moderation") -> str:
+	clean = reason.strip() or fallback
+	if len(clean) > 300:
+		raise HTTPException(status_code=400, detail="Moderation reason is too long")
+	return clean
+
+
 def comment_payload(row: dict[str, Any]) -> dict[str, Any]:
+	is_deleted = bool(row.get("deleted_at")) or row.get("status") == "deleted"
+	author = {
+		"id": row["user_id"],
+		"username": row["username"],
+		"displayName": row.get("display_name") or "",
+		"avatarUrl": row.get("avatar_url") or "",
+	}
 	return {
 		"id": row["id"],
 		"postSlug": row["post_slug"],
 		"userId": row["user_id"],
 		"parentId": row.get("parent_id"),
-		"content": row["content"],
+		"rootId": row.get("root_id"),
+		"content": "" if is_deleted else row["content"],
 		"createdAt": row["created_at"],
 		"updatedAt": row["updated_at"],
 		"username": row["username"],
+		"author": author,
+		"isDeleted": is_deleted,
 	}
 
 
@@ -3171,32 +3285,137 @@ def account_profile_update(
 
 
 @app.get("/comments")
-def comments(postSlug: str) -> dict[str, Any]:
+def comments(
+	postSlug: str,
+	cursor: str | None = None,
+	limit: int = 200,
+) -> dict[str, Any]:
 	if not d1_configured():
-		return {"ok": True, "comments": [], "configured": False}
+		return {
+			"ok": True,
+			"comments": [],
+			"items": [],
+			"totalCount": 0,
+			"threadCount": 0,
+			"nextCursor": None,
+			"configured": False,
+		}
 	post_slug = normalize_post_slug(postSlug)
-	rows = d1_query(
-		"""
+	page_limit = normalize_comment_page_limit(limit)
+	decoded_cursor = decode_comment_cursor(cursor)
+	cursor_sql = ""
+	params: list[Any] = [post_slug]
+	if decoded_cursor:
+		cursor_sql = "AND (comments.created_at > ? OR (comments.created_at = ? AND comments.id > ?))"
+		params.extend([decoded_cursor[0], decoded_cursor[0], decoded_cursor[1]])
+	params.append(page_limit + 1)
+	root_rows = d1_query(
+		f"""
 		SELECT
 			comments.id,
 			comments.post_slug,
 			comments.user_id,
 			comments.parent_id,
+			comments.root_id,
 			users.username,
+			users.display_name,
+			users.avatar_url,
 			comments.content,
+			comments.status,
 			comments.created_at,
-			comments.updated_at
+			comments.updated_at,
+			comments.deleted_at
 		FROM comments
 		INNER JOIN users ON users.id = comments.user_id
 		WHERE comments.post_slug = ?
-			AND comments.status = 'published'
-			AND comments.deleted_at IS NULL
-		ORDER BY comments.created_at ASC
-		LIMIT 200
+			AND comments.root_id IS NULL
+			AND (
+				(comments.status = 'published' AND comments.deleted_at IS NULL)
+				OR EXISTS (
+					SELECT 1
+					FROM comments AS child
+					WHERE child.root_id = comments.id
+						AND child.status = 'published'
+						AND child.deleted_at IS NULL
+				)
+			)
+			{cursor_sql}
+		ORDER BY comments.created_at ASC, comments.id ASC
+		LIMIT ?
+		""",
+		params,
+	)
+	has_more = len(root_rows) > page_limit
+	root_rows = root_rows[:page_limit]
+	root_ids = [str(row["id"]) for row in root_rows]
+	reply_rows: list[dict[str, Any]] = []
+	if root_ids:
+		placeholders = ",".join("?" for _ in root_ids)
+		reply_rows = d1_query(
+			f"""
+			SELECT
+				comments.id, comments.post_slug, comments.user_id,
+				comments.parent_id, comments.root_id, users.username,
+				users.display_name, users.avatar_url, comments.content,
+				comments.status, comments.created_at, comments.updated_at,
+				comments.deleted_at
+			FROM comments
+			INNER JOIN users ON users.id = comments.user_id
+			WHERE comments.root_id IN ({placeholders})
+				AND comments.status = 'published'
+				AND comments.deleted_at IS NULL
+			ORDER BY comments.created_at ASC, comments.id ASC
+			""",
+			root_ids,
+		)
+	replies_by_root: dict[str, list[dict[str, Any]]] = {root_id: [] for root_id in root_ids}
+	for row in reply_rows:
+		replies_by_root.setdefault(str(row["root_id"]), []).append(comment_payload(row))
+	items: list[dict[str, Any]] = []
+	flat_comments: list[dict[str, Any]] = []
+	for row in root_rows:
+		root = comment_payload(row)
+		replies = replies_by_root.get(str(row["id"]), [])
+		items.append({**root, "replies": replies})
+		flat_comments.extend([root, *replies])
+	total_rows = d1_query(
+		"""
+		SELECT COUNT(*) AS count
+		FROM comments
+		WHERE post_slug = ? AND status = 'published' AND deleted_at IS NULL
 		""",
 		[post_slug],
 	)
-	return {"ok": True, "comments": [comment_payload(row) for row in rows], "configured": True}
+	thread_rows = d1_query(
+		"""
+		SELECT COUNT(*) AS count
+		FROM comments
+		WHERE post_slug = ? AND root_id IS NULL
+			AND (
+				(status = 'published' AND deleted_at IS NULL)
+				OR EXISTS (
+					SELECT 1 FROM comments AS child
+					WHERE child.root_id = comments.id
+						AND child.status = 'published'
+						AND child.deleted_at IS NULL
+				)
+			)
+		""",
+		[post_slug],
+	)
+	next_cursor = None
+	if has_more and root_rows:
+		last = root_rows[-1]
+		next_cursor = encode_comment_cursor(str(last["created_at"]), str(last["id"]))
+	return {
+		"ok": True,
+		"comments": flat_comments,
+		"items": items,
+		"totalCount": int(total_rows[0]["count"] if total_rows else 0),
+		"threadCount": int(thread_rows[0]["count"] if thread_rows else 0),
+		"nextCursor": next_cursor,
+		"configured": True,
+	}
 
 
 @app.post("/comments/create")
@@ -3213,15 +3432,51 @@ def comment_create(
 	user = require_account_csrf(request, x_csrf_token)
 	post_slug = normalize_post_slug(payload.postSlug)
 	content = normalize_comment_content(payload.content)
+	enforce_auth_rate_limit(
+		"comment-create-user",
+		str(user["id"]),
+		COMMENT_CREATE_USER_LIMIT,
+		COMMENT_CREATE_WINDOW_SECONDS,
+	)
+	enforce_auth_rate_limit(
+		"comment-create-ip",
+		client_key(request),
+		COMMENT_CREATE_IP_LIMIT,
+		COMMENT_CREATE_WINDOW_SECONDS,
+	)
+	parent_id: str | None = None
+	root_id: str | None = None
+	if payload.parentId:
+		requested_parent_id = payload.parentId.strip()
+		parent_rows = d1_query(
+			"""
+			SELECT id, post_slug, root_id, status, deleted_at
+			FROM comments WHERE id = ? LIMIT 1
+			""",
+			[requested_parent_id],
+		)
+		if (
+			not parent_rows
+			or parent_rows[0]["post_slug"] != post_slug
+			or parent_rows[0].get("deleted_at")
+			or parent_rows[0].get("status") != "published"
+		):
+			raise HTTPException(status_code=404, detail="Parent comment not found")
+		root_id = str(parent_rows[0].get("root_id") or parent_rows[0]["id"])
+		parent_id = root_id
 	now = utc_now()
 	comment_id = str(uuid.uuid4())
 	d1_query(
 		"""
 		INSERT INTO comments
-			(id, post_slug, user_id, parent_id, content, status, created_at, updated_at, created_ip)
-		VALUES (?, ?, ?, NULL, ?, 'published', ?, ?, ?)
+			(id, post_slug, user_id, parent_id, root_id, content, status,
+			 created_at, updated_at, created_ip)
+		VALUES (?, ?, ?, ?, ?, ?, 'published', ?, ?, ?)
 		""",
-		[comment_id, post_slug, user["id"], content, now, now, request_public_ip(request)],
+		[
+			comment_id, post_slug, user["id"], parent_id, root_id, content,
+			now, now, request_public_ip(request),
+		],
 	)
 	return {
 		"ok": True,
@@ -3229,11 +3484,19 @@ def comment_create(
 			"id": comment_id,
 			"postSlug": post_slug,
 			"userId": user["id"],
-			"parentId": None,
+			"parentId": parent_id,
+			"rootId": root_id,
 			"content": content,
 			"createdAt": now,
 			"updatedAt": now,
 			"username": user["username"],
+			"author": {
+				"id": user["id"],
+				"username": user["username"],
+				"displayName": user.get("display_name") or "",
+				"avatarUrl": user.get("avatar_url") or "",
+			},
+			"isDeleted": False,
 		},
 	}
 
@@ -3246,19 +3509,36 @@ def comment_delete(
 ) -> dict[str, Any]:
 	user = require_account_csrf(request, x_csrf_token)
 	rows = d1_query(
-		"SELECT id, user_id FROM comments WHERE id = ? LIMIT 1",
+		"SELECT id, user_id, status, deleted_at FROM comments WHERE id = ? LIMIT 1",
 		[comment_id],
 	)
-	if not rows:
+	if not rows or rows[0].get("deleted_at") or rows[0].get("status") == "deleted":
 		raise HTTPException(status_code=404, detail="Comment not found")
 	if rows[0]["user_id"] != user["id"] and user.get("role") != "admin":
 		raise HTTPException(status_code=403, detail="Comment delete is not allowed")
 	now = utc_now()
-	d1_query(
-		"UPDATE comments SET status = 'deleted', deleted_at = ?, updated_at = ? WHERE id = ?",
-		[now, now, comment_id],
+	action = "self_delete" if rows[0]["user_id"] == user["id"] else "local_admin_delete"
+	local_db_transaction(
+		[
+			(
+				"UPDATE comments SET status = 'deleted', deleted_at = ?, updated_at = ? WHERE id = ?",
+				[now, now, comment_id],
+			),
+			(
+				"""
+				INSERT INTO comment_moderation_events
+					(id, comment_id, actor_type, actor_id, action, reason, created_at)
+				VALUES (?, ?, 'account', ?, ?, ?, ?)
+				""",
+				[
+					str(uuid.uuid4()), comment_id, str(user["id"]), action,
+					"Deleted by comment author" if action == "self_delete" else "Deleted by local admin",
+					now,
+				],
+			),
+		]
 	)
-	return {"ok": True}
+	return {"ok": True, "commentId": comment_id, "deletedAt": now}
 
 
 @app.patch("/comments/{comment_id}")
@@ -3270,7 +3550,7 @@ def comment_update(
 ) -> dict[str, Any]:
 	user = require_account_csrf(request, x_csrf_token)
 	rows = d1_query(
-		"SELECT id, user_id, status, deleted_at FROM comments WHERE id = ? LIMIT 1",
+		"SELECT id, user_id, content, status, deleted_at FROM comments WHERE id = ? LIMIT 1",
 		[comment_id],
 	)
 	if not rows or rows[0].get("deleted_at") or rows[0].get("status") != "published":
@@ -3279,14 +3559,31 @@ def comment_update(
 		raise HTTPException(status_code=403, detail="Comment edit is not allowed")
 	content = normalize_comment_content(payload.content)
 	now = utc_now()
-	d1_query(
-		"UPDATE comments SET content = ?, updated_at = ? WHERE id = ?",
-		[content, now, comment_id],
+	local_db_transaction(
+		[
+			(
+				"""
+				INSERT INTO comment_revisions
+					(id, comment_id, actor_user_id, content, created_at)
+				VALUES (?, ?, ?, ?, ?)
+				""",
+				[
+					str(uuid.uuid4()), comment_id, str(user["id"]),
+					str(rows[0]["content"]), now,
+				],
+			),
+			(
+				"UPDATE comments SET content = ?, updated_at = ? WHERE id = ?",
+				[content, now, comment_id],
+			),
+		]
 	)
 	updated = d1_query(
 		"""
 		SELECT comments.id, comments.post_slug, comments.user_id, comments.parent_id,
-			users.username, comments.content, comments.created_at, comments.updated_at
+			comments.root_id, users.username, users.display_name, users.avatar_url,
+			comments.content, comments.status, comments.created_at, comments.updated_at,
+			comments.deleted_at
 		FROM comments
 		INNER JOIN users ON users.id = comments.user_id
 		WHERE comments.id = ?
@@ -3640,13 +3937,38 @@ def admin_user_role(
 
 
 @app.get("/admin/comments")
-def admin_comments(request: Request, post_slug: str | None = None) -> dict[str, Any]:
+def admin_comments(
+	request: Request,
+	post_slug: str | None = None,
+	status: str = "all",
+	user_id: str | None = None,
+	cursor: str | None = None,
+	limit: int = 200,
+) -> dict[str, Any]:
 	require_admin_console_session(request)
+	where_parts: list[str] = []
 	params: list[Any] = []
-	where = ""
 	if post_slug:
-		where = "WHERE comments.post_slug = ?"
-		params.append(post_slug)
+		where_parts.append("comments.post_slug = ?")
+		params.append(normalize_post_slug(post_slug))
+	clean_status = status.strip().lower()
+	if clean_status not in {"all", "published", "deleted"}:
+		raise HTTPException(status_code=400, detail="Invalid comment status filter")
+	if clean_status != "all":
+		where_parts.append("comments.status = ?")
+		params.append(clean_status)
+	if user_id:
+		where_parts.append("comments.user_id = ?")
+		params.append(user_id.strip())
+	decoded_cursor = decode_comment_cursor(cursor)
+	if decoded_cursor:
+		where_parts.append(
+			"(comments.created_at < ? OR (comments.created_at = ? AND comments.id < ?))"
+		)
+		params.extend([decoded_cursor[0], decoded_cursor[0], decoded_cursor[1]])
+	where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+	page_limit = normalize_comment_page_limit(limit)
+	query_params = [*params, page_limit + 1]
 	comments = d1_query(
 		f"""
 		SELECT
@@ -3661,29 +3983,83 @@ def admin_comments(request: Request, post_slug: str | None = None) -> dict[str, 
 			comments.created_at,
 			comments.updated_at,
 			comments.deleted_at,
-			comments.created_ip
+			comments.created_ip,
+			comments.parent_id,
+			comments.root_id,
+			(
+				SELECT event.action FROM comment_moderation_events AS event
+				WHERE event.comment_id = comments.id
+				ORDER BY event.created_at DESC LIMIT 1
+			) AS last_moderation_action,
+			(
+				SELECT event.reason FROM comment_moderation_events AS event
+				WHERE event.comment_id = comments.id
+				ORDER BY event.created_at DESC LIMIT 1
+			) AS last_moderation_reason,
+			(
+				SELECT COUNT(*) FROM comment_revisions AS revision
+				WHERE revision.comment_id = comments.id
+			) AS revision_count
 		FROM comments
 		INNER JOIN users ON users.id = comments.user_id
 		{where}
-		ORDER BY comments.created_at DESC
-		LIMIT 200
+		ORDER BY comments.created_at DESC, comments.id DESC
+		LIMIT ?
 		""",
-		params,
+		query_params,
 	)
-	return {"ok": True, "comments": comments, **admin_data_status()}
+	has_more = len(comments) > page_limit
+	comments = comments[:page_limit]
+	count_where_parts = [part for part in where_parts if "created_at" not in part]
+	count_params = params[:-3] if decoded_cursor else params
+	count_where = f"WHERE {' AND '.join(count_where_parts)}" if count_where_parts else ""
+	count_rows = d1_query(
+		f"SELECT COUNT(*) AS count FROM comments {count_where}",
+		count_params,
+	)
+	next_cursor = None
+	if has_more and comments:
+		last = comments[-1]
+		next_cursor = encode_comment_cursor(str(last["created_at"]), str(last["id"]))
+	return {
+		"ok": True,
+		"comments": comments,
+		"totalCount": int(count_rows[0]["count"] if count_rows else 0),
+		"nextCursor": next_cursor,
+		**admin_data_status(),
+	}
 
 
 @app.post("/admin/comments/{comment_id}/delete")
 def admin_comment_delete(
 	comment_id: str,
 	request: Request,
+	payload: CommentModerationPayload | None = None,
 	x_csrf_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
 	require_admin_console_session(request, x_csrf_token=x_csrf_token, require_csrf=True)
+	rows = d1_query("SELECT id, deleted_at FROM comments WHERE id = ? LIMIT 1", [comment_id])
+	if not rows:
+		raise HTTPException(status_code=404, detail="Comment not found")
+	if rows[0].get("deleted_at"):
+		return {"ok": True}
+	reason = normalize_moderation_reason(payload.reason if payload else "")
 	now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-	d1_query(
-		"UPDATE comments SET status = 'deleted', deleted_at = ?, updated_at = ? WHERE id = ?",
-		[now, now, comment_id],
+	local_db_transaction(
+		[
+			(
+				"UPDATE comments SET status = 'deleted', deleted_at = ?, updated_at = ? WHERE id = ?",
+				[now, now, comment_id],
+			),
+			(
+				"""
+				INSERT INTO comment_moderation_events
+					(id, comment_id, actor_type, actor_id, action, reason, created_at)
+				VALUES (?, ?, 'owner', ?, 'delete', ?, ?)
+				""",
+				[str(uuid.uuid4()), comment_id, ADMIN_AUTH_ID, reason, now],
+			),
+		]
 	)
 	return {"ok": True}
 
@@ -3692,13 +4068,32 @@ def admin_comment_delete(
 def admin_comment_restore(
 	comment_id: str,
 	request: Request,
+	payload: CommentModerationPayload | None = None,
 	x_csrf_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
 	require_admin_console_session(request, x_csrf_token=x_csrf_token, require_csrf=True)
+	rows = d1_query("SELECT id, deleted_at FROM comments WHERE id = ? LIMIT 1", [comment_id])
+	if not rows:
+		raise HTTPException(status_code=404, detail="Comment not found")
+	if not rows[0].get("deleted_at"):
+		return {"ok": True}
+	reason = normalize_moderation_reason(payload.reason if payload else "", "Owner restore")
 	now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-	d1_query(
-		"UPDATE comments SET status = 'published', deleted_at = NULL, updated_at = ? WHERE id = ?",
-		[now, comment_id],
+	local_db_transaction(
+		[
+			(
+				"UPDATE comments SET status = 'published', deleted_at = NULL, updated_at = ? WHERE id = ?",
+				[now, comment_id],
+			),
+			(
+				"""
+				INSERT INTO comment_moderation_events
+					(id, comment_id, actor_type, actor_id, action, reason, created_at)
+				VALUES (?, ?, 'owner', ?, 'restore', ?, ?)
+				""",
+				[str(uuid.uuid4()), comment_id, ADMIN_AUTH_ID, reason, now],
+			),
+		]
 	)
 	return {"ok": True}
 
