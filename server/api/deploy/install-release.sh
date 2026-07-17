@@ -36,20 +36,13 @@ if [[ ! -d "${release}" ]]; then
 	mv "${temporary}" "${release}"
 fi
 
-set -a
-# shellcheck disable=SC1090
-. "${env_file}"
-set +a
-
-if [[ -f "${ACCOUNT_DB_PATH:-${api_root}/account.db}" ]]; then
-	(
-		cd "${release}"
-		./venv/bin/python -m server.api.silentflare_api.db.cli backup "${api_root}/backups/account-${timestamp}-${release_id}.db"
-	)
-fi
 (
 	cd "${release}"
-	./venv/bin/python -m server.api.silentflare_api.db.cli migrate
+	./venv/bin/python -m server.api.silentflare_api.db.cli --env-file "${env_file}" backup "${api_root}/backups/account-${timestamp}-${release_id}.db"
+)
+(
+	cd "${release}"
+	./venv/bin/python -m server.api.silentflare_api.db.cli --env-file "${env_file}" migrate
 )
 
 ln -sfn "${release}" "${current}.next"
