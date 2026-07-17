@@ -18,6 +18,8 @@ Known server context:
 - Webhook service: `/opt/silentflare/deploy/webhook-server.mjs`.
 - Static releases: `/opt/silentflare/blog/releases`.
 - Active site symlink: `/opt/silentflare/blog/current`.
+- API releases: `/opt/silentflare/api/releases`.
+- Active API symlink: `/opt/silentflare/api/current`.
 - Deploy log: `/var/log/silentflare-deploy.log`.
 
 SSH pattern:
@@ -42,19 +44,19 @@ git reset --hard origin/main
 
 Then it should load deploy env, install dependencies with Corepack/pnpm, run `corepack pnpm verify:ghost`, copy `dist` into a timestamped release, atomically update `/opt/silentflare/blog/current`, keep only recent releases, and append details to `/var/log/silentflare-deploy.log`.
 
-The deploy script only deploys the Astro static site. It does not copy `server/api/app.py` into `/opt/silentflare/api`. When changing `server/api/app.py`, explicitly copy it to FNS1 and restart the API service:
+The deploy script deploys the Astro static site and should invoke the versioned API release installer after syncing the checkout. Do not copy individual Python files into production. Install updated systemd units, then deploy the checked-out commit atomically:
 
-```powershell
-$key = Join-Path $env:USERPROFILE '.ssh\hetzner_cx23'
-scp -i $key server\api\app.py root@167.233.129.17:/opt/silentflare/api/app.py
-ssh -i $key root@167.233.129.17 'systemctl restart silentflare-api.service; systemctl is-active silentflare-api.service'
+```bash
+bash /opt/silentflare/app/server/api/deploy/install-systemd.sh /opt/silentflare/app
+bash /opt/silentflare/app/server/api/deploy/install-release.sh \
+  /opt/silentflare/app "$(git -C /opt/silentflare/app rev-parse HEAD)"
 ```
 
-Expected API service status: `active`.
+The installer creates an online SQLite backup, applies checksummed migrations, activates `/opt/silentflare/api/current`, restarts the API and durable worker, verifies health, and restores the previous symlink on failure. Expected status for both `silentflare-api.service` and `silentflare-api-worker.service`: `active`.
 
 When Blog comment publishing is added or moved to a new hostname, audit `TURNSTILE_EXPECTED_HOSTNAMES` in `/opt/silentflare/api/api.env` without printing secrets or tokens. `blog.silentflare.com` must be allowed for the production Discussion widget, alongside every Auth or Accounts hostname that renders Turnstile. Back up `api.env`, update only the hostname list, restart `silentflare-api.service`, and verify a real authenticated browser publication. A successful widget followed by `Human verification failed` usually means the returned hostname is missing from this allowlist.
 
-Comment changes can span both deployment units. Deploy and restart `server/api/app.py` first when the endpoint contract changes, then let the static Astro release deploy the Svelte client. Verify create, edit, and delete in production only after both versions are active; remove the test comment when finished.
+Comment changes can span both deployment units. Deploy the backward-compatible API release before activating a client that depends on its endpoint contract. Verify create, edit, reply, folding, and delete only after both versions are active; remove any production test comment when finished.
 
 The deploy script also does not manage Nginx subsite configuration. When account/admin routing changes, update these files manually on FNS1 and test/reload Nginx:
 
@@ -103,7 +105,7 @@ bash /opt/silentflare/app/shield/scripts/install-fns1-routing.sh
 
 The environment script copies existing host Turnstile settings without printing them. The routing script creates timestamped backups under `/etc/nginx/shield-backups`, runs `nginx -t`, reloads only on success, and restores the previous files on error. Public blog reads have the only process-down fail-open route. Account, API, Admin, and CMS requests fail closed; CMS connection upgrades use a direct Ghost exception because the current gateway is HTTP-only.
 
-When `server/api/app.py` changes, deploy and restart FastAPI before enabling Shield account-response buttons. Then deploy/rebuild Shield so the signed-command implementation and Shield migrations are active together. Shield 2.0 requires migrations `0009_entity_risk_ledger.sql`, `0010_risk_signal_queue.sql`, and `0011_complete_risk_ledger.sql`; retain an online SQLite backup before applying them.
+When the FastAPI `/internal/shield/*` contract changes, deploy the compatible API release before enabling Shield account-response buttons. Then deploy/rebuild Shield so the signed-command implementation and Shield migrations are active together. Shield 2.0 requires migrations `0009_entity_risk_ledger.sql`, `0010_risk_signal_queue.sql`, and `0011_complete_risk_ledger.sql`; retain an online SQLite backup before applying them.
 
 ## GitHub Actions Deployment
 
@@ -112,7 +114,7 @@ Workflow: `.github/workflows/build.yml`
 Expected pipeline:
 
 ```text
-push main -> build job -> Deploy FNS1 job -> webhook -> FNS1 git reset origin/main -> verify:ghost -> static release
+push main -> build job -> Deploy FNS1 job -> webhook -> FNS1 git reset origin/main -> API release -> verify:ghost -> static release
 ```
 
 The deploy job only runs on `push` to `main`, after the build job succeeds.
@@ -159,7 +161,7 @@ Verify FNS1 source and active release:
 
 ```powershell
 $key = Join-Path $env:USERPROFILE '.ssh\hetzner_cx23'
-ssh -i $key root@167.233.129.17 'set -Eeuo pipefail; echo HEAD=$(git -C /opt/silentflare/app rev-parse --short HEAD); echo STATUS=$(git -C /opt/silentflare/app status --short | wc -l); echo CURRENT=$(readlink -f /opt/silentflare/blog/current)'
+ssh -i $key root@167.233.129.17 'set -Eeuo pipefail; echo HEAD=$(git -C /opt/silentflare/app rev-parse --short HEAD); echo STATUS=$(git -C /opt/silentflare/app status --short | wc -l); echo BLOG_CURRENT=$(readlink -f /opt/silentflare/blog/current); echo API_CURRENT=$(readlink -f /opt/silentflare/api/current)'
 ```
 
 Expected:
@@ -167,6 +169,8 @@ Expected:
 - `HEAD` matches latest pushed commit.
 - `STATUS=0`.
 - `CURRENT` points to a release under `/opt/silentflare/blog/releases`.
+- `API_CURRENT` points to the same commit under `/opt/silentflare/api/releases`.
+- `silentflare-api.service` and `silentflare-api-worker.service` are active.
 
 Verify origin Nginx without Cloudflare:
 
@@ -216,7 +220,7 @@ Do not run this in a way that prints the token.
 
 ## Rollback
 
-Rollback is symlink-only. Do not delete releases while diagnosing.
+Static and API rollback are independent symlink operations. Do not delete releases while diagnosing. After changing the API symlink, restart both API units and verify readiness.
 
 ```sh
 ln -sfn /opt/silentflare/blog/releases/<release-id> /opt/silentflare/blog/current.next

@@ -9,7 +9,7 @@ This file is the lightweight entry point for AI agents and maintainers. Read onl
 | Task area | Read next |
 | --- | --- |
 | Public blog routes, Ghost Content API, layouts, content utilities, coding style | `docs/agent-architecture.md` |
-| Auth, Accounts, public sessions, profile, comments, Admin users/comments | `docs/agent-auth-account-admin.md` |
+| FastAPI structure, migrations, jobs, Auth, Accounts, comments, Admin | `docs/agent-api-backend.md`, then `docs/agent-auth-account-admin.md` |
 | `/bots/`, Telegram approval, Telegram Chat Bot console, DB backup bot | `docs/agent-bot-management.md` |
 | Independent SilentFlare Shield gateway, rules, risk events, deployment | `docs/SILENTFLARE_SHIELD.md` |
 | FNS1 deployment, GitHub Actions, webhooks, production verification, rollback | `docs/agent-deployment-fns1.md` |
@@ -41,7 +41,7 @@ Do not load the deployment or bot runbooks for small UI/content changes unless t
 - `docs`: operational documentation and setup notes.
 - `scripts`: local verification and authoring helpers.
 - `migrations`: historical schema references for SilentFlare-owned account/comment data.
-- `server/api`: FastAPI custom API deployed manually to FNS1 under `/opt/silentflare/api`; it is not bundled into the Astro static site.
+- `server/api`: modular FastAPI API, SQLite migrations, tests, worker, and atomic FNS1 deployment assets.
 - `ghost-cms`: local Ghost experiments only. Do not treat it as production Ghost source.
 
 ## Common Commands
@@ -70,7 +70,8 @@ corepack pnpm verify:ghost
 FastAPI syntax check:
 
 ```cmd
-python -m py_compile server\api\app.py
+python -m compileall -q server\api\app.py server\api\silentflare_api
+python -m pytest -c server\api\pyproject.toml server\api\tests
 ```
 
 Account/comment smoke test:

@@ -1,0 +1,22 @@
+[Unit]
+Description=SilentFlare FastAPI backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/silentflare/api/current
+EnvironmentFile=/opt/silentflare/api/api.env
+ExecStart=/opt/silentflare/api/current/venv/bin/uvicorn server.api.silentflare_api.main:app --host 127.0.0.1 --port 9010 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/silentflare/api /opt/silentflare/backups /etc/systemd/system
+
+[Install]
+WantedBy=multi-user.target

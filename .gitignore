@@ -19,6 +19,7 @@ static-*.err.log
 
 # Python bytecode
 __pycache__/
+.pytest_cache/
 
 # local Ghost runtime data
 ghost-cms/.ghostpid

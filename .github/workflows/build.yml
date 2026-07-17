@@ -29,7 +29,10 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: shield/requirements.txt
+          cache-dependency-path: |
+            shield/requirements.txt
+            server/api/requirements.txt
+            server/api/requirements-dev.txt
 
       - name: Install Shield dependencies
         run: python -m pip install --requirement shield/requirements.txt
@@ -39,6 +42,17 @@ jobs:
         run: |
           python -m compileall -q app adapters tests
           python -m unittest discover -s tests -v
+
+      - name: Install API dependencies
+        run: python -m pip install --requirement server/api/requirements-dev.txt
+
+      - name: Lint and compile API
+        run: |
+          python -m ruff check --config server/api/pyproject.toml server/api/app.py server/api/silentflare_api server/api/tests scripts/smoke-account-comments.py scripts/test-admin-web-login.py
+          python -m compileall -q server/api/app.py server/api/silentflare_api
+
+      - name: Test API and migrations
+        run: python -m pytest -c server/api/pyproject.toml server/api/tests
 
       - name: Setup pnpm
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
@@ -68,6 +82,9 @@ jobs:
 
       - name: Verify account and Admin API contracts
         run: pnpm test:smoke:account-comments
+
+      - name: Verify Admin Telegram login lifecycle
+        run: python scripts/test-admin-web-login.py
 
   deploy:
     name: Deploy FNS1

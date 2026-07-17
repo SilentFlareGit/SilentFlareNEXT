@@ -9,7 +9,7 @@ The bot management surface is split across this repo and FNS1 infrastructure:
 - Front end source: `src/pages/bots/index.astro`.
 - Main bot UI component: `src/components/bots/BotApp.svelte`.
 - Shared document shell and visual foundations: `src/layouts/SubsiteLayout.astro`, `src/styles/tokens.css`, and `src/styles/subsites.css`.
-- API source: `server/api/app.py`.
+- API entry point: `server/api/app.py`; Bot routes and services live under `server/api/silentflare_api/domains/bots/`.
 - API requirements: `server/api/requirements.txt`.
 - Production API service: `silentflare-api.service`.
 - Production API app directory: `/opt/silentflare/api`.
@@ -25,7 +25,7 @@ Current product state:
 - `SilentFlare DB Backup` is considered feature-complete for the current phase.
 - Future work should default to operations, monitoring, verification, small UI polish, and reliability improvements.
 - Avoid large auth, backup, or layout rewrites unless explicitly requested.
-- Keep changes narrowly scoped to `src/components/bots/`, `src/pages/bots/index.astro`, `server/api/app.py`, and directly related tests or docs.
+- Keep changes narrowly scoped to `src/components/bots/`, `src/pages/bots/index.astro`, the Bot domain/integration/job modules, and directly related tests or docs.
 - Keep the `/bots/` front end componentized. `BotApp.svelte` coordinates API state, sessions, and view routing; feature-specific UI should live in focused components such as `ChatBotConsole.svelte` and `GitHubStatusCard.svelte`.
 - The production UI is a bot-scoped owner console, not a general multi-user dashboard.
 
@@ -139,6 +139,6 @@ If Telegram authorization breaks:
 6. Confirm clicking `Approve login` moves the web UI into the management view.
 7. Check API logs for `/telegram/update` failures without printing secrets.
 8. If `/telegram/update` returns `500` after approval, inspect optional Telegram calls; approval state should be applied before optional Telegram feedback.
-9. If the API service restarted during a login attempt, refresh and start a new Telegram challenge because login challenges are in memory.
+9. Bot sessions, login challenges, and login failures are hash-only SQLite records and survive API restarts.
 
 Do not use browser username/password login for this surface.

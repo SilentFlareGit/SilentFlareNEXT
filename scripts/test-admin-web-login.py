@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import importlib.util
+import importlib
 import json
 import os
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -11,35 +12,41 @@ from pathlib import Path
 
 def load_api_module(repo_root: Path, state_path: Path):
 	os.environ["ADMIN_WEB_LOGIN_STATE_PATH"] = str(state_path)
-	spec = importlib.util.spec_from_file_location(
-		"silentflare_api_admin_login_test",
-		repo_root / "server" / "api" / "app.py",
+	os.environ["ACCOUNT_DB_PATH"] = str(state_path.with_name("admin-login.db"))
+	os.environ["SESSION_SECRET"] = "x" * 32
+	if str(repo_root) not in sys.path:
+		sys.path.insert(0, str(repo_root))
+	for name in list(sys.modules):
+		if name == "server.api.app" or name.startswith("server.api.silentflare_api"):
+			del sys.modules[name]
+	module = importlib.import_module("server.api.app")
+	module._runtime = importlib.import_module("server.api.silentflare_api.runtime")
+	module._bots_service = importlib.import_module(
+		"server.api.silentflare_api.domains.bots.service"
 	)
-	if spec is None or spec.loader is None:
-		raise RuntimeError("Unable to load the FastAPI module")
-	module = importlib.util.module_from_spec(spec)
-	spec.loader.exec_module(module)
 	return module
 
 
 async def check_callback_work_is_deferred(api) -> None:
 	calls: list[str] = []
 	challenge_id = "background-challenge"
-	api.LOGIN_CHALLENGES[challenge_id] = {
-		"id": challenge_id,
-		"bot_id": api.ADMIN_AUTH_ID,
-		"expires_at": time.time() + 60,
-	}
-	api.telegram_config_from_webhook_token = lambda _token: {
+	api.BOT_STATE.create_challenge(
+		challenge_id,
+		api.ADMIN_AUTH_ID,
+		"callback-client",
+		int(time.time()),
+		int(time.time()) + 60,
+	)
+	api._bots_service.telegram_config_from_webhook_token = lambda _token: {
 		"bot_id": api.ADMIN_AUTH_ID,
 		"token": "test",
 		"webhook_secret": "test",
 		"owner_id": api.TELEGRAM_OWNER_ID,
 	}
-	api.telegram_configs_share_credentials = lambda _left, _right: True
-	api.approve_login_challenge = lambda _challenge_id, _owner_id: True
-	api.answer_callback = lambda *_args: calls.append("answer")
-	api.edit_login_approval_message = lambda *_args: calls.append("edit")
+	api._bots_service.telegram_configs_share_credentials = lambda _left, _right: True
+	api._bots_service.approve_login_challenge = lambda _challenge_id, _owner_id: True
+	api._bots_service.answer_callback = lambda *_args: calls.append("answer")
+	api._bots_service.edit_login_approval_message = lambda *_args: calls.append("edit")
 
 	class CallbackRequest:
 		async def json(self):
@@ -65,45 +72,48 @@ def main() -> None:
 		state_path = Path(temporary_dir) / "admin-web-login-state.json"
 		api = load_api_module(repo_root, state_path)
 
-		assert api.ADMIN_WEB_LOGIN_ENABLED is False
+		assert api._runtime.ADMIN_WEB_LOGIN_ENABLED is False
 		api.set_admin_web_login(True)
-		assert api.ADMIN_WEB_LOGIN_ENABLED is True
+		assert api._runtime.ADMIN_WEB_LOGIN_ENABLED is True
 		assert api.load_admin_web_login_state() is True
 		assert json.loads(state_path.read_text(encoding="utf-8"))["enabled"] is True
 
-		api.SESSIONS["expired-admin"] = {
-			"bot_id": api.ADMIN_AUTH_ID,
-			"csrf": "test",
-			"expires_at": time.time() - 1,
-			"login_epoch": api.WEB_LOGIN_SESSION_EPOCH,
-		}
-		api.SESSIONS["active-bot"] = {
-			"bot_id": api.BACKUP_BOT_ID,
-			"csrf": "test",
-			"expires_at": time.time() + 60,
-			"login_epoch": api.WEB_LOGIN_SESSION_EPOCH,
-		}
+		api.BOT_STATE.create_session(
+			"expired-admin",
+			api.ADMIN_AUTH_ID,
+			int(time.time()) - 1,
+			api.WEB_LOGIN_SESSION_EPOCH,
+		)
+		api.BOT_STATE.create_session(
+			"active-bot",
+			api.BACKUP_BOT_ID,
+			int(time.time()) + 60,
+			api.WEB_LOGIN_SESSION_EPOCH,
+		)
 		api.cleanup_sessions()
-		assert "expired-admin" not in api.SESSIONS
-		assert "active-bot" in api.SESSIONS
-		assert api.ADMIN_WEB_LOGIN_ENABLED is True
+		assert api.BOT_STATE.session("expired-admin") is None
+		assert api.BOT_STATE.session("active-bot") is not None
+		assert api._runtime.ADMIN_WEB_LOGIN_ENABLED is True
 
-		api.SESSIONS["active-admin"] = {
-			"bot_id": api.ADMIN_AUTH_ID,
-			"csrf": "test",
-			"expires_at": time.time() + 60,
-			"login_epoch": api.WEB_LOGIN_SESSION_EPOCH,
-		}
-		api.LOGIN_CHALLENGES["admin-challenge"] = {
-			"bot_id": api.ADMIN_AUTH_ID,
-			"expires_at": time.time() + 60,
-		}
+		api.BOT_STATE.create_session(
+			"active-admin",
+			api.ADMIN_AUTH_ID,
+			int(time.time()) + 60,
+			api.WEB_LOGIN_SESSION_EPOCH,
+		)
+		api.BOT_STATE.create_challenge(
+			"admin-challenge",
+			api.ADMIN_AUTH_ID,
+			"admin-client",
+			int(time.time()),
+			int(time.time()) + 60,
+		)
 		api.set_admin_web_login(False)
-		assert api.ADMIN_WEB_LOGIN_ENABLED is False
+		assert api._runtime.ADMIN_WEB_LOGIN_ENABLED is False
 		assert api.load_admin_web_login_state() is False
-		assert "active-admin" not in api.SESSIONS
-		assert "admin-challenge" not in api.LOGIN_CHALLENGES
-		assert "active-bot" in api.SESSIONS
+		assert api.BOT_STATE.session("active-admin") is None
+		assert api.BOT_STATE.challenge("admin-challenge") is None
+		assert api.BOT_STATE.session("active-bot") is not None
 		asyncio.run(check_callback_work_is_deferred(api))
 
 		state_path.write_text("not-json", encoding="utf-8")

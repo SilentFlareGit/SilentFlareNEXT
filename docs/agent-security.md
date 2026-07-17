@@ -76,6 +76,7 @@ TURNSTILE_SECRET_KEY=<turnstile-secret>
 TURNSTILE_EXPECTED_HOSTNAMES=auth.silentflare.com,accounts.silentflare.com,silentflare.com,www.silentflare.com
 TURNSTILE_EXPECTED_HOSTNAME=accounts.silentflare.com
 SESSION_SECRET=<at-least-32-random-characters>
+BOT_SESSION_SECRET=<optional-separate-at-least-32-random-characters>
 ACCOUNT_SESSION_COOKIE_NAME=sf_account_session
 ACCOUNT_COOKIE_DOMAIN=.silentflare.com
 ACCOUNT_SESSION_TTL=2592000

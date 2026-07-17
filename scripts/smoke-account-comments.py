@@ -1,78 +1,19 @@
 from __future__ import annotations
 
-import gc
 import asyncio
+import gc
 import html
-import importlib.util
+import importlib
 import json
 import os
 import sqlite3
 import sys
 import tempfile
 import time
-import types
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def install_api_import_stubs() -> None:
-	if "fastapi" in sys.modules:
-		return
-
-	class HTTPException(Exception):
-		def __init__(self, status_code: int, detail: str = "") -> None:
-			super().__init__(detail)
-			self.status_code = status_code
-			self.detail = detail
-
-	class BackgroundTasks:
-		def __init__(self) -> None:
-			self.tasks: list[tuple[object, tuple[object, ...], dict[str, object]]] = []
-
-		def add_task(self, function, *args: object, **kwargs: object) -> None:
-			self.tasks.append((function, args, kwargs))
-
-	class FastAPI:
-		def __init__(self, *_args: object, **_kwargs: object) -> None:
-			pass
-
-		def add_middleware(self, *_args: object, **_kwargs: object) -> None:
-			pass
-
-		def route(self, *_args: object, **_kwargs: object):
-			return lambda func: func
-
-		get = post = put = patch = delete = route
-
-	class BaseModel:
-		def __init__(self, **kwargs: object) -> None:
-			for key, value in kwargs.items():
-				setattr(self, key, value)
-
-	def Header(default=None, **_kwargs: object):
-		return default
-
-	fastapi_module = types.ModuleType("fastapi")
-	fastapi_module.BackgroundTasks = BackgroundTasks
-	fastapi_module.FastAPI = FastAPI
-	fastapi_module.Header = Header
-	fastapi_module.HTTPException = HTTPException
-	fastapi_module.Request = object
-	fastapi_module.Response = object
-	cors_module = types.ModuleType("fastapi.middleware.cors")
-	cors_module.CORSMiddleware = object
-	middleware_module = types.ModuleType("fastapi.middleware")
-	responses_module = types.ModuleType("fastapi.responses")
-	responses_module.FileResponse = object
-	pydantic_module = types.ModuleType("pydantic")
-	pydantic_module.BaseModel = BaseModel
-	sys.modules["fastapi"] = fastapi_module
-	sys.modules["fastapi.middleware"] = middleware_module
-	sys.modules["fastapi.middleware.cors"] = cors_module
-	sys.modules["fastapi.responses"] = responses_module
-	sys.modules["pydantic"] = pydantic_module
 
 
 class StubClient:
@@ -133,14 +74,11 @@ class MockResponse:
 
 
 def load_api_module(db_path: Path):
-	install_api_import_stubs()
 	os.environ.update(
 		{
 			"ACCOUNT_DB_PATH": str(db_path),
 			"ACCOUNT_AVATAR_DIR": str(db_path.parent / "avatars"),
-			"ADMIN_WEB_LOGIN_STATE_PATH": str(
-				db_path.parent / "admin-web-login-state.json"
-			),
+			"ADMIN_WEB_LOGIN_STATE_PATH": str(db_path.parent / "admin-web-login-state.json"),
 			"ACCOUNT_AVATAR_PUBLIC_BASE": "https://api.silentflare.com/account-avatars",
 			"TURNSTILE_SECRET_KEY": "test-turnstile-secret",
 			"TURNSTILE_EXPECTED_HOSTNAMES": "auth.silentflare.com,accounts.silentflare.com",
@@ -155,17 +93,61 @@ def load_api_module(db_path: Path):
 			"SILENTFLARE_DB_BACKUP_TELEGRAM_OWNER_ID": "8737100423",
 		},
 	)
-	spec = importlib.util.spec_from_file_location("silentflare_api_smoke", ROOT / "server/api/app.py")
-	if spec is None or spec.loader is None:
-		raise RuntimeError("Unable to load FastAPI app")
-	module = importlib.util.module_from_spec(spec)
-	spec.loader.exec_module(module)
+	if str(ROOT) not in sys.path:
+		sys.path.insert(0, str(ROOT))
+	for name in list(sys.modules):
+		if name == "server.api.app" or name.startswith("server.api.silentflare_api"):
+			del sys.modules[name]
+	module = importlib.import_module("server.api.app")
+	module._runtime = importlib.import_module("server.api.silentflare_api.runtime")
+	module._admin_service = importlib.import_module(
+		"server.api.silentflare_api.domains.admin.service"
+	)
+	module._bots_service = importlib.import_module(
+		"server.api.silentflare_api.domains.bots.service"
+	)
 	return module
 
 
 def install_network_mock(module) -> None:
-	token_actions = {"register-ok": "register", "login-ok": "login", "comment-ok": "comment"}
+	token_actions = {
+		"register-ok": "register",
+		"login-ok": "login",
+		"comment-ok": "comment",
+	}
 	email_payloads: list[dict[str, object]] = []
+
+	class FakeEmailClient:
+		def send(self, **payload):
+			email_payloads.append(
+				{
+					"from": payload["sender"],
+					"to": [payload["recipient"]],
+					"subject": payload["subject"],
+					"html": payload["html"],
+					"text": payload["text"],
+				}
+			)
+			return {"id": "smoke-email-id"}
+
+	class FakeTurnstileClient:
+		def verify(self, _secret, token, _remote_ip):
+			action = token_actions.get(token, "")
+			return {
+				"success": bool(action),
+				"hostname": "accounts.silentflare.com",
+				"action": action,
+			}
+
+	class FakeGeoClient:
+		def lookup(self, _url):
+			return {
+				"success": True,
+				"country_code": "CN",
+				"country": "China",
+				"region": "Shanghai",
+				"city": "Shanghai",
+			}
 
 	def mock_urlopen(request, timeout=15):
 		if "ipwho.is" in request.full_url:
@@ -185,9 +167,18 @@ def install_network_mock(module) -> None:
 			return MockResponse(status=200)
 		data = parse_qs((request.data or b"").decode("utf-8"))
 		action = token_actions.get(data.get("response", [""])[0], "")
-		return MockResponse({"success": bool(action), "hostname": "accounts.silentflare.com", "action": action})
+		return MockResponse(
+			{
+				"success": bool(action),
+				"hostname": "accounts.silentflare.com",
+				"action": action,
+			}
+		)
 
-	module.urlopen = mock_urlopen
+	module._runtime.urlopen = mock_urlopen
+	module._runtime.EMAIL_CLIENT = FakeEmailClient()
+	module._runtime.TURNSTILE_CLIENT = FakeTurnstileClient()
+	module._runtime.GEO_CLIENT = FakeGeoClient()
 	module._smoke_email_payloads = email_payloads
 
 
@@ -220,7 +211,9 @@ def main() -> None:
 			assert_http_exception(exc, 403, "register without Turnstile")
 
 		module.register_email_request_code(
-			module.RegisterEmailRequestPayload(email="smoke@example.com", turnstile_token="register-ok"),
+			module.RegisterEmailRequestPayload(
+				email="smoke@example.com", turnstile_token="register-ok"
+			),
 			StubRequest(headers={"cf-connecting-ip": "8.8.8.8"}),
 		)
 		registration_email = module._smoke_email_payloads[-1]
@@ -230,7 +223,9 @@ def main() -> None:
 			or "Verify securely" not in str(registration_email.get("html") or "")
 			or not registration_link_token
 		):
-			raise AssertionError("verification email did not include the code and secure link template")
+			raise AssertionError(
+				"verification email did not include the code and secure link template"
+			)
 		verified = module.register_email_verify_code(
 			module.RegisterEmailVerifyPayload(email="smoke@example.com", code="123456"),
 			StubRequest(headers={"cf-connecting-ip": "8.8.8.8"}),
@@ -301,7 +296,9 @@ def main() -> None:
 			StubRequest({module.ACCOUNT_SESSION_COOKIE: cookie}), StubResponse()
 		)
 		if not session["authenticated"] or not session.get("csrf"):
-			raise AssertionError("unified session status did not expose authenticated state and CSRF")
+			raise AssertionError(
+				"unified session status did not expose authenticated state and CSRF"
+			)
 
 		profile_request = StubRequest(
 			{module.ACCOUNT_SESSION_COOKIE: cookie},
@@ -344,7 +341,11 @@ def main() -> None:
 			raise AssertionError("profile PATCH bypassed IP-derived region")
 
 		created_comment = module.comment_create(
-			module.CommentCreatePayload(postSlug="smoke-post", content="**Smoke comment**", turnstileToken="comment-ok"),
+			module.CommentCreatePayload(
+				postSlug="smoke-post",
+				content="**Smoke comment**",
+				turnstileToken="comment-ok",
+			),
 			StubRequest({module.ACCOUNT_SESSION_COOKIE: cookie}, {"cf-connecting-ip": "8.8.4.4"}),
 			session["csrf"],
 		)
@@ -431,9 +432,7 @@ def main() -> None:
 		)
 		thread_page = module.comments("smoke-post", limit=10)
 		deleted_root = next(
-			item
-			for item in thread_page["items"]
-			if item["id"] == created_comment["comment"]["id"]
+			item for item in thread_page["items"] if item["id"] == created_comment["comment"]["id"]
 		)
 		if not deleted_root["isDeleted"] or deleted_root["content"]:
 			raise AssertionError("deleted thread root did not become a safe tombstone")
@@ -445,7 +444,10 @@ def main() -> None:
 		if deleted_root["replies"][0]["replies"][0]["id"] != nested_reply["comment"]["id"]:
 			raise AssertionError("nested reply disappeared from its parent branch")
 
-		module.require_admin_console_session = lambda *_args, **_kwargs: {"bot_id": module.ADMIN_AUTH_ID}
+		admin_id = module.ADMIN_AUTH_ID
+		module._admin_service.require_admin_console_session = lambda *_args, **_kwargs: {
+			"bot_id": admin_id
+		}
 		module.admin_comment_restore(
 			created_comment["comment"]["id"],
 			StubRequest(),
@@ -453,9 +455,7 @@ def main() -> None:
 		)
 		moderated = module.admin_comments(StubRequest(), status="all")
 		moderated_root = next(
-			item
-			for item in moderated["comments"]
-			if item["id"] == created_comment["comment"]["id"]
+			item for item in moderated["comments"] if item["id"] == created_comment["comment"]["id"]
 		)
 		if (
 			moderated_root["revision_count"] != 1
@@ -471,56 +471,80 @@ def main() -> None:
 		if "password_hash" in detail["user"] or "totp_secret" in detail["user"]:
 			raise AssertionError("admin detail exposed authentication secrets")
 
-		module.telegram_api = lambda *_args, **_kwargs: {"ok": True}
-		allow_result = asyncio.run(module.telegram_update(
-			StubRequest(body=json.dumps({"message": {
-				"text": "/allowweblogin",
-				"from": {"id": 8737100423},
-				"chat": {"id": 8737100423},
-			}}).encode("utf-8")),
-			StubBackgroundTasks(),
-			"test-webhook-secret",
-		))
+		module._bots_service.telegram_api = lambda *_args, **_kwargs: {"ok": True}
+		allow_result = asyncio.run(
+			module.telegram_update(
+				StubRequest(
+					body=json.dumps(
+						{
+							"message": {
+								"text": "/allowweblogin",
+								"from": {"id": 8737100423},
+								"chat": {"id": 8737100423},
+							}
+						}
+					).encode("utf-8")
+				),
+				StubBackgroundTasks(),
+				"test-webhook-secret",
+			)
+		)
 		if not allow_result.get("web_login_enabled"):
 			raise AssertionError("Owner command did not enable Admin web login")
 		admin_response = StubResponse()
 		module.create_session(admin_response, module.ADMIN_AUTH_ID)
-		admin_session_id = next(
-			key for key, value in module.SESSIONS.items()
-			if value.get("bot_id") == module.ADMIN_AUTH_ID
-		)
-		admin_remaining = module.SESSIONS[admin_session_id]["expires_at"] - time.time()
+		admin_session_id = admin_response.cookies[module.SESSION_COOKIE]
+		admin_session = module.BOT_STATE.session(admin_session_id)
+		if not admin_session:
+			raise AssertionError("Admin session was not persisted")
+		admin_remaining = admin_session["expires_at"] - time.time()
 		if not 3590 <= admin_remaining <= 3600:
 			raise AssertionError("Admin session does not have a fixed one-hour lifetime")
 
 		challenge = module.create_login_challenge(module.ADMIN_AUTH_ID, "smoke-client")
-		module.edit_login_approval_message = lambda *_args, **_kwargs: None
-		module.answer_callback = lambda *_args, **_kwargs: None
-		telegram_result = asyncio.run(module.telegram_update(
-			StubRequest(body=json.dumps({"callback_query": {
-				"id": "callback-smoke",
-				"data": f"sf_login:{challenge['id']}",
-				"from": {"id": 8737100423},
-			}}).encode("utf-8")),
-			StubBackgroundTasks(),
-			"test-webhook-secret",
-		))
+		module._bots_service.edit_login_approval_message = lambda *_args, **_kwargs: None
+		module._bots_service.answer_callback = lambda *_args, **_kwargs: None
+		telegram_result = asyncio.run(
+			module.telegram_update(
+				StubRequest(
+					body=json.dumps(
+						{
+							"callback_query": {
+								"id": "callback-smoke",
+								"data": f"sf_login:{challenge['id']}",
+								"from": {"id": 8737100423},
+							}
+						}
+					).encode("utf-8")
+				),
+				StubBackgroundTasks(),
+				"test-webhook-secret",
+			)
+		)
 		if not telegram_result.get("approved"):
 			raise AssertionError("shared Telegram bot could not approve the admin challenge")
-		deny_result = asyncio.run(module.telegram_update(
-			StubRequest(body=json.dumps({"message": {
-				"text": "/denyweblogin",
-				"from": {"id": 8737100423},
-				"chat": {"id": 8737100423},
-			}}).encode("utf-8")),
-			StubBackgroundTasks(),
-			"test-webhook-secret",
-		))
+		deny_result = asyncio.run(
+			module.telegram_update(
+				StubRequest(
+					body=json.dumps(
+						{
+							"message": {
+								"text": "/denyweblogin",
+								"from": {"id": 8737100423},
+								"chat": {"id": 8737100423},
+							}
+						}
+					).encode("utf-8")
+				),
+				StubBackgroundTasks(),
+				"test-webhook-secret",
+			)
+		)
 		if deny_result.get("web_login_enabled") is not False:
 			raise AssertionError("Owner command did not disable Admin web login")
-		if any(item.get("bot_id") == module.ADMIN_AUTH_ID for item in module.SESSIONS.values()):
+		if module.BOT_STATE.session(admin_session_id) is not None:
 			raise AssertionError("Disabling web login did not revoke Admin sessions")
-		if any(item.get("bot_id") == module.ADMIN_AUTH_ID for item in module.LOGIN_CHALLENGES.values()):
+		if module.BOT_STATE.challenge(challenge["id"]) is not None:
 			raise AssertionError("Disabling web login did not revoke Admin challenges")
 
 		secret = module.generate_totp_secret()
@@ -554,7 +578,9 @@ def main() -> None:
 			raise AssertionError("2FA verification did not issue the final session")
 
 		with sqlite3.connect(db_path) as connection:
-			code, code_hash = connection.execute("SELECT code, code_hash FROM email_verifications LIMIT 1").fetchone()
+			code, code_hash = connection.execute(
+				"SELECT code, code_hash FROM email_verifications LIMIT 1"
+			).fetchone()
 			comment_count = connection.execute("SELECT COUNT(*) FROM comments").fetchone()[0]
 			tos_count = connection.execute("SELECT COUNT(*) FROM tos_acceptances").fetchone()[0]
 			if code or not code_hash:

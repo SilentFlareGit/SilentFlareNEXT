@@ -1,0 +1,22 @@
+[Unit]
+Description=SilentFlare durable API job worker
+After=network-online.target silentflare-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/silentflare/api/current
+EnvironmentFile=/opt/silentflare/api/api.env
+ExecStart=/opt/silentflare/api/current/venv/bin/python -m server.api.silentflare_api.jobs.worker
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/silentflare/api /opt/silentflare/backups /etc/systemd/system
+
+[Install]
+WantedBy=multi-user.target

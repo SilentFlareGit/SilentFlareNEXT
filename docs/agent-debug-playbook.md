@@ -16,7 +16,8 @@ Use pnpm. `preinstall` enforces pnpm.
 - `pnpm verify:ghost`: strict production-style Ghost build plus content route verification.
 - `pnpm preview`: preview `dist` locally.
 - `pnpm new-post`: run `scripts/new-post.js`.
-- `python -m py_compile server\api\app.py`: validate FastAPI syntax locally.
+- `python -m compileall -q server\api\app.py server\api\silentflare_api`: validate FastAPI syntax locally.
+- `python -m pytest -c server\api\pyproject.toml server\api\tests`: run real ASGI, migration, bot-state, and job tests.
 
 On the Windows machine, `pnpm` may be missing from PATH. Prefer Corepack:
 
