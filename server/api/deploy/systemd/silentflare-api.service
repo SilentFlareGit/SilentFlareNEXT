@@ -9,7 +9,7 @@ User=root
 Group=root
 WorkingDirectory=/opt/silentflare/api/current
 EnvironmentFile=/opt/silentflare/api/api.env
-ExecStart=/opt/silentflare/api/current/venv/bin/uvicorn server.api.silentflare_api.main:app --host 127.0.0.1 --port 9010 --proxy-headers --forwarded-allow-ips=127.0.0.1
+ExecStart=/opt/silentflare/api/current/venv/bin/python -m uvicorn server.api.silentflare_api.main:app --host 127.0.0.1 --port 9010 --proxy-headers --forwarded-allow-ips=127.0.0.1
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=30

@@ -12,7 +12,7 @@ api_root=/opt/silentflare/api
 releases_root="${api_root}/releases"
 release="${releases_root}/${release_id}"
 current="${api_root}/current"
-previous="$(readlink -f "${current}" 2>/dev/null || true)"
+previous=""
 env_file="${api_root}/api.env"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 
@@ -26,6 +26,12 @@ if [[ ! -f "${source_root}/server/api/requirements.txt" || ! -f "${env_file}" ]]
 fi
 
 mkdir -p "${releases_root}" "${api_root}/backups"
+if [[ -L "${current}" ]]; then
+	previous="$(readlink -f "${current}" 2>/dev/null || true)"
+elif [[ -e "${current}" ]]; then
+	previous="${api_root}/legacy-current-${timestamp}"
+	mv "${current}" "${previous}"
+fi
 if [[ ! -d "${release}" ]]; then
 	temporary="${release}.tmp.$$"
 	mkdir -p "${temporary}"
@@ -49,7 +55,7 @@ ln -sfn "${release}" "${current}.next"
 mv -Tf "${current}.next" "${current}"
 
 rollback() {
-	if [[ -n "${previous}" && -d "${previous}" ]]; then
+	if [[ -n "${previous}" && "${previous}" != "${current}" && -d "${previous}" ]]; then
 		ln -sfn "${previous}" "${current}.rollback"
 		mv -Tf "${current}.rollback" "${current}"
 		systemctl restart silentflare-api.service silentflare-api-worker.service || true
