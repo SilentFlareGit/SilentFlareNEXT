@@ -66,8 +66,20 @@ trap rollback ERR
 systemctl restart silentflare-api.service silentflare-api-worker.service
 systemctl is-active --quiet silentflare-api.service
 systemctl is-active --quiet silentflare-api-worker.service
-curl --fail --silent --show-error --max-time 15 http://127.0.0.1:9010/health/live >/dev/null
-curl --fail --silent --show-error --max-time 15 http://127.0.0.1:9010/health/ready | grep --quiet '"ok":true'
+api_healthy=false
+for _attempt in {1..30}; do
+	if curl --fail --silent --max-time 3 http://127.0.0.1:9010/health/live >/dev/null \
+		&& curl --fail --silent --max-time 3 http://127.0.0.1:9010/health/ready \
+			| grep --quiet '"ok":true'; then
+		api_healthy=true
+		break
+	fi
+	sleep 1
+done
+if [[ "${api_healthy}" != true ]]; then
+	echo "API did not become ready within 30 seconds" >&2
+	false
+fi
 trap - ERR
 
 echo "API_RELEASE=${release_id}"
