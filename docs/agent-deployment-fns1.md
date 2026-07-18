@@ -52,7 +52,9 @@ bash /opt/silentflare/app/server/api/deploy/install-release.sh \
   /opt/silentflare/app "$(git -C /opt/silentflare/app rev-parse HEAD)"
 ```
 
-The installer creates an online SQLite backup, applies checksummed migrations, activates `/opt/silentflare/api/current`, restarts the API and durable worker, verifies health, and restores the previous symlink on failure. Expected status for both `silentflare-api.service` and `silentflare-api-worker.service`: `active`.
+The installer creates an online SQLite backup, applies checksummed migrations, activates `/opt/silentflare/api/current`, restarts the API and durable worker, and waits up to 30 seconds for health. It restores the previous symlink and restarts both services on failure. On the first release-based deployment, an existing real `current` directory is archived as `legacy-current-<timestamp>`. Expected status for both `silentflare-api.service` and `silentflare-api-worker.service`: `active`.
+
+Do not source `/opt/silentflare/api/api.env` in Bash. Secret and password-derived values may contain `$` and must remain literal. The migration CLI accepts `--env-file` and uses dotenv parsing; systemd reads the same file through `EnvironmentFile=`. Because each release venv is built under a temporary path and moved atomically, the API unit must use `current/venv/bin/python -m uvicorn`, not the generated `bin/uvicorn` entry script.
 
 When Blog comment publishing is added or moved to a new hostname, audit `TURNSTILE_EXPECTED_HOSTNAMES` in `/opt/silentflare/api/api.env` without printing secrets or tokens. `blog.silentflare.com` must be allowed for the production Discussion widget, alongside every Auth or Accounts hostname that renders Turnstile. Back up `api.env`, update only the hostname list, restart `silentflare-api.service`, and verify a real authenticated browser publication. A successful widget followed by `Human verification failed` usually means the returned hostname is missing from this allowlist.
 
@@ -168,9 +170,30 @@ Expected:
 
 - `HEAD` matches latest pushed commit.
 - `STATUS=0`.
-- `CURRENT` points to a release under `/opt/silentflare/blog/releases`.
+- `BLOG_CURRENT` points to a release under `/opt/silentflare/blog/releases`.
 - `API_CURRENT` points to the same commit under `/opt/silentflare/api/releases`.
 - `silentflare-api.service` and `silentflare-api-worker.service` are active.
+
+Verify migration checksums without exposing environment values:
+
+```powershell
+$key = Join-Path $env:USERPROFILE '.ssh\hetzner_cx23'
+ssh -i $key root@167.233.129.17 'cd /opt/silentflare/api/current && ./venv/bin/python -m server.api.silentflare_api.db.cli --env-file /opt/silentflare/api/api.env migrate'
+```
+
+Expected after a completed release: `MIGRATIONS_APPLIED=none`. This means all known migrations are already recorded and their checksums match.
+
+For cross-origin Blog comments, preflight must return the exact Blog origin plus credentials:
+
+```sh
+curl -sS -D - -o /dev/null -X OPTIONS \
+  -H 'Origin: https://blog.silentflare.com' \
+  -H 'Access-Control-Request-Method: GET' \
+  -H 'Access-Control-Request-Headers: X-CSRF-Token' \
+  http://127.0.0.1:9010/comments
+```
+
+Expected headers include `access-control-allow-origin: https://blog.silentflare.com` and `access-control-allow-credentials: true`.
 
 Verify origin Nginx without Cloudflare:
 
@@ -225,6 +248,10 @@ Static and API rollback are independent symlink operations. Do not delete releas
 ```sh
 ln -sfn /opt/silentflare/blog/releases/<release-id> /opt/silentflare/blog/current.next
 mv -Tf /opt/silentflare/blog/current.next /opt/silentflare/blog/current
+
+ln -sfn /opt/silentflare/api/releases/<commit> /opt/silentflare/api/current.next
+mv -Tf /opt/silentflare/api/current.next /opt/silentflare/api/current
+systemctl restart silentflare-api.service silentflare-api-worker.service
 ```
 
 After rollback, verify:
@@ -232,4 +259,7 @@ After rollback, verify:
 ```sh
 readlink -f /opt/silentflare/blog/current
 curl -sS -o /dev/null -w 'HOME=%{http_code}\n' -H Host:blog.silentflare.com http://127.0.0.1/
+readlink -f /opt/silentflare/api/current
+systemctl is-active silentflare-api.service silentflare-api-worker.service
+curl -fsS http://127.0.0.1:9010/health/ready
 ```

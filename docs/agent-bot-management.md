@@ -12,6 +12,7 @@ The bot management surface is split across this repo and FNS1 infrastructure:
 - API entry point: `server/api/app.py`; Bot routes and services live under `server/api/silentflare_api/domains/bots/`.
 - API requirements: `server/api/requirements.txt`.
 - Production API service: `silentflare-api.service`.
+- Production durable job worker: `silentflare-api-worker.service`.
 - Production API app directory: `/opt/silentflare/api`.
 - Production API env file: `/opt/silentflare/api/api.env`.
 - Production API bind address: `127.0.0.1:9010`.
@@ -110,6 +111,8 @@ Do not print values from `/opt/silentflare/api/api.env`. Reading variable names 
 
 Backup trigger requires a bot-scoped web session plus CSRF, unless using the server-only `X-Admin-Token` fallback. The fallback is for internal checks only and must not be exposed in the front end.
 
+Backup execution is recorded in the persistent `jobs` table before work starts. The independent worker can claim pending or retried `backup.run` jobs after a process restart. The queue supports idempotency keys for callers that provide them; the current manual backup endpoint intentionally creates a new job for each accepted request. Treat both API and worker service health as part of backup readiness.
+
 Server-side status-only backup check:
 
 ```powershell
@@ -131,7 +134,7 @@ For `Telegram Chat Bot`, use `TELEGRAM_CHAT_BOT_TOKEN` and `TELEGRAM_CHAT_BOT_WE
 
 If Telegram authorization breaks:
 
-1. Confirm `silentflare-api.service` is active.
+1. Confirm `silentflare-api.service` and `silentflare-api-worker.service` are active.
 2. Confirm `/opt/silentflare/api/api.env` contains the required variable names without printing values.
 3. Confirm `GET https://api.silentflare.com/bots` returns `auth_method=telegram`.
 4. Confirm `POST /auth/telegram/start` returns a challenge.

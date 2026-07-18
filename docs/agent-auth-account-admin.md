@@ -189,10 +189,9 @@ Accounts is a standalone account workspace. Do not restore the public blog navba
 ## Runtime And Migration Context
 
 - Production accounts/comments use the FNS1 local account database, not Cloudflare D1.
-- `migrations/0003_unified_auth.sql` is the unified auth schema reference; `ensure_account_db()` applies equivalent idempotent runtime changes.
-- `migrations/0004_account_avatar_region.sql` covers API-owned avatar/region metadata.
-- `migrations/0005_admin_user_audit.sql` is the schema reference for admin audit fields; `ensure_account_db()` applies equivalent idempotent runtime changes.
-- `migrations/0007_comment_discussions.sql` is the schema reference for root-thread pagination, edit revisions, and moderation audit records; `ensure_account_db()` applies equivalent idempotent runtime changes.
-- `ensure_account_db()` also maintains `deletion_requested_at`, `deletion_review_status`, `deletion_approved_at`, and `deletion_scheduled_for`. Only rows with approved status and a due schedule may be finalized.
+- Root `migrations/` files are historical schema references only. They are not applied in production.
+- `server/api/migrations` is the canonical forward-only migration history. Applied versions and SHA-256 checksums are recorded in `schema_migrations`; never edit an already deployed SQL file.
+- API startup and the release installer apply pending migrations before serving the new release. `ensure_account_db()` is a process-local compatibility guard and does not replace versioned migration files.
+- Comment thread indexes, edit revisions, moderation audit records, account deletion fields, hash-only Bot state, and durable jobs are all governed by the canonical API migrations.
 
 Production readiness caveat: `GET https://auth.silentflare.com/auth-api/auth/session` must return `configured:true`. `emailConfigured:false` means password/session flows may work but email-code login and registration cannot send mail. Real email flows require the email API variables on FNS1 and a verified sender domain; verify real inbox delivery before declaring email ready.

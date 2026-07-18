@@ -22,6 +22,20 @@ SQL files under `server/api/migrations` are the canonical forward-only schema hi
 
 Use the shared database helpers so every connection receives WAL mode, a busy timeout, foreign-key enforcement, and deterministic close/rollback behavior. Store only hashes of public and Bot session tokens. Jobs and interactive Bot challenges must survive API and worker restarts.
 
+Database operations use the versioned CLI. It parses `api.env` as dotenv data rather than sourcing it as shell code, so values containing `$` remain literal:
+
+```bash
+cd /opt/silentflare/api/current
+./venv/bin/python -m server.api.silentflare_api.db.cli \
+  --env-file /opt/silentflare/api/api.env migrate
+./venv/bin/python -m server.api.silentflare_api.db.cli \
+  --env-file /opt/silentflare/api/api.env backup /opt/silentflare/api/backups/account-manual.db
+```
+
+## Durable Jobs
+
+The `jobs` table is the restart-safe queue. Enqueue with an idempotency key when an operation must not be duplicated. The worker claims jobs under an immediate transaction, records attempts and bounded error classes, retries with backoff, recovers stale locks after restart, and persists the final result. `silentflare-api-worker.service` must run beside the API service.
+
 ## Local Validation
 
 From the repository root:
@@ -53,6 +67,8 @@ bash /opt/silentflare/app/server/api/deploy/install-release.sh \
   /opt/silentflare/app "$(git -C /opt/silentflare/app rev-parse HEAD)"
 ```
 
-The installer restarts both `silentflare-api.service` and `silentflare-api-worker.service`, checks liveness and readiness, and restores the previous `current` symlink if activation fails. It never prints environment values.
+The installer restarts both `silentflare-api.service` and `silentflare-api-worker.service`, then allows up to 30 seconds for liveness and readiness. If activation fails, it restores the previous release and restarts both units. A pre-release real `current` directory is archived as `legacy-current-<timestamp>` during the first migration.
+
+Release virtual environments are created under a temporary directory and then moved into place. Systemd must therefore launch Uvicorn through the relocatable interpreter form `venv/bin/python -m uvicorn`, not the generated `venv/bin/uvicorn` console script whose shebang contains the temporary path. The installer never sources or prints environment values.
 
 Verify `/health/live`, `/health/ready`, both systemd units, the active `REVISION`, and representative public/unauthenticated contracts after deployment.

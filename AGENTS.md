@@ -70,6 +70,7 @@ corepack pnpm verify:ghost
 FastAPI syntax check:
 
 ```cmd
+python -m ruff check --config server\api\pyproject.toml server\api\app.py server\api\silentflare_api server\api\tests scripts\smoke-account-comments.py scripts\test-admin-web-login.py
 python -m compileall -q server\api\app.py server\api\silentflare_api
 python -m pytest -c server\api\pyproject.toml server\api\tests
 ```

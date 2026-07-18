@@ -18,6 +18,7 @@ Use pnpm. `preinstall` enforces pnpm.
 - `pnpm new-post`: run `scripts/new-post.js`.
 - `python -m compileall -q server\api\app.py server\api\silentflare_api`: validate FastAPI syntax locally.
 - `python -m pytest -c server\api\pyproject.toml server\api\tests`: run real ASGI, migration, bot-state, and job tests.
+- `python -m ruff check --config server\api\pyproject.toml server\api\app.py server\api\silentflare_api server\api\tests scripts\smoke-account-comments.py scripts\test-admin-web-login.py`: lint the API and contract scripts.
 
 On the Windows machine, `pnpm` may be missing from PATH. Prefer Corepack:
 
@@ -64,7 +65,9 @@ When asked to "global debug" or find existing fixable issues:
    - compare `HEAD` and `origin/main`
 2. Confirm production state if relevant:
    - FNS1 Git HEAD,
-   - active release symlink,
+   - Blog and API active release symlinks,
+   - `silentflare-api.service` and `silentflare-api-worker.service`,
+   - `/health/live` and `/health/ready`,
    - origin HTTP status,
    - public Cloudflare status.
 3. Run local validation:

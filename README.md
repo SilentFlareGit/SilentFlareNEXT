@@ -6,7 +6,8 @@ SilentFlareNEXT is an Astro blog front end based on the Fuwari template. Ghost r
 
 - Front end: Astro + Fuwari UI.
 - Content source: Ghost Content API.
-- Deployment model: deploy this Astro app separately from Ghost.
+- Custom backend: modular FastAPI with SQLite migrations and a durable job worker.
+- Deployment model: immutable Astro and API releases on FNS1, deployed separately from Ghost.
 - Secret rule: never put a Ghost Admin API Key in this front end. Only use the Ghost Content API Key.
 
 ## Subsites
@@ -15,14 +16,14 @@ SilentFlare uses separate hostnames for separate responsibilities:
 
 - `blog.silentflare.com`: public Astro/Fuwari front end, served by this app.
 - `cms.silentflare.com`: external Ghost CMS and Ghost Admin at `/ghost`.
-- `api.silentflare.com`: reserved for the future SilentFlare custom API.
+- `api.silentflare.com`: production FastAPI for public identity, comments, Admin data, and Bot management.
 - `admin.silentflare.com`: SilentFlare custom admin dashboard for public users and comments.
 
-Placeholder and status routes are available in this app until the external services are built:
+The Astro app also provides subsite shells and boundary routes:
 
 - `/cms/`: Ghost CMS boundary and Content API connection status.
-- `/api/`: custom API boundary placeholder.
-- `/admin/`: custom API admin console for public users and comments.
+- `/api/`: API boundary/status page.
+- `/admin/`: production Admin console for public users and comments.
 
 See [docs/SUBSITES.md](docs/SUBSITES.md) for the current subsite map.
 
@@ -32,17 +33,25 @@ The public blog uses the FNS1 FastAPI backend for account registration, login, l
 
 Implemented API routes:
 
-- `POST /account/auth/register`
-- `POST /account/auth/login`
-- `POST /account/auth/logout`
-- `GET /account/auth/me`
+- `GET /auth/session`
+- `POST /auth/login/password`
+- `POST /auth/login/email/request`
+- `POST /auth/login/email/verify`
+- `POST /auth/session/logout`
+- `POST /accounts/register/email/request`
+- `POST /accounts/register/email/verify`
+- `POST /accounts/register/complete`
+- `GET/PATCH /accounts/profile`
 - `GET /comments?postSlug=...`
 - `POST /comments/create`
+- `PATCH /comments/{comment_id}`
 - `DELETE /comments/{comment_id}`
 
 Registration, login, and comment creation require Cloudflare Turnstile. Sessions use HttpOnly Secure SameSite=Lax cookies; raw session tokens are never stored in the local database.
 
 See [docs/AUTH_COMMENTS.md](docs/AUTH_COMMENTS.md) for FNS1 FastAPI variables, Turnstile hostname allowlists, the local smoke test, and manual test steps.
+
+Backend code lives under `server/api/silentflare_api`. `server/api/app.py` is a compatibility entry point; domain routers/services, integrations, database migrations, and the durable worker are separate modules. See [docs/agent-api-backend.md](docs/agent-api-backend.md) for architecture, validation, and release operations.
 
 ## What Was Initialized
 
@@ -155,8 +164,8 @@ See [docs/GHOST_HEADLESS.md](docs/GHOST_HEADLESS.md) for Ghost setup, deployment
 
 - `/` reads paginated posts from Ghost.
 - `/cms/` shows the Ghost CMS connection status and latest content summary.
-- `/api/` shows the custom API placeholder.
-- `/admin/` shows the custom admin placeholder.
+- `/api/` shows the custom API boundary and status.
+- `/admin/` hosts the public-account Admin console.
 - `/posts/[slug]/` reads a Ghost post by slug.
 - `/tags/[slug]/` reads Ghost posts filtered by tag.
 - `/authors/[slug]/` reads Ghost posts filtered by author.

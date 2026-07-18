@@ -35,6 +35,8 @@ Do not print values from:
 
 Status-only checks may print whether variable names are present.
 
+Never load `/opt/silentflare/api/api.env` with Bash `source` or `.`. Values may legitimately contain `$`; shell evaluation can alter them and may leak fragments in errors. Use systemd `EnvironmentFile=` for services and the FastAPI database CLI `--env-file` option for migrations or online backups.
+
 ## Required Build-Time Public Variables
 
 Use `.env.example` as the template. Never commit `.env`.
