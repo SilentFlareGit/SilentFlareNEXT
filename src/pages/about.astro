@@ -1,17 +1,53 @@
 ---
 
+import Breadcrumbs from "@components/Breadcrumbs.astro";
 import Markdown from "@components/misc/Markdown.astro";
+import { absoluteUrl, breadcrumbJsonLd } from "@lib/seo";
+import { getSiteSettings } from "@lib/site-settings";
+import MarkdownIt from "markdown-it";
+import sanitizeHtml from "sanitize-html";
 import I18nKey from "../i18n/i18nKey";
 import { i18n } from "../i18n/translation";
 import MainGridLayout from "../layouts/MainGridLayout.astro";
+
+const settings = await getSiteSettings();
+const markdown = new MarkdownIt({
+	html: false,
+	linkify: true,
+	typographer: true,
+});
+const renderedAbout = markdown
+	.render(settings.aboutMarkdown)
+	.replace(/<\/?h1(?=[\s>])/g, (tag) => tag.replace("h1", "h2"));
+const aboutHtml = sanitizeHtml(renderedAbout, {
+	allowedTags: sanitizeHtml.defaults.allowedTags.concat(["h1", "h2", "h3"]),
+	allowedAttributes: {
+		...sanitizeHtml.defaults.allowedAttributes,
+		a: ["href", "target", "rel"],
+	},
+});
+const site = Astro.site ?? new URL("https://blog.silentflare.com/");
+const aboutUrl = absoluteUrl("/about/", site);
+const breadcrumbItems = [
+	{ name: "Home", url: absoluteUrl("/", site) },
+	{ name: "About", url: aboutUrl },
+];
+const aboutJsonLd = {
+	"@context": "https://schema.org",
+	"@type": "AboutPage",
+	name: `About ${settings.name}`,
+	description: settings.bio,
+	url: aboutUrl,
+	mainEntity: { "@id": `${site.origin}/#publisher` },
+};
 ---
-<MainGridLayout title={i18n(I18nKey.about)} description={i18n(I18nKey.about)}>
+<MainGridLayout title={i18n(I18nKey.about)} description={`About ${settings.name}: ${settings.bio}`} seo={{ jsonLd: [breadcrumbJsonLd(breadcrumbItems), aboutJsonLd] }}>
     <div class="flex w-full rounded-[var(--radius-large)] overflow-hidden relative min-h-32">
         <div class="card-base z-10 px-9 py-6 relative w-full ">
-            <Markdown class="mt-2" data-site-about>
-                <div class="site-about-loading" aria-label="Loading About content">
-                    <span></span><span></span><span></span>
-                </div>
+            <Breadcrumbs items={breadcrumbItems} class="mb-4" />
+            <h1 class="mb-5 text-3xl font-bold text-90">{i18n(I18nKey.about)} {settings.name}</h1>
+            <Markdown class="mt-2" data-site-about data-pagefind-body>
+                <Fragment set:html={aboutHtml} />
             </Markdown>
         </div>
     </div>

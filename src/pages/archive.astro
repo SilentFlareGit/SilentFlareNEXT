@@ -1,7 +1,9 @@
 ---
+import Breadcrumbs from "@components/Breadcrumbs.astro";
 import I18nKey from "@i18n/i18nKey";
 import { i18n } from "@i18n/translation";
 import MainGridLayout from "@layouts/MainGridLayout.astro";
+import { absoluteUrl, breadcrumbJsonLd } from "@lib/seo";
 import { getSortedPostsList } from "../utils/content-utils";
 import { formatDateToYYYYMMDD } from "../utils/date-utils";
 import { getPostUrlBySlug } from "../utils/url-utils";
@@ -18,16 +20,43 @@ const groupedPosts = Object.entries(
 		{} as Record<string, typeof sortedPostsList>,
 	),
 ).sort(([yearA], [yearB]) => Number(yearB) - Number(yearA));
+const site = Astro.site ?? new URL("https://blog.silentflare.com/");
+const archiveUrl = absoluteUrl("/archive/", site);
+const breadcrumbItems = [
+	{ name: "Home", url: absoluteUrl("/", site) },
+	{ name: "Archive", url: archiveUrl },
+];
+const archiveJsonLd = {
+	"@context": "https://schema.org",
+	"@type": "CollectionPage",
+	name: "SilentFlare archive",
+	description: "Browse every published SilentFlare article by year.",
+	url: archiveUrl,
+	mainEntity: {
+		"@type": "ItemList",
+		itemListElement: sortedPostsList.map((post, index) => ({
+			"@type": "ListItem",
+			position: index + 1,
+			url: absoluteUrl(getPostUrlBySlug(post.slug), site),
+			name: post.title,
+		})),
+	},
+};
 ---
 
-<MainGridLayout title={i18n(I18nKey.archive)}>
+<MainGridLayout title={i18n(I18nKey.archive)} description="Browse every published SilentFlare article by year." seo={{ jsonLd: [breadcrumbJsonLd(breadcrumbItems), archiveJsonLd] }}>
     <div class="card-base px-8 py-6">
+        <header class="mb-5">
+            <Breadcrumbs items={breadcrumbItems} class="mb-4" />
+            <h1 class="text-3xl font-bold text-90">{i18n(I18nKey.archive)}</h1>
+            <p class="mt-2 text-75">Browse every published SilentFlare article by year.</p>
+        </header>
         {groupedPosts.map(([year, posts]) => (
             <section>
                 <div class="flex flex-row w-full items-center h-[3.75rem]">
-                    <div class="w-[15%] md:w-[10%] transition text-2xl font-bold text-right text-75">
+                    <h2 class="w-[15%] md:w-[10%] transition text-2xl font-bold text-right text-75">
                         {year}
-                    </div>
+                    </h2>
                     <div class="w-[15%] md:w-[10%]">
                         <div class="h-3 w-3 bg-none rounded-full outline outline-[var(--primary)] mx-auto -outline-offset-[2px] z-50 outline-3"></div>
                     </div>

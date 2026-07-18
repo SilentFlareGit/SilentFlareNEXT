@@ -1,10 +1,17 @@
 ---
 import { Icon } from "astro-icon/components";
 import { profileConfig } from "../../config";
+import { getSiteSettings } from "../../lib/site-settings";
 import { url } from "../../utils/url-utils";
 import ImageWrapper from "../misc/ImageWrapper.astro";
 
-const config = profileConfig;
+const settings = await getSiteSettings();
+const config = {
+	...profileConfig,
+	name: settings.name || profileConfig.name,
+	bio: settings.bio || profileConfig.bio,
+	avatar: settings.avatarUrl || profileConfig.avatar,
+};
 ---
 <div data-site-profile class="card-base p-3 site-profile-pending">
     {config.avatar && (
@@ -17,7 +24,7 @@ const config = profileConfig;
                       class="transition opacity-0 scale-90 group-hover:scale-100 group-hover:opacity-100 text-white text-5xl">
                 </Icon>
             </div>
-            <ImageWrapper data-site-avatar src={config.avatar} alt="Profile image" class="mx-auto lg:w-full h-full lg:mt-0 "></ImageWrapper>
+            <ImageWrapper data-site-avatar src={config.avatar} alt={`${config.name} profile image`} class="mx-auto lg:w-full h-full lg:mt-0 " width={512} height={512} sizes="(min-width: 1024px) 15rem, 12rem"></ImageWrapper>
         </a>
     )}
     <div class="px-2">

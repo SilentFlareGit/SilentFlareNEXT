@@ -1,0 +1,43 @@
+<script>
+import PhotoSwipeLightbox from "photoswipe/lightbox";
+import "photoswipe/style.css";
+
+let lightbox: PhotoSwipeLightbox | undefined;
+const pswp = import("photoswipe");
+
+function createPhotoSwipe() {
+	lightbox?.destroy();
+	lightbox = new PhotoSwipeLightbox({
+		gallery: ".custom-md img, #post-cover img",
+		pswpModule: () => pswp,
+		padding: { top: 20, bottom: 20, left: 20, right: 20 },
+		wheelToZoom: true,
+		arrowPrev: false,
+		arrowNext: false,
+		imageClickAction: "close",
+		tapAction: "close",
+		doubleTapAction: "zoom",
+	});
+	lightbox.addFilter("domItemData", (itemData, element) => {
+		if (element instanceof HTMLImageElement) {
+			itemData.src = element.currentSrc || element.src;
+			itemData.msrc = element.currentSrc || element.src;
+			itemData.w = Number(element.naturalWidth || window.innerWidth);
+			itemData.h = Number(element.naturalHeight || window.innerHeight);
+		}
+		return itemData;
+	});
+	lightbox.init();
+}
+
+const setup = () => {
+	createPhotoSwipe();
+	window.swup?.hooks.on("page:view", createPhotoSwipe);
+	window.swup?.hooks.on("content:replace", () => lightbox?.destroy(), {
+		before: true,
+	});
+};
+
+if (window.swup?.hooks) setup();
+else document.addEventListener("swup:enable", setup, { once: true });
+</script>

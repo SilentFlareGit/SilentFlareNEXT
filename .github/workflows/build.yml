@@ -80,6 +80,9 @@ jobs:
       - name: Verify required build outputs
         run: pnpm test:smoke
 
+      - name: Verify generated SEO output
+        run: pnpm test:seo
+
       - name: Verify account and Admin API contracts
         run: pnpm test:smoke:account-comments
 

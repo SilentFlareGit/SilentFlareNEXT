@@ -113,6 +113,7 @@ if (requireContent) {
 	const contentRoutes = [
 		["posts", "post"],
 		["tags", "tag"],
+		["authors", "author"],
 	];
 	const missingContentRoutes = [];
 
@@ -135,9 +136,9 @@ if (requireContent) {
 
 	if (missingContentRoutes.length > 0) {
 		throw new Error(
-			`Ghost content verification failed. Missing generated routes for: ${missingContentRoutes.join(", ")}. Confirm Ghost is reachable and contains at least one published post with a tag.`,
+			`Ghost content verification failed. Missing generated routes for: ${missingContentRoutes.join(", ")}. Confirm Ghost is reachable and contains at least one published post with a tag and author.`,
 		);
 	}
 
-	console.log("Verified generated Ghost post and tag routes.");
+	console.log("Verified generated Ghost post, tag, and author routes.");
 }

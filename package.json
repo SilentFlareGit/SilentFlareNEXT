@@ -10,7 +10,9 @@
     "test:smoke": "node scripts/check-built-routes.js",
     "test:smoke:account-comments": "python scripts/smoke-account-comments.py",
     "test:smoke:content": "node scripts/check-built-routes.js --require-content",
-    "verify:ghost": "astro build && pagefind --site dist && node scripts/check-built-routes.js --require-content",
+    "test:seo": "node scripts/check-seo-output.js",
+    "verify:seo": "astro build && pagefind --site dist && node scripts/check-built-routes.js --require-content && node scripts/check-seo-output.js",
+    "verify:ghost": "astro build && pagefind --site dist && node scripts/check-built-routes.js --require-content && node scripts/check-seo-output.js",
     "preview": "astro preview",
     "astro": "astro",
     "type-check": "astro check",
@@ -23,7 +25,6 @@
   "dependencies": {
     "@astrojs/check": "^0.9.6",
     "@astrojs/rss": "^4.0.14",
-    "@astrojs/sitemap": "^3.6.0",
     "@astrojs/svelte": "7.2.3",
     "@astrojs/tailwind": "^6.0.2",
     "@expressive-code/core": "^0.41.4",
@@ -76,6 +77,8 @@
     "@types/mdast": "^4.0.4",
     "@types/qrcode": "^1.5.6",
     "@types/sanitize-html": "^2.16.0",
+    "fast-xml-parser": "^5.3.2",
+    "parse5": "^7.3.0",
     "postcss-import": "^16.1.1",
     "postcss-nesting": "^13.0.2"
   },

@@ -1,0 +1,24 @@
+---
+import { Icon } from "astro-icon/components";
+
+interface Props {
+	items: Array<{ name: string; url?: string }>;
+	class?: string;
+}
+
+const { items } = Astro.props;
+const className = Astro.props.class;
+---
+
+<nav aria-label="Breadcrumb" class:list={["flex min-w-0 items-center gap-1.5 text-sm text-50", className]}>
+	{items.map((item, index) => (
+		<Fragment>
+			{index > 0 && <Icon name="material-symbols:chevron-right-rounded" class="shrink-0 text-lg" />}
+			{item.url && index < items.length - 1 ? (
+				<a href={item.url} class="truncate transition hover:text-[var(--primary)]">{item.name}</a>
+			) : (
+				<span aria-current={index === items.length - 1 ? "page" : undefined} class="truncate">{item.name}</span>
+			)}
+		</Fragment>
+	))}
+</nav>

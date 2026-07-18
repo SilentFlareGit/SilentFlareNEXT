@@ -5,6 +5,7 @@ import Navbar from "@components/Navbar.astro";
 import SideBar from "@components/widget/SideBar.astro";
 import type { MarkdownHeading } from "astro";
 import { Icon } from "astro-icon/components";
+import type { SeoData } from "@/types/seo";
 import ImageWrapper from "../components/misc/ImageWrapper.astro";
 import TOC from "../components/widget/TOC.astro";
 import { siteConfig } from "../config";
@@ -22,6 +23,7 @@ interface Props {
 	lang?: string;
 	setOGTypeArticle?: boolean;
 	headings?: MarkdownHeading[];
+	seo?: SeoData;
 }
 
 const {
@@ -31,6 +33,7 @@ const {
 	lang,
 	setOGTypeArticle,
 	headings = [],
+	seo,
 } = Astro.props;
 const hasBannerCredit =
 	siteConfig.banner.enable && siteConfig.banner.credit.enable;
@@ -41,7 +44,7 @@ const mainPanelTop = siteConfig.banner.enable
 	: "5.5rem";
 ---
 
-<Layout title={title} banner={banner} description={description} lang={lang} setOGTypeArticle={setOGTypeArticle}>
+<Layout title={title} banner={banner} description={description} lang={lang} setOGTypeArticle={setOGTypeArticle} {seo}>
 
 <!-- Navbar -->
 <slot slot="head" name="head"></slot>
@@ -53,8 +56,8 @@ const mainPanelTop = siteConfig.banner.enable
 
 <!-- Banner -->
 {siteConfig.banner.enable && <div id="banner-wrapper" class={`absolute z-10 w-full transition duration-700 overflow-hidden`} style={`top: -${BANNER_HEIGHT_EXTEND}vh`}>
-    <ImageWrapper id="banner" alt="Banner image of the blog" class:list={["object-cover h-full transition duration-700 opacity-0 scale-105"]}
-                  src={siteConfig.banner.src} position={siteConfig.banner.position}
+    <ImageWrapper id="banner" alt="" class:list={["object-cover h-full transition duration-700 opacity-0 scale-105"]}
+                  src={siteConfig.banner.src} position={siteConfig.banner.position} width={1920} height={1080} priority={Astro.url.pathname === "/"}
     >
     </ImageWrapper>
 </div>}

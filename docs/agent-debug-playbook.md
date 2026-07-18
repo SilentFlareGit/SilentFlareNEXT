@@ -13,6 +13,7 @@ Use pnpm. `preinstall` enforces pnpm.
 - `pnpm build`: build static site and Pagefind search index into `dist`.
 - `pnpm test:smoke`: verify required generated files exist.
 - `pnpm test:smoke:content`: verify generated post, tag, and author routes exist.
+- `pnpm test:seo`: verify built metadata, canonical URLs, structured data, sitemaps, internal links, and content route coverage.
 - `pnpm verify:ghost`: strict production-style Ghost build plus content route verification.
 - `pnpm preview`: preview `dist` locally.
 - `pnpm new-post`: run `scripts/new-post.js`.

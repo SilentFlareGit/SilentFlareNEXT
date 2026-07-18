@@ -1,0 +1,94 @@
+---
+import { profileConfig, siteConfig } from "@/config";
+import { absoluteUrl, stringifyJsonLd } from "@/lib/seo";
+import { getSiteSettings } from "@/lib/site-settings";
+import type { JsonLdNode, SeoData } from "@/types/seo";
+
+interface Props {
+	seo?: SeoData;
+}
+
+const { seo = {} } = Astro.props;
+const site = Astro.site ?? new URL("https://blog.silentflare.com/");
+const settings = await getSiteSettings();
+const siteName = settings.name || siteConfig.title;
+const siteDescription = settings.bio || siteConfig.subtitle;
+const pageTitle = seo.title
+	? seo.titleTemplate === false
+		? seo.title
+		: `${seo.title} - ${siteName}`
+	: `${siteName} - ${siteDescription}`;
+const description = seo.description?.trim() || siteDescription || pageTitle;
+const canonicalUrl =
+	seo.canonicalUrl || new URL(Astro.url.pathname, site).toString();
+const defaultBackground = settings.backgrounds.find(
+	(background) => background.type === "image",
+);
+const imageUrl =
+	seo.image?.url || defaultBackground?.url || siteConfig.banner.src;
+const socialImage = imageUrl ? absoluteUrl(imageUrl, site) : undefined;
+const robots = seo.noindex
+	? "noindex,follow"
+	: "index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1";
+const logoUrl = absoluteUrl("/favicon/favicon-dark-192.png", site);
+const organizationId = `${site.origin}/#publisher`;
+const websiteId = `${site.origin}/#website`;
+const baseJsonLd: JsonLdNode[] = [
+	{
+		"@context": "https://schema.org",
+		"@type": "Organization",
+		"@id": organizationId,
+		name: siteName,
+		url: site.origin,
+		logo: { "@type": "ImageObject", url: logoUrl },
+		sameAs: profileConfig.links.map((link) => link.url),
+	},
+	{
+		"@context": "https://schema.org",
+		"@type": "WebSite",
+		"@id": websiteId,
+		name: siteName,
+		description: siteDescription,
+		url: site.origin,
+		publisher: { "@id": organizationId },
+		inLanguage: siteConfig.lang.replace("_", "-"),
+	},
+];
+const jsonLd = [
+	...baseJsonLd,
+	...(seo.jsonLd
+		? Array.isArray(seo.jsonLd)
+			? seo.jsonLd
+			: [seo.jsonLd]
+		: []),
+];
+---
+
+<title>{pageTitle}</title>
+<meta name="description" content={description} />
+<meta name="robots" content={robots} />
+{!seo.noindex && <link rel="canonical" href={canonicalUrl} />}
+
+<meta property="og:site_name" content={siteName} />
+<meta property="og:url" content={canonicalUrl} />
+<meta property="og:title" content={seo.ogTitle || pageTitle} />
+<meta property="og:description" content={seo.ogDescription || description} />
+<meta property="og:type" content={seo.type === "article" ? "article" : "website"} />
+{socialImage && <meta property="og:image" content={socialImage} />}
+{socialImage && seo.image?.alt && <meta property="og:image:alt" content={seo.image.alt} />}
+{seo.image?.width && <meta property="og:image:width" content={String(seo.image.width)} />}
+{seo.image?.height && <meta property="og:image:height" content={String(seo.image.height)} />}
+{seo.publishedTime && <meta property="article:published_time" content={seo.publishedTime} />}
+{seo.modifiedTime && <meta property="article:modified_time" content={seo.modifiedTime} />}
+{seo.authors?.map((author) => author.url && <meta property="article:author" content={author.url} />)}
+{seo.tags?.map((tag) => <meta property="article:tag" content={tag} />)}
+
+<meta name="twitter:card" content={socialImage ? "summary_large_image" : "summary"} />
+<meta name="twitter:url" content={canonicalUrl} />
+<meta name="twitter:title" content={seo.twitterTitle || seo.ogTitle || pageTitle} />
+<meta name="twitter:description" content={seo.twitterDescription || seo.ogDescription || description} />
+{socialImage && <meta name="twitter:image" content={socialImage} />}
+{socialImage && seo.image?.alt && <meta name="twitter:image:alt" content={seo.image.alt} />}
+
+<link rel="alternate" type="application/rss+xml" title={siteName} href={absoluteUrl("/rss.xml", site)} />
+<script is:inline type="application/ld+json" set:html={stringifyJsonLd(jsonLd)}></script>

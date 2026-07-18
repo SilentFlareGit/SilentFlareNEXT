@@ -2,7 +2,7 @@
 import MainGridLayout from "@layouts/MainGridLayout.astro";
 ---
 
-<MainGridLayout title="Not found" description="The requested page could not be found.">
+<MainGridLayout title="Not found" description="The requested page could not be found." seo={{ noindex: true }}>
     <div class="card-base rounded-[var(--radius-large)] px-6 md:px-9 py-8">
         <h1 class="text-3xl font-bold text-90 mb-3">Not found</h1>
         <p class="text-75 mb-5">The page you requested does not exist or is no longer published.</p>

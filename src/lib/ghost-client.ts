@@ -1,6 +1,8 @@
 import type {
+	BlogAuthor,
 	BlogPost,
 	BlogTag,
+	GhostAuthor,
 	GhostCmsStatus,
 	GhostListResponse,
 	GhostPage,
@@ -8,12 +10,13 @@ import type {
 	GhostTag,
 } from "./ghost";
 import {
+	adaptGhostAuthor,
 	adaptGhostPost,
 	adaptGhostTag,
 	withAdjacentPosts,
 } from "./ghost-adapter";
 
-type GhostResource = "posts" | "tags";
+type GhostResource = "authors" | "posts" | "tags";
 
 interface RequestOptions {
 	page?: number;
@@ -25,7 +28,7 @@ interface RequestOptions {
 }
 
 const DEFAULT_API_VERSION = "v5.0";
-const POSTS_INCLUDE = "tags";
+const POSTS_INCLUDE = "tags,authors";
 const POSTS_ORDER = "published_at desc";
 
 function readEnv(name: string): string | boolean | undefined {
@@ -175,6 +178,7 @@ async function requestGhost<T>(
 	}
 
 	const json = (await response.json()) as {
+		authors?: T[];
 		posts?: T[];
 		tags?: T[];
 		meta: GhostListResponse<T>["meta"];
@@ -183,6 +187,20 @@ async function requestGhost<T>(
 	return {
 		data: json[resource] ?? [],
 		meta: json.meta,
+	};
+}
+
+export async function getAuthors(
+	options: RequestOptions = {},
+): Promise<GhostPage<BlogAuthor>> {
+	const response = await requestGhost<GhostAuthor>("authors", {
+		include: "count.posts",
+		order: "name asc",
+		...options,
+	});
+	return {
+		items: response.data.map(adaptGhostAuthor),
+		pagination: response.meta.pagination,
 	};
 }
 
@@ -232,6 +250,16 @@ export async function getPostsByTag(
 	return getPosts({
 		...options,
 		filter: `tag:${slug}`,
+	});
+}
+
+export async function getPostsByAuthor(
+	slug: string,
+	options: RequestOptions = {},
+): Promise<GhostPage<BlogPost>> {
+	return getPosts({
+		...options,
+		filter: `author:${slug}`,
 	});
 }
 

@@ -4,15 +4,18 @@ import I18nKey from "@i18n/i18nKey";
 import { i18n } from "@i18n/translation";
 import { getCategoryUrl, getTagUrl } from "@utils/url-utils.ts";
 import MarkdownIt from "markdown-it";
-import type { BlogPost, BlogTag } from "@/lib/ghost";
+import { profileConfig, siteConfig } from "@/config";
+import type { BlogAuthor, BlogPost, BlogTag } from "@/lib/ghost";
 import {
+	getAuthors,
 	getPostBySlug,
 	getPosts,
+	getPostsByAuthor,
 	getPostsByTag,
 	getTags,
 } from "@/lib/ghost-client";
 
-export type { BlogPost, BlogTag };
+export type { BlogAuthor, BlogPost, BlogTag };
 
 const markdown = new MarkdownIt({
 	html: true,
@@ -45,7 +48,10 @@ function slugifyHeading(value: string, seen: Map<string, number>): string {
 
 function withHeadingIds(html: string): string {
 	const seen = new Map<string, number>();
-	return html.replace(
+	const normalized = html.replace(/<\/?h1(?=[\s>])/gi, (tag) =>
+		tag.replace(/h1/i, (heading) => (heading === "H1" ? "H2" : "h2")),
+	);
+	return normalized.replace(
 		/<h([2-3])([^>]*)>(.*?)<\/h\1>/gi,
 		(match: string, level: string, attributes: string, content: string) => {
 			if (/\sid\s*=/.test(attributes)) return match;
@@ -79,6 +85,15 @@ function asLocalTag(name: string, count?: number): BlogTag {
 	};
 }
 
+function localAuthor(count?: number): BlogAuthor {
+	return {
+		name: profileConfig.name,
+		slug: "silentflare",
+		description: profileConfig.bio,
+		count,
+	};
+}
+
 async function getLocalPosts(): Promise<BlogPost[]> {
 	const entries = await getCollection("posts", ({ data }) => {
 		return import.meta.env.PROD ? data.draft !== true : true;
@@ -91,6 +106,7 @@ async function getLocalPosts(): Promise<BlogPost[]> {
 
 	const posts = sorted.map((entry): BlogPost => {
 		const tags = (entry.data.tags ?? []).map((tag: string) => asLocalTag(tag));
+		const author = localAuthor();
 		const category = entry.data.category
 			? asLocalTag(String(entry.data.category).trim())
 			: undefined;
@@ -103,12 +119,15 @@ async function getLocalPosts(): Promise<BlogPost[]> {
 			featureImage: localImagePath(entry.id, entry.data.image),
 			published: new Date(entry.data.published),
 			updated: entry.data.updated ? new Date(entry.data.updated) : undefined,
+			language: siteConfig.lang.replace("_", "-"),
 			readingTime: Math.max(
 				1,
 				Math.ceil((entry.body ?? "").split(/\s+/).length / 180),
 			),
 			tags,
+			authors: [author],
 			primaryTag: category ?? tags[0],
+			primaryAuthor: author,
 			nextSlug: entry.data.nextSlug || undefined,
 			nextTitle: entry.data.nextTitle || undefined,
 			prevSlug: entry.data.prevSlug || undefined,
@@ -125,6 +144,28 @@ async function getLocalPosts(): Promise<BlogPost[]> {
 		posts[i].prevTitle = posts[i + 1].title;
 	}
 
+	return posts;
+}
+
+export type Author = BlogAuthor & { count: number };
+
+export async function getAuthorList(): Promise<Author[]> {
+	const authors = (await getAuthors({ limit: "all" })).items;
+	if (authors.length === 0 && shouldUseLocalFallback()) {
+		const posts = await getLocalPosts();
+		return [{ ...localAuthor(posts.length), count: posts.length }];
+	}
+	return authors.map((author) => ({
+		...author,
+		count: author.count ?? 0,
+	}));
+}
+
+export async function getPostsForAuthor(slug: string): Promise<BlogPost[]> {
+	const posts = (await getPostsByAuthor(slug, { limit: "all" })).items;
+	if (posts.length === 0 && shouldUseLocalFallback()) {
+		return slug === "silentflare" ? getLocalPosts() : [];
+	}
 	return posts;
 }
 
@@ -165,7 +206,14 @@ export async function getTagList(): Promise<Tag[]> {
 	if (tags.length === 0 && shouldUseLocalFallback()) {
 		const countMap = new Map<string, number>();
 		for (const post of await getLocalPosts()) {
-			for (const tag of post.tags) {
+			const tagsForPost = [...post.tags];
+			if (
+				post.primaryTag &&
+				!tagsForPost.some((tag) => tag.slug === post.primaryTag?.slug)
+			) {
+				tagsForPost.push(post.primaryTag);
+			}
+			for (const tag of tagsForPost) {
 				countMap.set(tag.name, (countMap.get(tag.name) ?? 0) + 1);
 			}
 		}

@@ -1,4 +1,12 @@
-import type { BlogPost, BlogTag, GhostPost, GhostTag } from "./ghost";
+import { siteConfig } from "../config";
+import type {
+	BlogAuthor,
+	BlogPost,
+	BlogTag,
+	GhostAuthor,
+	GhostPost,
+	GhostTag,
+} from "./ghost";
 
 function text(value?: string | null): string | undefined {
 	const trimmed = value?.trim();
@@ -29,7 +37,10 @@ function slugifyHeading(value: string, seen: Map<string, number>): string {
 
 function withHeadingIds(html: string): string {
 	const seen = new Map<string, number>();
-	return html.replace(
+	const normalized = html.replace(/<\/?h1(?=[\s>])/gi, (tag) =>
+		tag.replace(/h1/i, (heading) => (heading === "H1" ? "H2" : "h2")),
+	);
+	return normalized.replace(
 		/<h([2-3])([^>]*)>(.*?)<\/h\1>/gi,
 		(match: string, level: string, attributes: string, content: string) => {
 			if (/\sid\s*=/.test(attributes)) return match;
@@ -50,8 +61,26 @@ export function adaptGhostTag(tag: GhostTag): BlogTag {
 	};
 }
 
+export function adaptGhostAuthor(author: GhostAuthor): BlogAuthor {
+	return {
+		name: author.name,
+		slug: author.slug,
+		profileImage: text(author.profile_image),
+		coverImage: text(author.cover_image),
+		description: text(author.bio),
+		website: text(author.website),
+		location: text(author.location),
+		facebook: text(author.facebook),
+		twitter: text(author.twitter),
+		metaTitle: text(author.meta_title),
+		metaDescription: text(author.meta_description),
+		count: author.count?.posts,
+	};
+}
+
 export function adaptGhostPost(post: GhostPost): BlogPost {
 	const tags = (post.tags ?? []).map(adaptGhostTag);
+	const authors = (post.authors ?? []).map(adaptGhostAuthor);
 	const published = toDate(post.published_at) ?? new Date(0);
 
 	return {
@@ -61,13 +90,27 @@ export function adaptGhostPost(post: GhostPost): BlogPost {
 		html: withHeadingIds(post.html ?? ""),
 		excerpt: text(post.custom_excerpt) ?? text(post.excerpt) ?? "",
 		featureImage: text(post.feature_image),
+		featureImageAlt: text(post.feature_image_alt),
+		featureImageCaption: text(post.feature_image_caption),
 		published,
 		updated: toDate(post.updated_at),
+		language: siteConfig.lang.replace("_", "-"),
 		readingTime: post.reading_time ?? 1,
 		tags,
+		authors,
 		primaryTag: post.primary_tag ? adaptGhostTag(post.primary_tag) : tags[0],
+		primaryAuthor: post.primary_author
+			? adaptGhostAuthor(post.primary_author)
+			: authors[0],
 		metaTitle: text(post.meta_title),
 		metaDescription: text(post.meta_description),
+		canonicalUrl: text(post.canonical_url),
+		ogImage: text(post.og_image),
+		ogTitle: text(post.og_title),
+		ogDescription: text(post.og_description),
+		twitterImage: text(post.twitter_image),
+		twitterTitle: text(post.twitter_title),
+		twitterDescription: text(post.twitter_description),
 	};
 }
 

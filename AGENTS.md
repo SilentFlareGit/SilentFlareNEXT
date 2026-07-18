@@ -53,6 +53,7 @@ corepack pnpm lint
 corepack pnpm check
 corepack pnpm build
 corepack pnpm test:smoke
+corepack pnpm test:seo
 ```
 
 Local UI-only fallback without real Ghost:

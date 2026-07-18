@@ -21,6 +21,10 @@ export function getTagUrl(tag: string): string {
 	return url(`/tags/${encodeURIComponent(tag.trim())}/`);
 }
 
+export function getAuthorUrl(author: string): string {
+	return url(`/authors/${encodeURIComponent(author.trim())}/`);
+}
+
 export function getCategoryUrl(category: string | null): string {
 	if (
 		!category ||

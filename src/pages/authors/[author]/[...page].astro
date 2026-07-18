@@ -1,0 +1,95 @@
+---
+import Breadcrumbs from "@components/Breadcrumbs.astro";
+import Pagination from "@components/control/Pagination.astro";
+import ImageWrapper from "@components/misc/ImageWrapper.astro";
+import PostPage from "@components/PostPage.astro";
+import { PAGE_SIZE } from "@constants/constants";
+import MainGridLayout from "@layouts/MainGridLayout.astro";
+import { absoluteUrl, breadcrumbJsonLd, collectionDescription } from "@lib/seo";
+import { getAuthorList, getPostsForAuthor } from "@utils/content-utils";
+import type { GetStaticPaths } from "astro";
+
+export const getStaticPaths = (async ({ paginate }) => {
+	const authors = await getAuthorList();
+	const paths = [];
+	for (const author of authors) {
+		const posts = await getPostsForAuthor(author.slug);
+		paths.push(
+			...paginate(posts, {
+				pageSize: PAGE_SIZE,
+				params: { author: author.slug },
+				props: { author },
+			}),
+		);
+	}
+	return paths;
+}) satisfies GetStaticPaths;
+
+const { page, author } = Astro.props;
+const site = Astro.site ?? new URL("https://blog.silentflare.com/");
+const authorUrl = absoluteUrl(`/authors/${author.slug}/`, site);
+const baseTitle = author.metaTitle ?? `Articles by ${author.name}`;
+const title = `${baseTitle}${page.currentPage > 1 ? ` - Page ${page.currentPage}` : ""}`;
+const description = collectionDescription(
+	author,
+	`Articles written by ${author.name} for SilentFlare.`,
+);
+const breadcrumbItems = [
+	{ name: "Home", url: absoluteUrl("/", site) },
+	{ name: `Author: ${author.name}`, url: authorUrl },
+];
+const profileJsonLd = {
+	"@context": "https://schema.org",
+	"@type": "ProfilePage",
+	url: authorUrl,
+	mainEntity: {
+		"@type": "Person",
+		name: author.name,
+		description: author.description,
+		image: author.profileImage,
+		url: authorUrl,
+		sameAs: [author.website, author.facebook, author.twitter].filter(Boolean),
+	},
+};
+const collectionJsonLd = {
+	"@context": "https://schema.org",
+	"@type": "CollectionPage",
+	name: title,
+	description,
+	url: new URL(Astro.url.pathname, site).toString(),
+	mainEntity: {
+		"@type": "ItemList",
+		itemListElement: page.data.map((post, index) => ({
+			"@type": "ListItem",
+			position: index + 1,
+			url: absoluteUrl(`/posts/${post.slug}/`, site),
+			name: post.title,
+		})),
+	},
+};
+const noindex =
+	author.count < 1 ||
+	!(author.description?.trim() || author.metaDescription?.trim());
+---
+
+<MainGridLayout title={title} description={description} seo={{
+	noindex,
+	type: "profile",
+	image: author.profileImage ? { url: author.profileImage, alt: author.name, width: 512, height: 512 } : undefined,
+	jsonLd: [breadcrumbJsonLd(breadcrumbItems), profileJsonLd, collectionJsonLd],
+}}>
+	<header class="card-base mb-4 px-6 py-6 md:px-9">
+		<Breadcrumbs items={breadcrumbItems} class="mb-4" />
+		<div class="flex flex-col gap-5 sm:flex-row sm:items-center">
+			{author.profileImage && (
+				<ImageWrapper src={author.profileImage} alt={author.name} width={160} height={160} sizes="10rem" class="h-28 w-28 shrink-0 rounded-xl" />
+			)}
+			<div class="min-w-0">
+				<h1 class="text-3xl font-bold text-90">{author.name}</h1>
+				<p class="mt-2 text-75">{description}</p>
+			</div>
+		</div>
+	</header>
+	<PostPage page={page} />
+	<Pagination class="mx-auto onload-animation" page={page} basePath={`/authors/${author.slug}/`} />
+</MainGridLayout>

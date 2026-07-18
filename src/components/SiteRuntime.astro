@@ -33,6 +33,11 @@ function safeHtml(source: string) {
 			element.rel = "noopener noreferrer";
 		}
 	}
+	for (const heading of template.content.querySelectorAll("h1")) {
+		const replacement = document.createElement("h2");
+		replacement.innerHTML = heading.innerHTML;
+		heading.replaceWith(replacement);
+	}
 	return template.innerHTML;
 }
 
@@ -114,8 +119,6 @@ async function load(includeBanner = false) {
 		if (includeBanner) void applyBanner(settings);
 	} catch (error) {
 		console.warn("Site customization could not be loaded.", error);
-		const about = document.querySelector<HTMLElement>("[data-site-about]");
-		if (about) about.innerHTML = "<p>About content is temporarily unavailable.</p>";
 	} finally {
 		document.querySelectorAll<HTMLElement>("[data-site-profile]").forEach((profile) => {
 			profile.classList.remove("site-profile-pending");
