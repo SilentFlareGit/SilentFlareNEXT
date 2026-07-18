@@ -213,7 +213,10 @@ for (const record of records) {
 	}
 	for (const anchor of elements(record.document, "a")) {
 		const href = attributes(anchor).href;
-		if (!href || href.startsWith("#") || href.startsWith("mailto:") || href.startsWith("http")) continue;
+		// Only root-relative links map deterministically to an Astro build artifact.
+		// Ghost-authored relative URLs are editorial content and may intentionally
+		// resolve against the current post path, so they remain an editorial check.
+		if (!href?.startsWith("/") || href.startsWith("//")) continue;
 		const target = fileForUrl(href.split("#", 1)[0]);
 		if (!target) continue;
 		try {

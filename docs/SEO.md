@@ -81,6 +81,6 @@ corepack pnpm verify:ghost
 corepack pnpm test:seo
 ```
 
-`test:seo` rejects missing metadata, invalid JSON-LD, bad canonicals, sitemap/index conflicts, broken internal links, missing author routes, incorrect pagination, and placeholder domains.
+`test:seo` rejects missing metadata, invalid JSON-LD, bad canonicals, sitemap/index conflicts, broken root-relative application links, missing author routes, incorrect pagination, and placeholder domains. Relative URLs authored inside Ghost content remain an editorial review responsibility because they resolve against each post URL rather than a single build root.
 
 After deployment, verify the public edge and origin agree on redirects and status codes. Validate representative home, post, tag, author, pagination, noindex, sitemap, RSS, and missing URLs. Monitor Google Search Console indexing, canonical selection, rich results, and Core Web Vitals after releases.
