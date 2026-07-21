@@ -31,6 +31,7 @@ Do not disallow a public `noindex` HTML page in `robots.txt`; crawlers need to f
 Nginx must serve the static error document with a real 404 status:
 
 ```nginx
+absolute_redirect off;
 error_page 404 /404.html;
 
 location / {
@@ -41,6 +42,8 @@ location = /404.html {
     internal;
 }
 ```
+
+The internal Shield origin listens on a non-public port, so its directory redirects must stay relative. Otherwise Nginx can expose the internal listener in `Location`, for example `http://blog.silentflare.com:9081/...`.
 
 Host redirects and CMS duplicate-content handling are production Nginx responsibilities. Keep `/ghost/`, `/ghost/api/content/`, and `/content/` available on the CMS host; redirect or noindex any Ghost-rendered public post duplicate.
 
