@@ -92,6 +92,7 @@ class ShieldApplicationTests(unittest.TestCase):
 	def test_account_session_resolution_links_only_account_and_ip_roots(self):
 		account_ref = asyncio.run(_resolve_account(app, "valid-account"))
 		self.assertEqual(account_ref, "user-1")
+		app.state.entities.ensure_subject("ip", "203.0.113.199", display="203.0.113.0/24")
 		context = RequestContext(
 			request_id="account-ip-relation",
 			host="blog.silentflare.com",
@@ -107,6 +108,7 @@ class ShieldApplicationTests(unittest.TestCase):
 		)
 		subjects = _entity_subjects(app.state.entities, context)
 		self.assertEqual(set(subjects), {"account", "ip"})
+		self.assertEqual(subjects["ip"]["display_value"], "203.0.113.199")
 		detail = app.state.entities.detail(int(subjects["account"]["id"]))
 		self.assertEqual(detail["linkedSubjects"][0]["id"], subjects["ip"]["id"])
 		self.assertEqual(
@@ -293,12 +295,13 @@ class ShieldApplicationTests(unittest.TestCase):
 
 	def test_event_action_uses_event_context_without_manual_value(self):
 		now = int(time.time())
+		subject = self.client.app.state.entities.ensure_subject("ip", "203.0.113.45")
 		self.client.app.state.database.execute(
 			"""INSERT INTO risk_events(id, created_at, trace_id, risk_level, risk_score, host, path, method,
 			ip_hash, ip_masked, matched_rules_json, reasons_json, actions_json, request_summary_json)
 			VALUES ('action-event', ?, 'trace', 'restrict', 70, 'api.silentflare.com', '/auth/login/password',
-			'POST', 'hashed-ip', '203.0.113.0/24', '[]', '[\"Login abuse\"]', '[\"log\"]', '{}')""",
-			(now,),
+			'POST', ?, '203.0.113.0/24', '[]', '[\"Login abuse\"]', '[\"log\"]', '{}')""",
+			(now, subject["subject_hash"]),
 		)
 		response = self.client.post(
 			"/__shield/api/admin/events/action-event/action",
@@ -306,8 +309,9 @@ class ShieldApplicationTests(unittest.TestCase):
 			json={"action": "block_ip", "duration_seconds": 3600},
 		)
 		self.assertEqual(response.status_code, 200)
-		ban = self.client.app.state.database.query("SELECT subject_hash FROM bans WHERE reason LIKE 'Created from risk event%'")[-1]
-		self.assertEqual(ban["subject_hash"], "hashed-ip")
+		ban = self.client.app.state.database.query("SELECT subject_hash, subject_display FROM bans WHERE reason LIKE 'Created from risk event%'")[-1]
+		self.assertEqual(ban["subject_hash"], subject["subject_hash"])
+		self.assertEqual(ban["subject_display"], "203.0.113.45")
 
 	def test_control_plane_manages_services_automation_geography_and_account_risk(self):
 		headers = {"Cookie": "sf_bot_session=valid-admin", "X-CSRF-Token": "admin-csrf"}
@@ -768,6 +772,7 @@ class ShieldApplicationTests(unittest.TestCase):
 			(subject["subject_hash"],),
 		)
 		self.assertEqual(len(active), 1)
+		self.assertEqual(active[0]["subject_display"], "203.0.113.88")
 		app.state.entities.adjust(
 			int(subject["id"]),
 			-45,

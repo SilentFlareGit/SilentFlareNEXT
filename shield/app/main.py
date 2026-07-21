@@ -1209,12 +1209,14 @@ def _entity_subjects(service: EntityRiskService, context: RequestContext) -> dic
 	try:
 		address = ipaddress.ip_address(context.ip)
 		cidr = str(ipaddress.ip_network(f"{address}/{24 if address.version == 4 else 48}", strict=False))
+		ip_display = str(address)
 	except ValueError:
 		cidr = ""
+		ip_display = context.ip
 	email_domain = context.email.rsplit("@", 1)[-1] if "@" in context.email else ""
 	subjects: dict[str, dict[str, Any]] = {}
 	try:
-		subjects["ip"] = service.ensure_subject("ip", context.ip, display=mask_ip(context.ip))
+		subjects["ip"] = service.ensure_subject("ip", context.ip, display=ip_display)
 	except ValueError:
 		return subjects
 	if context.account_id:
@@ -1731,6 +1733,10 @@ async def admin_event_action(event_id: str, payload: EventActionInput, request: 
 		if not subject_hash:
 			raise HTTPException(status_code=422, detail=f"Event has no correlated {subject_type}")
 		display = event["ip_masked"] if subject_type == "ip" else "Correlated account"
+		if subject_type == "ip":
+			subject = request.app.state.entities.subject_by_hash("ip", subject_hash)
+			if subject:
+				display = subject["display_value"]
 		db.execute("INSERT INTO bans(public_id, subject_type, subject_hash, subject_display, restriction, reason, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, 'all', ?, ?, ?, ?)", (new_public_ban_id(), subject_type, subject_hash, display, f"Created from risk event {event_id}", actor, now, now + payload.duration_seconds))
 		db.execute("UPDATE risk_events SET review_status = 'actioned', reviewed_by = ?, reviewed_at = ? WHERE id = ?", (actor, now, event_id))
 	db.audit(actor, f"risk_event.{payload.action}", "risk_event", event_id, {"durationSeconds": payload.duration_seconds})

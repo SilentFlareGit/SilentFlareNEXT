@@ -6,7 +6,7 @@ import time
 import unittest
 from pathlib import Path
 
-from app.blocking import ban_error_code, normalize_ban_subject
+from app.blocking import ban_error_code, ban_subject_display, normalize_ban_subject
 from app.database import Database
 from app.entity_risk import EntityRiskService
 from app.geo import GeoService, IpIntel
@@ -66,6 +66,9 @@ class ShieldMvpTests(unittest.TestCase):
 		)
 		self.assertEqual(normalize_ban_subject("asn", "64512"), "AS64512")
 		self.assertEqual(normalize_ban_subject("cidr", "203.0.113.9/24"), "203.0.113.0/24")
+		self.assertEqual(ban_subject_display("ip", "203.0.113.9"), "203.0.113.9")
+		self.assertEqual(ban_subject_display("ip", "2001:db8::9"), "2001:db8::9")
+		self.assertEqual(ban_subject_display("cidr", "203.0.113.0/24"), "203.0.113.0/24")
 
 	def test_cidr_ban_matches_address_without_storing_each_ip(self):
 		now = int(time.time())

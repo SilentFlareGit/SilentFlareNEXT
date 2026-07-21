@@ -66,10 +66,7 @@ def normalize_ban_subject(subject_type: str, value: str) -> str:
 
 def ban_subject_display(subject_type: str, normalized: str) -> str:
 	if subject_type == "ip":
-		address = ipaddress.ip_address(normalized)
-		if address.version == 6:
-			return str(ipaddress.ip_network(f"{address}/48", strict=False))
-		return str(ipaddress.ip_network(f"{address}/24", strict=False))
+		return str(ipaddress.ip_address(normalized))
 	if subject_type in {"cidr", "asn", "country", "region", "email_domain"}:
 		return normalized
 	if subject_type == "email" and "@" in normalized:
