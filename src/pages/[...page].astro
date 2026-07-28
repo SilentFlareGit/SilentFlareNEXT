@@ -20,10 +20,7 @@ const pageTitle = page.currentPage > 1 ? `Page ${page.currentPage}` : undefined;
 ---
 
 <MainGridLayout title={pageTitle} description={siteConfig.subtitle}>
-    <header class="mb-4 px-6 py-2 md:px-9">
-        <h1 class="text-3xl font-bold text-90">{siteConfig.title}</h1>
-        <p class="mt-2 text-75">{siteConfig.subtitle}</p>
-    </header>
+    <h1 class="sr-only">{siteConfig.title}</h1>
     <PostPage page={page}></PostPage>
     <Pagination class="mx-auto onload-animation" page={page} basePath="/" style={`animation-delay: calc(var(--content-delay) + ${(len)*50}ms)`}></Pagination>
 </MainGridLayout>
