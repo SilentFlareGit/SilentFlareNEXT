@@ -783,8 +783,8 @@ onMount(() => void loadSession());
 	<div class="accounts-stage">
 		<div class="account-theme-command"><ThemeToggle /></div>
 		<main class="accounts-workspace">
-			<div class="account-grid">
-				<aside class="identity-card panel">
+			<div class="account-frame panel">
+				<aside class="identity-card">
 					<div class="avatar-shell">
 						<div class="avatar">
 							{#if avatarUrl}
@@ -821,6 +821,7 @@ onMount(() => void loadSession());
 					<button
 						class="mobile-menu-command"
 						type="button"
+						aria-label={mobileMenuOpen ? "Close account menu" : "Open account menu"}
 						aria-expanded={mobileMenuOpen}
 						aria-controls="account-navigation"
 						onclick={() => (mobileMenuOpen = !mobileMenuOpen)}
@@ -853,7 +854,7 @@ onMount(() => void loadSession());
 
 				<div class="account-content">
 					{#if activePanel === "profile"}
-						<section class="panel account-card split-card">
+						<section class="account-card split-card">
 							<form
 								class="form-stack"
 								onsubmit={(event) => {
@@ -927,7 +928,7 @@ onMount(() => void loadSession());
 							</article>
 						</section>
 					{:else if activePanel === "security"}
-						<section class="panel account-card">
+						<section class="account-card">
 							<div class="section-heading">
 								<span class="section-icon"><Icon icon="material-symbols:shield-lock-outline-rounded" /></span>
 								<div><p class="eyebrow">Security</p><h3>Sign-in protection</h3></div>
@@ -959,7 +960,7 @@ onMount(() => void loadSession());
 							</div>
 						</section>
 					{:else if activePanel === "sessions"}
-						<section class="panel account-card">
+						<section class="account-card">
 							<div class="section-heading">
 								<span class="section-icon"><Icon icon="material-symbols:devices-outline-rounded" /></span>
 								<div><p class="eyebrow">Sessions</p><h3>Logged-in devices</h3></div>
@@ -987,7 +988,7 @@ onMount(() => void loadSession());
 							<div class="risk-action"><div><strong>Sign out all devices</strong><p>Ends every active session, including this one.</p></div><button class="command subtle-danger" type="button" onclick={() => void logoutAll()}><Icon icon="material-symbols:logout-rounded" />Sign out all</button></div>
 						</section>
 					{:else if activePanel === "privacy"}
-						<section class="panel account-card">
+						<section class="account-card">
 							<div class="section-heading">
 								<span class="section-icon"><Icon icon="material-symbols:visibility-lock-outline-rounded" /></span>
 								<div><p class="eyebrow">Privacy</p><h3>Public visibility</h3></div>
@@ -1000,12 +1001,12 @@ onMount(() => void loadSession());
 							</div>
 							<div class="card-actions"><Button icon="material-symbols:save-outline-rounded" loading={submitting} disabled={!privacyChanged} onclick={() => void savePrivacy()}>Save privacy</Button></div>
 						</section>
-						<section class="panel account-card">
+						<section class="account-card account-card-secondary">
 							<div class="section-heading"><span class="section-icon"><Icon icon="material-symbols:download-rounded" /></span><div><p class="eyebrow">Sensitive operation</p><h3>Data export</h3></div></div>
 							<div class="risk-action"><div><strong>Download a JSON copy</strong><p>Includes your profile, preferences, and comment history. Email verification is required.</p></div><button class="command secondary" type="button" onclick={() => openSensitive("export-data")}><Icon icon="material-symbols:download-rounded" />Export data</button></div>
 						</section>
 					{:else if activePanel === "notifications"}
-						<section class="panel account-card">
+						<section class="account-card">
 							<div class="section-heading">
 								<span class="section-icon"><Icon icon="material-symbols:notifications-outline-rounded" /></span>
 								<div><p class="eyebrow">Notifications</p><h3>Email and system signals</h3></div>
@@ -1020,7 +1021,7 @@ onMount(() => void loadSession());
 						</section>
 					{:else}
 						<div class="danger-grid">
-							<section class="panel account-card danger-card"><div class="danger-copy"><span class="section-icon danger-icon"><Icon icon="material-symbols:delete-forever-outline-rounded" /></span><div><h3>Delete account</h3><p>Email verification and two-factor authentication are both required. An administrator must approve every deletion request.</p>{#if !user.twoFactorEnabled}<p class="scheduled">Enable two-factor authentication in Security before requesting deletion.</p>{:else if scheduledDeletion || user.deletionRequestedAt}<p class="scheduled">{scheduledDeletion || (user.deletionReviewStatus === "approved" && user.deletionScheduledFor ? `Approved. Scheduled for ${formatTime(user.deletionScheduledFor)}` : "Deletion request is waiting for administrator review.")}</p>{/if}</div></div>{#if scheduledDeletion || user.deletionRequestedAt}<button class="command secondary" type="button" onclick={() => void cancelDeletion()} disabled={submitting}>Cancel request</button>{:else}<button class="command danger" type="button" onclick={() => openSensitive("delete-account")} disabled={!user.twoFactorEnabled}>Request deletion</button>{/if}</section>
+							<section class="account-card danger-card"><div class="danger-copy"><span class="section-icon danger-icon"><Icon icon="material-symbols:delete-forever-outline-rounded" /></span><div><h3>Delete account</h3><p>Email verification and two-factor authentication are both required. An administrator must approve every deletion request.</p>{#if !user.twoFactorEnabled}<p class="scheduled">Enable two-factor authentication in Security before requesting deletion.</p>{:else if scheduledDeletion || user.deletionRequestedAt}<p class="scheduled">{scheduledDeletion || (user.deletionReviewStatus === "approved" && user.deletionScheduledFor ? `Approved. Scheduled for ${formatTime(user.deletionScheduledFor)}` : "Deletion request is waiting for administrator review.")}</p>{/if}</div></div>{#if scheduledDeletion || user.deletionRequestedAt}<button class="command secondary" type="button" onclick={() => void cancelDeletion()} disabled={submitting}>Cancel request</button>{:else}<button class="command danger" type="button" onclick={() => openSensitive("delete-account")} disabled={!user.twoFactorEnabled}>Request deletion</button>{/if}</section>
 						</div>
 					{/if}
 
@@ -1134,7 +1135,7 @@ onMount(() => void loadSession());
 		background: var(--sf-surface);
 		box-shadow: 0 0.75rem 2.5rem rgba(28, 53, 79, 0.06);
 	}
-	.account-grid {
+	.account-frame {
 		display: grid;
 		gap: 1rem;
 	}
@@ -1187,8 +1188,8 @@ onMount(() => void loadSession());
 		position: absolute;
 		right: -0.15rem;
 		bottom: 0.25rem;
-		width: 2rem;
-		height: 2rem;
+		width: 2.75rem;
+		height: 2.75rem;
 		display: grid;
 		place-items: center;
 		border: 0.2rem solid var(--sf-surface);
@@ -1490,6 +1491,7 @@ onMount(() => void loadSession());
 		width: max-content;
 		padding: 0 1rem;
 		border: 1px solid transparent;
+		white-space: nowrap;
 	}
 	.command:hover,
 	.icon-command:hover {
@@ -1934,21 +1936,24 @@ onMount(() => void loadSession());
 
 	/* Google Account-inspired structure, using SilentFlare color and type tokens. */
 	.accounts-stage {
-		padding: 0 1rem 2rem;
+		padding: 4.5rem 1rem 1.5rem;
 		background: var(--sf-page);
 	}
 	.accounts-workspace {
-		width: min(100%, 82rem);
+		width: min(100%, 76rem);
+		padding-top: 0;
 	}
-	.account-grid {
-		gap: 2rem;
-		padding-top: 1rem;
-	}
-	.identity-card {
-		padding: 1rem;
-		border: 1px solid var(--sf-border-strong);
+	.account-frame {
+		gap: 0;
+		overflow: hidden;
 		background: var(--sf-surface);
 		box-shadow: var(--sf-shadow-surface);
+	}
+	.identity-card {
+		padding: 1.25rem;
+		border-bottom: 1px solid var(--sf-border);
+		background: var(--sf-surface-subtle);
+		box-shadow: none;
 	}
 	.avatar-shell {
 		width: 4.75rem;
@@ -1978,11 +1983,12 @@ onMount(() => void loadSession());
 	}
 	.account-content {
 		width: 100%;
-		max-width: 54rem;
-		min-height: calc(100svh - 3rem);
+		max-width: none;
+		min-height: 0;
 		justify-self: start;
 		align-content: start;
-		gap: 1.25rem;
+		gap: 0;
+		padding: clamp(1.25rem, 4vw, 2rem);
 	}
 	.page-heading {
 		min-height: 6rem;
@@ -1997,11 +2003,17 @@ onMount(() => void loadSession());
 	}
 	.panel {
 		border-color: var(--sf-border-strong);
-		border-radius: var(--sf-radius-md);
-		box-shadow: none;
+		border-radius: var(--sf-radius-lg);
+		box-shadow: var(--sf-shadow-surface);
 	}
 	.account-card {
-		padding: 1.5rem;
+		min-width: 0;
+		padding: 0;
+	}
+	.account-card + .account-card {
+		margin-top: 1.5rem;
+		padding-top: 1.5rem;
+		border-top: 1px solid var(--sf-border);
 	}
 	.section-heading {
 		align-items: center;
@@ -2021,11 +2033,14 @@ onMount(() => void loadSession());
 		border-top: 1px solid var(--sf-border);
 	}
 	.security-row,
-	.session-list article {
+	.session-list article,
+	.toggle-list label {
 		min-height: 5rem;
 		border: 0;
 		border-bottom: 1px solid var(--sf-border);
 		border-radius: 0;
+		padding-right: 0;
+		padding-left: 0;
 		background: transparent;
 	}
 	.row-icon {
@@ -2049,7 +2064,11 @@ onMount(() => void loadSession());
 		padding: 1rem 0;
 	}
 	.danger-card {
-		border-color: color-mix(in srgb, var(--sf-danger) 35%, var(--sf-border));
+		padding: 1.25rem;
+		border: 0;
+		border-left: 3px solid var(--sf-danger);
+		border-radius: var(--sf-radius-sm);
+		background: var(--sf-danger-soft);
 	}
 	.danger-icon {
 		background: var(--sf-danger-soft);
@@ -2063,6 +2082,14 @@ onMount(() => void loadSession());
 	.spin {
 		animation: spin 0.8s linear infinite;
 	}
+	@media (min-width: 640px) and (max-width: 767px) {
+		.account-nav.open {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+		.account-nav .sidebar-logout {
+			grid-column: 1 / -1;
+		}
+	}
 	@media (min-width: 768px) {
 		.accounts-stage {
 			padding: 1.5rem;
@@ -2072,14 +2099,17 @@ onMount(() => void loadSession());
 		}
 		.account-theme-command {
 			top: 1.5rem;
-			right: max(1.5rem, calc((100vw - 82rem) / 2));
+			right: max(1.5rem, calc((100vw - 76rem) / 2));
 		}
-		.account-grid {
-			grid-template-columns: 13rem minmax(0, 1fr);
-			align-items: start;
+		.account-frame {
+			min-height: 40rem;
+			grid-template-columns: 14rem minmax(0, 1fr);
+			align-items: stretch;
 		}
 		.identity-card {
 			display: block;
+			border-right: 1px solid var(--sf-border);
+			border-bottom: 0;
 			text-align: center;
 		}
 		.identity-card h1 {
@@ -2117,6 +2147,15 @@ onMount(() => void loadSession());
 			align-items: center;
 			justify-content: space-between;
 		}
+		.danger-card {
+			flex-direction: row;
+			align-items: center;
+			justify-content: space-between;
+		}
+		.danger-card .command {
+			width: max-content;
+			flex: none;
+		}
 		.modal-actions {
 			flex-direction: row;
 			justify-content: flex-end;
@@ -2126,13 +2165,11 @@ onMount(() => void loadSession());
 		}
 	}
 	@media (min-width: 1024px) {
-		.account-grid {
-			grid-template-columns: 17rem minmax(0, 1fr);
-			align-items: start;
+		.account-frame {
+			grid-template-columns: 16rem minmax(0, 1fr);
 		}
 		.identity-card {
-			position: sticky;
-			top: 1.5rem;
+			padding: 1.5rem;
 		}
 		.split-card {
 			grid-template-columns: minmax(0, 1fr) minmax(16rem, 0.65fr);
@@ -2150,10 +2187,11 @@ onMount(() => void loadSession());
 	}
 	@media (max-width: 520px) {
 		.accounts-stage {
-			padding: 0 0.75rem 1rem;
+			padding: 4rem 0.75rem 1rem;
 		}
 		.account-content {
 			min-height: auto;
+			padding: 1rem;
 		}
 		.page-heading {
 			min-height: auto;
