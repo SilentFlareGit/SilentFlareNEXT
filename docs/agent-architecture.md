@@ -70,6 +70,7 @@ GHOST_REQUEST_PROTO=https
 - After navigation, the `content:focus` hook must focus `#swup-container`, which has `tabindex="-1"`, rather than focusing `body`.
 - The temporary `#page-height-extend` element is shown only while a Swup visit is active and must be hidden again on `page:view` and after `visit:end`.
 - Both `html` and `body` use `var(--page-bg)`. Do not leave `body` transparent or hard-code a light background, or the absolutely positioned blog layout can expose a light band in dark mode.
+- Document-level panel listeners in `Layout.astro` must tolerate client-rendered panels being absent before hydration or on routes that do not mount them. Check the panel element before reading `classList` or calling other DOM methods.
 
 ## Shared Subsite Front End
 

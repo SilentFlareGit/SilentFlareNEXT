@@ -42,6 +42,8 @@ This uses a temporary local database and mocked Turnstile success. It must verif
 
 For a Discussion UI change, production browser QA should cover Markdown preview, real comment publication, rendered Markdown, inline editing, the `Edited` marker, automatic list refresh after every mutation, deletion cleanup, and both desktop and mobile widths. Remove any test comment before finishing. If publication returns `Human verification failed` while the widget succeeds, audit the configured Turnstile hostname allowlist without printing the secret and confirm `blog.silentflare.com` is present.
 
+For shared `Layout.astro` click-handler changes, exercise at least one real panel interaction in a browser and inspect the console. Global listeners must not throw when a client-rendered panel is not present during hydration or on the current route.
+
 Standard local validation without real Ghost:
 
 ```cmd
