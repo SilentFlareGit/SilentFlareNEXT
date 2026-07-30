@@ -41,6 +41,8 @@ type PanelId =
 	| "notifications"
 	| "danger";
 
+type NavGroupId = "identity" | "access" | "preferences" | "account";
+
 type AccountSession = {
 	id: string;
 	device: string;
@@ -135,6 +137,8 @@ let deletionTotpCode = $state("");
 let scheduledDeletion = $state("");
 let passwordCleanupToken = $state("");
 let accountContentElement: HTMLDivElement;
+let accountNavElement: HTMLElement;
+let expandedNavGroup = $state<NavGroupId | null>("identity");
 
 let profileChanged = $derived(
 	displayName !== savedDisplayName || bio !== savedBio,
@@ -274,9 +278,21 @@ function clearMessages() {
 
 function selectPanel(panelId: PanelId) {
 	activePanel = panelId;
+	expandedNavGroup =
+		navGroups.find((group) =>
+			group.panels.some((panel) => panel.id === panelId),
+		)?.id ?? expandedNavGroup;
 	mobileMenuOpen = false;
 	clearMessages();
-	requestAnimationFrame(() => accountContentElement?.scrollTo({ top: 0 }));
+	requestAnimationFrame(() => {
+		accountContentElement?.scrollTo({ top: 0 });
+		accountNavElement?.scrollTo({ top: 0 });
+	});
+}
+
+function toggleNavGroup(groupId: NavGroupId) {
+	expandedNavGroup = expandedNavGroup === groupId ? null : groupId;
+	requestAnimationFrame(() => accountNavElement?.scrollTo({ top: 0 }));
 }
 
 function flagUrl(countryCode: string) {
@@ -872,10 +888,22 @@ onMount(() => void loadSession());
 							<span>{mobileMenuOpen ? "Close menu" : "Account menu"}</span>
 						</button>
 					</div>
-					<nav id="account-navigation" class:open={mobileMenuOpen} class="account-nav" aria-label="Account sections">
+					<nav
+						id="account-navigation"
+						bind:this={accountNavElement}
+						class:open={mobileMenuOpen}
+						class="account-nav"
+						aria-label="Account sections"
+					>
 						{#each navGroups as group}
-							<details class="nav-group" open>
-								<summary>
+							<details class="nav-group" open={expandedNavGroup === group.id}>
+								<summary
+									aria-expanded={expandedNavGroup === group.id}
+									onclick={(event) => {
+										event.preventDefault();
+										toggleNavGroup(group.id);
+									}}
+								>
 									<Icon icon={group.icon} />
 									<span>{group.label}</span>
 									<span class="nav-group-chevron"><Icon icon="material-symbols:expand-more-rounded" /></span>
@@ -1281,18 +1309,24 @@ onMount(() => void loadSession());
 		display: inline-flex;
 		min-height: 2.35rem;
 		align-items: center;
+		justify-content: center;
 		gap: 0.45rem;
 		max-width: 100%;
 		grid-column: 2;
-		width: max-content;
+		width: 100%;
 		margin: 0;
 		padding: 0 0.75rem;
+		box-sizing: border-box;
 		border: 1px solid rgba(75, 159, 232, 0.12);
 		border-radius: 999px;
 		background: var(--sf-surface-muted);
 		color: var(--sf-text-muted);
 		font-size: 0.82rem;
 		font-weight: 700;
+	}
+	.region-pill span {
+		min-width: 0;
+		overflow-wrap: anywhere;
 	}
 	.region-pill img,
 	.preview-region img {
@@ -2199,7 +2233,7 @@ onMount(() => void loadSession());
 		}
 		.account-frame {
 			height: clamp(40rem, calc(100svh - 3rem), 46rem);
-			grid-template-columns: 14rem minmax(0, 1fr);
+			grid-template-columns: clamp(15rem, 25vw, 18rem) minmax(0, 1fr);
 			align-items: stretch;
 		}
 		.identity-card {
@@ -2218,6 +2252,24 @@ onMount(() => void loadSession());
 			overflow-y: auto;
 			overscroll-behavior: contain;
 			scrollbar-gutter: stable;
+			scrollbar-color: rgba(91, 112, 133, 0.55) transparent;
+			scrollbar-width: thin;
+		}
+		.account-content::-webkit-scrollbar,
+		.account-nav::-webkit-scrollbar {
+			width: 0.65rem;
+		}
+		.account-content::-webkit-scrollbar-track,
+		.account-nav::-webkit-scrollbar-track {
+			margin-block: 0.6rem;
+			background: transparent;
+		}
+		.account-content::-webkit-scrollbar-thumb,
+		.account-nav::-webkit-scrollbar-thumb {
+			border: 0.2rem solid transparent;
+			border-radius: 999px;
+			background: rgba(91, 112, 133, 0.55);
+			background-clip: padding-box;
 		}
 		.identity-summary h1 {
 			margin: 0.2rem 0;
@@ -2248,6 +2300,8 @@ onMount(() => void loadSession());
 			align-content: start;
 			overscroll-behavior: contain;
 			scrollbar-gutter: stable;
+			scrollbar-color: rgba(91, 112, 133, 0.55) transparent;
+			scrollbar-width: thin;
 		}
 		.page-heading {
 			flex-direction: column;
@@ -2277,9 +2331,6 @@ onMount(() => void loadSession());
 		}
 	}
 	@media (min-width: 1024px) {
-		.account-frame {
-			grid-template-columns: 16rem minmax(0, 1fr);
-		}
 		.identity-card {
 			padding: 1.5rem;
 		}
