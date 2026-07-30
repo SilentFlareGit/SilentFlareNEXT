@@ -33,6 +33,14 @@ type SensitiveAction =
 	| "export-data"
 	| "delete-account";
 
+type PanelId =
+	| "profile"
+	| "security"
+	| "sessions"
+	| "privacy"
+	| "notifications"
+	| "danger";
+
 type AccountSession = {
 	id: string;
 	device: string;
@@ -79,9 +87,7 @@ let submitting = $state(false);
 let avatarUploading = $state(false);
 let error = $state("");
 let notice = $state("");
-let activePanel = $state<
-	"profile" | "security" | "sessions" | "privacy" | "notifications" | "danger"
->("profile");
+let activePanel = $state<PanelId>("profile");
 let displayName = $state("");
 let avatarUrl = $state("");
 let bio = $state("");
@@ -128,6 +134,7 @@ let disableTotpCode = $state("");
 let deletionTotpCode = $state("");
 let scheduledDeletion = $state("");
 let passwordCleanupToken = $state("");
+let accountContentElement: HTMLDivElement;
 
 let profileChanged = $derived(
 	displayName !== savedDisplayName || bio !== savedBio,
@@ -167,6 +174,33 @@ const panels = [
 		id: "danger",
 		label: "Danger Zone",
 		icon: "material-symbols:warning-outline-rounded",
+	},
+] as const;
+
+const navGroups = [
+	{
+		id: "identity",
+		label: "Identity",
+		icon: "material-symbols:badge-outline-rounded",
+		panels: [panels[0]],
+	},
+	{
+		id: "access",
+		label: "Access",
+		icon: "material-symbols:shield-outline-rounded",
+		panels: [panels[1], panels[2]],
+	},
+	{
+		id: "preferences",
+		label: "Preferences",
+		icon: "material-symbols:tune-rounded",
+		panels: [panels[3], panels[4]],
+	},
+	{
+		id: "account",
+		label: "Account",
+		icon: "material-symbols:manage-accounts-outline-rounded",
+		panels: [panels[5]],
 	},
 ] as const;
 
@@ -236,6 +270,13 @@ function applyUser(next: AccountUser) {
 function clearMessages() {
 	error = "";
 	notice = "";
+}
+
+function selectPanel(panelId: PanelId) {
+	activePanel = panelId;
+	mobileMenuOpen = false;
+	clearMessages();
+	requestAnimationFrame(() => accountContentElement?.scrollTo({ top: 0 }));
 }
 
 function flagUrl(countryCode: string) {
@@ -785,65 +826,74 @@ onMount(() => void loadSession());
 		<main class="accounts-workspace">
 			<div class="account-frame panel">
 				<aside class="identity-card">
-					<div class="avatar-shell">
-						<div class="avatar">
-							{#if avatarUrl}
-								<img src={avatarUrl} alt="" />
-							{:else}
-								<span>{initials()}</span>
-							{/if}
+					<div class="identity-summary">
+						<div class="avatar-shell">
+							<div class="avatar">
+								{#if avatarUrl}
+									<img src={avatarUrl} alt="" />
+								{:else}
+									<span>{initials()}</span>
+								{/if}
+							</div>
+							<label class="avatar-camera" title="Upload avatar" aria-label="Upload avatar">
+								<Icon
+									icon={avatarUploading
+										? "material-symbols:progress-activity"
+										: "material-symbols:add-a-photo-outline-rounded"}
+									class={avatarUploading ? "spin" : ""}
+								/>
+								<input
+									type="file"
+									accept="image/png,image/jpeg,image/webp"
+									onchange={(event) => void uploadAvatar(event)}
+									disabled={avatarUploading}
+								/>
+							</label>
 						</div>
-						<label class="avatar-camera" title="Upload avatar" aria-label="Upload avatar">
-							<Icon
-								icon={avatarUploading
-									? "material-symbols:progress-activity"
-									: "material-symbols:add-a-photo-outline-rounded"}
-								class={avatarUploading ? "spin" : ""}
-							/>
-							<input
-								type="file"
-								accept="image/png,image/jpeg,image/webp"
-								onchange={(event) => void uploadAvatar(event)}
-								disabled={avatarUploading}
-							/>
-						</label>
+						<h1>{displayName || user.username}</h1>
+						<p class="handle">@{user.username}</p>
+						<div class="region-pill">
+							{#if flagUrl(displayRegionCode)}
+								<img src={flagUrl(displayRegionCode)} alt="" />
+							{:else}
+								<Icon icon="material-symbols:public-rounded" />
+							{/if}
+							<span>{displayRegion || "Region unavailable"}</span>
+						</div>
+						<button
+							class="mobile-menu-command"
+							type="button"
+							aria-label={mobileMenuOpen ? "Close account menu" : "Open account menu"}
+							aria-expanded={mobileMenuOpen}
+							aria-controls="account-navigation"
+							onclick={() => (mobileMenuOpen = !mobileMenuOpen)}
+						>
+							<Icon icon={mobileMenuOpen ? "material-symbols:close-rounded" : "material-symbols:menu-rounded"} />
+							<span>{mobileMenuOpen ? "Close menu" : "Account menu"}</span>
+						</button>
 					</div>
-					<h1>{displayName || user.username}</h1>
-					<p class="handle">@{user.username}</p>
-					<div class="region-pill">
-						{#if flagUrl(displayRegionCode)}
-							<img src={flagUrl(displayRegionCode)} alt="" />
-						{:else}
-							<Icon icon="material-symbols:public-rounded" />
-						{/if}
-						<span>{displayRegion || "Region unavailable"}</span>
-					</div>
-					<button
-						class="mobile-menu-command"
-						type="button"
-						aria-label={mobileMenuOpen ? "Close account menu" : "Open account menu"}
-						aria-expanded={mobileMenuOpen}
-						aria-controls="account-navigation"
-						onclick={() => (mobileMenuOpen = !mobileMenuOpen)}
-					>
-						<Icon icon={mobileMenuOpen ? "material-symbols:close-rounded" : "material-symbols:menu-rounded"} />
-						<span>{mobileMenuOpen ? "Close menu" : "Account menu"}</span>
-					</button>
 					<nav id="account-navigation" class:open={mobileMenuOpen} class="account-nav" aria-label="Account sections">
-						{#each panels as panel}
-							<button
-								type="button"
-								class:active={activePanel === panel.id}
-								aria-current={activePanel === panel.id ? "page" : undefined}
-								onclick={() => {
-									activePanel = panel.id;
-									mobileMenuOpen = false;
-									clearMessages();
-								}}
-							>
-								<Icon icon={panel.icon} />
-								<span>{panel.label}</span>
-							</button>
+						{#each navGroups as group}
+							<details class="nav-group" open>
+								<summary>
+									<Icon icon={group.icon} />
+									<span>{group.label}</span>
+									<span class="nav-group-chevron"><Icon icon="material-symbols:expand-more-rounded" /></span>
+								</summary>
+								<div class="nav-group-items">
+									{#each group.panels as panel}
+										<button
+											type="button"
+											class:active={activePanel === panel.id}
+											aria-current={activePanel === panel.id ? "page" : undefined}
+											onclick={() => selectPanel(panel.id)}
+										>
+											<Icon icon={panel.icon} />
+											<span>{panel.label}</span>
+										</button>
+									{/each}
+								</div>
+							</details>
 						{/each}
 						<button class="sidebar-logout" type="button" onclick={() => void logout()}>
 							<Icon icon="material-symbols:logout-rounded" />
@@ -852,7 +902,7 @@ onMount(() => void loadSession());
 					</nav>
 				</aside>
 
-				<div class="account-content">
+				<div class="account-content" bind:this={accountContentElement}>
 					{#if activePanel === "profile"}
 						<section class="account-card split-card">
 							<form
@@ -1145,12 +1195,14 @@ onMount(() => void loadSession());
 	}
 	.identity-card {
 		min-width: 0;
+		text-align: left;
+		box-shadow: 0 1.6rem 3.5rem rgba(28, 53, 79, 0.1);
+	}
+	.identity-summary {
 		display: grid;
 		grid-template-columns: auto minmax(0, 1fr) auto;
 		align-items: center;
 		gap: 0.75rem;
-		text-align: left;
-		box-shadow: 0 1.6rem 3.5rem rgba(28, 53, 79, 0.1);
 	}
 	.avatar-shell {
 		position: relative;
@@ -1206,7 +1258,7 @@ onMount(() => void loadSession());
 		opacity: 0;
 		pointer-events: none;
 	}
-	.identity-card h1 {
+	.identity-summary h1 {
 		grid-column: 2;
 		margin: 0;
 		overflow-wrap: anywhere;
@@ -1214,10 +1266,10 @@ onMount(() => void loadSession());
 		line-height: 1.08;
 		letter-spacing: 0;
 	}
-	.identity-card > .eyebrow {
+	.identity-summary > .eyebrow {
 		display: none;
 	}
-	.identity-card > .handle {
+	.identity-summary > .handle {
 		grid-column: 2;
 		margin: 0.15rem 0 0;
 	}
@@ -1250,7 +1302,6 @@ onMount(() => void loadSession());
 		object-fit: cover;
 	}
 	.account-nav {
-		grid-column: 1 / -1;
 		display: none;
 		gap: 0.35rem;
 		margin-top: 1rem;
@@ -1260,6 +1311,50 @@ onMount(() => void loadSession());
 	}
 	.account-nav.open {
 		display: grid;
+	}
+	.nav-group {
+		min-width: 0;
+	}
+	.nav-group summary {
+		min-height: 2.75rem;
+		display: flex;
+		align-items: center;
+		gap: 0.55rem;
+		padding: 0 0.75rem;
+		color: var(--sf-text-soft);
+		font-size: 0.72rem;
+		font-weight: 800;
+		list-style: none;
+		text-transform: uppercase;
+		cursor: pointer;
+	}
+	.nav-group summary::-webkit-details-marker {
+		display: none;
+	}
+	.nav-group summary:hover {
+		color: var(--sf-text);
+	}
+	.nav-group summary > :global(svg) {
+		flex: none;
+		width: 1.1rem;
+		height: 1.1rem;
+	}
+	.nav-group-chevron {
+		width: 1.5rem;
+		height: 1.5rem;
+		display: grid;
+		place-items: center;
+		margin-left: auto;
+		transition: transform 0.16s ease;
+	}
+	.nav-group[open] .nav-group-chevron {
+		transform: rotate(180deg);
+	}
+	.nav-group-items {
+		display: grid;
+		gap: 0.2rem;
+		padding: 0 0 0.5rem 0.65rem;
+		border-left: 1px solid var(--sf-border);
 	}
 	.mobile-menu-command {
 		grid-column: 3;
@@ -1529,6 +1624,7 @@ onMount(() => void loadSession());
 	.command:focus-visible,
 	.icon-command:focus-visible,
 	.account-nav button:focus-visible,
+	.nav-group summary:focus-visible,
 	.mobile-menu-command:focus-visible,
 	.toggle-list input:focus-visible,
 	.avatar-camera:focus-within {
@@ -2102,21 +2198,32 @@ onMount(() => void loadSession());
 			right: max(1.5rem, calc((100vw - 76rem) / 2));
 		}
 		.account-frame {
-			min-height: 40rem;
+			height: clamp(40rem, calc(100svh - 3rem), 46rem);
 			grid-template-columns: 14rem minmax(0, 1fr);
 			align-items: stretch;
 		}
 		.identity-card {
-			display: block;
+			min-height: 0;
+			display: grid;
+			grid-template-rows: auto minmax(0, 1fr);
+			overflow: hidden;
 			border-right: 1px solid var(--sf-border);
 			border-bottom: 0;
 			text-align: center;
 		}
-		.identity-card h1 {
+		.identity-summary {
+			display: block;
+		}
+		.account-content {
+			overflow-y: auto;
+			overscroll-behavior: contain;
+			scrollbar-gutter: stable;
+		}
+		.identity-summary h1 {
 			margin: 0.2rem 0;
 			font-size: 1.35rem;
 		}
-		.identity-card > .handle {
+		.identity-summary > .handle {
 			margin: 0 0 0.8rem;
 		}
 		.avatar-shell {
@@ -2136,6 +2243,11 @@ onMount(() => void loadSession());
 		.account-nav,
 		.account-nav.open {
 			display: grid;
+			min-height: 0;
+			overflow-y: auto;
+			align-content: start;
+			overscroll-behavior: contain;
+			scrollbar-gutter: stable;
 		}
 		.page-heading {
 			flex-direction: column;
