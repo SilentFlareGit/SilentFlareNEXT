@@ -896,32 +896,41 @@ onMount(() => void loadSession());
 						aria-label="Account sections"
 					>
 						{#each navGroups as group}
-							<details class="nav-group" open={expandedNavGroup === group.id}>
-								<summary
+							<section class:expanded={expandedNavGroup === group.id} class="nav-group">
+								<button
+									class="nav-group-toggle"
+									type="button"
 									aria-expanded={expandedNavGroup === group.id}
-									onclick={(event) => {
-										event.preventDefault();
-										toggleNavGroup(group.id);
-									}}
+									aria-controls={`account-nav-${group.id}`}
+									onclick={() => toggleNavGroup(group.id)}
 								>
 									<Icon icon={group.icon} />
 									<span>{group.label}</span>
 									<span class="nav-group-chevron"><Icon icon="material-symbols:expand-more-rounded" /></span>
-								</summary>
-								<div class="nav-group-items">
-									{#each group.panels as panel}
-										<button
-											type="button"
-											class:active={activePanel === panel.id}
-											aria-current={activePanel === panel.id ? "page" : undefined}
-											onclick={() => selectPanel(panel.id)}
-										>
-											<Icon icon={panel.icon} />
-											<span>{panel.label}</span>
-										</button>
-									{/each}
+								</button>
+								<div
+									id={`account-nav-${group.id}`}
+									class="nav-group-collapse"
+									aria-hidden={expandedNavGroup !== group.id}
+									inert={expandedNavGroup !== group.id}
+								>
+									<div class="nav-group-clip">
+										<div class="nav-group-items">
+											{#each group.panels as panel}
+												<button
+													type="button"
+													class:active={activePanel === panel.id}
+													aria-current={activePanel === panel.id ? "page" : undefined}
+													onclick={() => selectPanel(panel.id)}
+												>
+													<Icon icon={panel.icon} />
+													<span>{panel.label}</span>
+												</button>
+											{/each}
+										</div>
+									</div>
 								</div>
-							</details>
+							</section>
 						{/each}
 						<button class="sidebar-logout" type="button" onclick={() => void logout()}>
 							<Icon icon="material-symbols:logout-rounded" />
@@ -931,7 +940,9 @@ onMount(() => void loadSession());
 				</aside>
 
 				<div class="account-content" bind:this={accountContentElement}>
-					{#if activePanel === "profile"}
+					{#key activePanel}
+						<div class="panel-view">
+						{#if activePanel === "profile"}
 						<section class="account-card split-card">
 							<form
 								class="form-stack"
@@ -1101,7 +1112,9 @@ onMount(() => void loadSession());
 						<div class="danger-grid">
 							<section class="account-card danger-card"><div class="danger-copy"><span class="section-icon danger-icon"><Icon icon="material-symbols:delete-forever-outline-rounded" /></span><div><h3>Delete account</h3><p>Email verification and two-factor authentication are both required. An administrator must approve every deletion request.</p>{#if !user.twoFactorEnabled}<p class="scheduled">Enable two-factor authentication in Security before requesting deletion.</p>{:else if scheduledDeletion || user.deletionRequestedAt}<p class="scheduled">{scheduledDeletion || (user.deletionReviewStatus === "approved" && user.deletionScheduledFor ? `Approved. Scheduled for ${formatTime(user.deletionScheduledFor)}` : "Deletion request is waiting for administrator review.")}</p>{/if}</div></div>{#if scheduledDeletion || user.deletionRequestedAt}<button class="command secondary" type="button" onclick={() => void cancelDeletion()} disabled={submitting}>Cancel request</button>{:else}<button class="command danger" type="button" onclick={() => openSensitive("delete-account")} disabled={!user.twoFactorEnabled}>Request deletion</button>{/if}</section>
 						</div>
-					{/if}
+						{/if}
+						</div>
+					{/key}
 
 					{#if error}<Alert tone="error" message={error} />{/if}
 					{#if notice}<Alert tone="success" message={notice} />{/if}
@@ -1336,39 +1349,59 @@ onMount(() => void loadSession());
 		object-fit: cover;
 	}
 	.account-nav {
-		display: none;
+		max-height: 0;
+		display: grid;
 		gap: 0.35rem;
-		margin-top: 1rem;
-		padding-top: 1rem;
-		border-top: 1px solid var(--line-divider, rgba(70, 100, 130, 0.12));
+		overflow: hidden;
+		visibility: hidden;
+		margin-top: 0;
+		padding-top: 0;
+		border-top: 1px solid transparent;
+		opacity: 0;
 		text-align: left;
+		transform: translateY(-0.35rem);
+		transition:
+			max-height 0.24s ease,
+			margin-top 0.24s ease,
+			padding-top 0.24s ease,
+			border-color 0.2s ease,
+			opacity 0.16s ease,
+			transform 0.2s ease,
+			visibility 0s linear 0.24s;
 	}
 	.account-nav.open {
-		display: grid;
+		max-height: 70rem;
+		overflow: visible;
+		visibility: visible;
+		margin-top: 1rem;
+		padding-top: 1rem;
+		border-top-color: var(--line-divider, rgba(70, 100, 130, 0.12));
+		opacity: 1;
+		transform: translateY(0);
+		transition-delay: 0s;
 	}
 	.nav-group {
 		min-width: 0;
 	}
-	.nav-group summary {
+	.nav-group-toggle {
+		width: 100%;
 		min-height: 2.75rem;
 		display: flex;
 		align-items: center;
 		gap: 0.55rem;
+		border: 0;
 		padding: 0 0.75rem;
+		background: transparent;
 		color: var(--sf-text-soft);
 		font-size: 0.72rem;
 		font-weight: 800;
-		list-style: none;
 		text-transform: uppercase;
 		cursor: pointer;
 	}
-	.nav-group summary::-webkit-details-marker {
-		display: none;
-	}
-	.nav-group summary:hover {
+	.nav-group-toggle:hover {
 		color: var(--sf-text);
 	}
-	.nav-group summary > :global(svg) {
+	.nav-group-toggle > :global(svg) {
 		flex: none;
 		width: 1.1rem;
 		height: 1.1rem;
@@ -1379,10 +1412,29 @@ onMount(() => void loadSession());
 		display: grid;
 		place-items: center;
 		margin-left: auto;
-		transition: transform 0.16s ease;
+		transition: transform 0.22s ease;
 	}
-	.nav-group[open] .nav-group-chevron {
+	.nav-group.expanded .nav-group-chevron {
 		transform: rotate(180deg);
+	}
+	.nav-group-collapse {
+		display: grid;
+		grid-template-rows: 0fr;
+		opacity: 0;
+		transform: translateY(-0.25rem);
+		transition:
+			grid-template-rows 0.22s ease,
+			opacity 0.16s ease,
+			transform 0.22s ease;
+	}
+	.nav-group.expanded .nav-group-collapse {
+		grid-template-rows: 1fr;
+		opacity: 1;
+		transform: translateY(0);
+	}
+	.nav-group-clip {
+		min-height: 0;
+		overflow: hidden;
 	}
 	.nav-group-items {
 		display: grid;
@@ -1447,6 +1499,12 @@ onMount(() => void loadSession());
 		min-width: 0;
 		display: grid;
 		gap: 1rem;
+	}
+	.panel-view {
+		min-width: 0;
+		display: grid;
+		gap: 1rem;
+		animation: panel-enter 0.22s cubic-bezier(0.2, 0.7, 0.2, 1);
 	}
 	.page-heading {
 		display: flex;
@@ -1658,7 +1716,7 @@ onMount(() => void loadSession());
 	.command:focus-visible,
 	.icon-command:focus-visible,
 	.account-nav button:focus-visible,
-	.nav-group summary:focus-visible,
+	.nav-group-toggle:focus-visible,
 	.mobile-menu-command:focus-visible,
 	.toggle-list input:focus-visible,
 	.avatar-camera:focus-within {
@@ -1714,7 +1772,15 @@ onMount(() => void loadSession());
 	}
 	.security-list,
 	.session-list,
-	.toggle-list,
+	.toggle-list {
+		display: grid;
+		gap: 0;
+		overflow: hidden;
+		margin-bottom: 1rem;
+		border: 1px solid var(--line-divider, rgba(70, 100, 130, 0.12));
+		border-radius: 0.8rem;
+		background: var(--sf-surface-subtle);
+	}
 	.event-list {
 		display: grid;
 		gap: 0.7rem;
@@ -1735,9 +1801,20 @@ onMount(() => void loadSession());
 		gap: 0.85rem;
 		min-height: 4.75rem;
 		padding: 0.9rem;
-		border: 1px solid var(--line-divider, rgba(70, 100, 130, 0.12));
-		border-radius: 0.9rem;
-		background: var(--btn-regular-bg, #f8fbfd);
+		border: 0;
+		border-radius: 0;
+		background: transparent;
+		transition: background-color 0.16s ease;
+	}
+	.security-row + .security-row,
+	.session-list article + article,
+	.toggle-list label + label {
+		border-top: 1px solid var(--line-divider, rgba(70, 100, 130, 0.12));
+	}
+	.security-row:hover,
+	.session-list article:hover,
+	.toggle-list label:hover {
+		background: var(--sf-surface-muted);
 	}
 	.security-row,
 	.session-list article {
@@ -2294,10 +2371,17 @@ onMount(() => void loadSession());
 		}
 		.account-nav,
 		.account-nav.open {
+			max-height: none;
 			display: grid;
 			min-height: 0;
 			overflow-y: auto;
+			visibility: visible;
+			margin-top: 1rem;
+			padding-top: 1rem;
+			border-top-color: transparent;
+			opacity: 1;
 			align-content: start;
+			transform: none;
 			overscroll-behavior: contain;
 			scrollbar-gutter: stable;
 			scrollbar-color: rgba(91, 112, 133, 0.55) transparent;
@@ -2394,14 +2478,28 @@ onMount(() => void loadSession());
 			transform: rotate(360deg);
 		}
 	}
+	@keyframes panel-enter {
+		from {
+			opacity: 0;
+			transform: translateY(0.45rem);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
 	@media (prefers-reduced-motion: reduce) {
 		.account-loading span,
-		.spin {
+		.spin,
+		.panel-view {
 			animation: none;
 		}
 		.command,
 		.icon-command,
 		.account-nav button,
+		.account-nav,
+		.nav-group-collapse,
+		.nav-group-chevron,
 		.auth-input,
 		.toggle-list input,
 		.toggle-list input::before {
