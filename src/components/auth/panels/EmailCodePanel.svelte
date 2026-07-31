@@ -1,6 +1,8 @@
 <script lang="ts">
-import Icon from "@iconify/svelte";
 import TurnstileWidget from "../../security/TurnstileWidget.svelte";
+import Alert from "../../ui/Alert.svelte";
+import Button from "../../ui/Button.svelte";
+import AuthBackButton from "../AuthBackButton.svelte";
 
 type AuthUser = {
 	id: string;
@@ -81,22 +83,22 @@ async function verifyCode() {
 }
 </script>
 
-<div class="mx-auto w-full max-w-[24rem]">
-	<button type="button" class="mb-6 min-h-11 text-sm text-50 hover:text-[var(--primary)]" onclick={onBack}>← All sign-in methods</button>
-	<h2 class="mb-2 text-3xl font-extrabold text-90">Email code</h2>
-	<p class="mb-7 leading-6 text-50">{phase === "email" ? "We’ll send a short-lived code and a secure verification link. No password is required." : `Enter the six-digit code sent to ${email}, or use the link in that email.`}</p>
+<div class="mx-auto w-full max-w-[360px]">
+	<AuthBackButton label="All sign-in methods" onclick={onBack} />
+	<h2 class="mb-1 text-2xl font-extrabold text-[var(--sf-text)]">Email code</h2>
+	<p class="mb-8 text-sm leading-6 text-[var(--sf-text-muted)]">{phase === "email" ? "We’ll send a short-lived code and a secure verification link. No password is required." : `Enter the six-digit code sent to ${email}, or use the link in that email.`}</p>
 	{#if phase === "email"}
 		<form class="flex flex-col gap-5" onsubmit={(event) => { event.preventDefault(); void requestCode(); }}>
 			<label class="flex flex-col gap-2 font-bold text-75">Email address<input class="auth-input min-h-11" type="email" autocomplete="email" bind:value={email} required /></label>
 			<TurnstileWidget action="login" {resetKey} onTokenChange={(token) => (turnstileToken = token)} />
-			<button class="btn-regular min-h-11 rounded-xl px-5 font-bold disabled:opacity-60" disabled={submitting}>{submitting ? "Sending…" : "Send code"}</button>
+			<Button type="submit" icon="material-symbols:send-outline-rounded" loading={submitting} full>Send code</Button>
 		</form>
 	{:else}
 		<form class="flex flex-col gap-5" onsubmit={(event) => { event.preventDefault(); void verifyCode(); }}>
 			<label class="flex flex-col gap-2 font-bold text-75">Verification code<input class="auth-input min-h-11 text-center text-xl tracking-[.3em]" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" bind:value={code} required /></label>
-			<button class="btn-regular min-h-11 rounded-xl px-5 font-bold disabled:opacity-60" disabled={submitting}>{submitting ? "Verifying…" : "Continue"}</button>
+			<Button type="submit" icon="material-symbols:verified-outline-rounded" loading={submitting} full>Continue</Button>
 			<button type="button" class="min-h-11 text-sm text-50 hover:text-[var(--primary)]" onclick={() => { phase = "email"; code = ""; resetKey += 1; }}>Use another email</button>
 		</form>
 	{/if}
-	{#if error}<p class="mt-5 flex gap-2 rounded-xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-600"><Icon icon="material-symbols:error-outline-rounded" />{error}</p>{/if}
+	{#if error}<div class="mt-5"><Alert tone="error" message={error} /></div>{/if}
 </div>

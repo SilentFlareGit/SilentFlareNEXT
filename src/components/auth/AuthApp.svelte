@@ -147,44 +147,48 @@ onMount(() => void bootstrap());
 	backLabel="Return to the blog"
 	{story}
 >
-				{#if adminMode}
-					<AdminOwnerAuth {apiBase} {returnUrl} />
-				{:else if step === "checking" || step === "redirecting"}
-					<div class="auth-loading"><span></span><p>{step === "checking" ? "Checking your session…" : "Returning you safely…"}</p></div>
-				{:else if step === "method"}
-					<MethodSelectPanel
-						onSelectEmailCode={() => { step = "email"; error = ""; }}
-						onSelectPassword={() => { step = "password"; error = ""; }}
-						onRegister={() => window.location.assign("https://accounts.silentflare.com/?register=1")}
-						{notice}
-						{error}
-					/>
-				{:else if step === "email"}
-					<EmailCodePanel
-						{apiBase}
-						{returnUrl}
-						onSuccess={finishLogin}
-						on2FARequired={(id) => { pendingId = id; step = "2fa"; }}
-						onBack={() => { step = "method"; error = ""; }}
-					/>
-				{:else if step === "password"}
-					<PasswordPanel
-						{apiBase}
-						{returnUrl}
-						onSuccess={finishLogin}
-						on2FARequired={(id) => { pendingId = id; step = "2fa"; }}
-						onError={(message) => (error = message)}
-						onBack={() => { step = "method"; error = ""; }}
-					/>
-				{:else}
-					<TwoFAPanel
-						{apiBase}
-						{pendingId}
-						onSuccess={finishLogin}
-						onError={(message) => (error = message)}
-						onBack={() => { step = "method"; pendingId = ""; }}
-					/>
-				{/if}
+	{#key adminMode ? "admin" : step}
+		<div class="auth-step-panel">
+			{#if adminMode}
+				<AdminOwnerAuth {apiBase} {returnUrl} />
+			{:else if step === "checking" || step === "redirecting"}
+				<div class="auth-loading"><span></span><p>{step === "checking" ? "Checking your session…" : "Returning you safely…"}</p></div>
+			{:else if step === "method"}
+				<MethodSelectPanel
+					onSelectEmailCode={() => { step = "email"; error = ""; }}
+					onSelectPassword={() => { step = "password"; error = ""; }}
+					onRegister={() => window.location.assign("https://accounts.silentflare.com/?register=1")}
+					{notice}
+					{error}
+				/>
+			{:else if step === "email"}
+				<EmailCodePanel
+					{apiBase}
+					{returnUrl}
+					onSuccess={finishLogin}
+					on2FARequired={(id) => { pendingId = id; step = "2fa"; }}
+					onBack={() => { step = "method"; error = ""; }}
+				/>
+			{:else if step === "password"}
+				<PasswordPanel
+					{apiBase}
+					{returnUrl}
+					onSuccess={finishLogin}
+					on2FARequired={(id) => { pendingId = id; step = "2fa"; }}
+					onError={(message) => (error = message)}
+					onBack={() => { step = "method"; error = ""; }}
+				/>
+			{:else}
+				<TwoFAPanel
+					{apiBase}
+					{pendingId}
+					onSuccess={finishLogin}
+					onError={(message) => (error = message)}
+					onBack={() => { step = "method"; pendingId = ""; }}
+				/>
+			{/if}
+		</div>
+	{/key}
 </IdentityShell>
 
 <style>
@@ -194,6 +198,8 @@ onMount(() => void bootstrap());
 	:global(.feature-rail svg) { width: 1.25rem; height: 1.25rem; flex: 0 0 1.25rem; color: var(--sf-accent); }
 	.auth-loading { width: 100%; display: grid; justify-items: center; gap: 1rem; color: var(--sf-text-muted); }
 	.auth-loading span { width: 2rem; height: 2rem; border: 2px solid var(--sf-border); border-top-color: var(--sf-accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+	.auth-step-panel { width: 100%; animation: auth-step-enter 0.22s cubic-bezier(0.2, 0.7, 0.2, 1); }
 	@keyframes spin { to { transform: rotate(360deg); } }
-	@media (prefers-reduced-motion: reduce) { .auth-loading span { animation: none; } }
+	@keyframes auth-step-enter { from { opacity: 0; transform: translateY(0.45rem); } to { opacity: 1; transform: translateY(0); } }
+	@media (prefers-reduced-motion: reduce) { .auth-loading span, .auth-step-panel { animation: none; } }
 </style>

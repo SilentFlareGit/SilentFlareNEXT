@@ -3,6 +3,7 @@ import Icon from "@iconify/svelte";
 import TurnstileWidget from "../../security/TurnstileWidget.svelte";
 import Alert from "../../ui/Alert.svelte";
 import Button from "../../ui/Button.svelte";
+import AuthBackButton from "../AuthBackButton.svelte";
 
 type AuthUser = {
 	id: string;
@@ -86,14 +87,7 @@ $effect(() => {
 </script>
 
 <div class="mx-auto w-full max-w-[360px]">
-	<button
-		type="button"
-		class="mb-6 flex items-center gap-1.5 text-sm text-black/45 transition-colors hover:text-black/70 dark:text-white/45 dark:hover:text-white/70"
-		onclick={onBack}
-	>
-		<Icon icon="material-symbols:arrow-back-rounded" class="text-[1.1rem]" />
-		Back
-	</button>
+	<AuthBackButton onclick={onBack} />
 
 	<h2 class="mb-1 text-2xl font-extrabold text-black/90 dark:text-white/90">Sign in</h2>
 	<p class="mb-8 text-sm text-black/45 dark:text-white/45">Use your email or username with password</p>

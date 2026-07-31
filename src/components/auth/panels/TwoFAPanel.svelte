@@ -1,7 +1,7 @@
 <script lang="ts">
-import Icon from "@iconify/svelte";
 import Alert from "../../ui/Alert.svelte";
 import Button from "../../ui/Button.svelte";
+import AuthBackButton from "../AuthBackButton.svelte";
 
 type AuthUser = {
 	id: string;
@@ -63,14 +63,7 @@ $effect(() => {
 </script>
 
 <div class="mx-auto w-full max-w-[360px]">
-	<button
-		type="button"
-		class="mb-6 flex items-center gap-1.5 text-sm text-black/45 transition-colors hover:text-black/70 dark:text-white/45 dark:hover:text-white/70"
-		onclick={onBack}
-	>
-		<Icon icon="material-symbols:arrow-back-rounded" class="text-[1.1rem]" />
-		Start over
-	</button>
+	<AuthBackButton label="Start over" onclick={onBack} />
 
 	<h2 class="mb-1 text-2xl font-extrabold text-black/90 dark:text-white/90">Two-factor auth</h2>
 	<p class="mb-8 text-sm text-black/45 dark:text-white/45">Open your authenticator app and enter the 6-digit code</p>
