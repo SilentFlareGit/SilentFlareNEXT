@@ -25,6 +25,7 @@ Public users share one opaque API-issued session cookie across `.silentflare.com
 - Registration flow: `src/components/auth/panels/RegistrationPanel.svelte`; rendered only on Accounts even though it lives with shared authentication panel primitives.
 - Accounts page: `src/pages/accounts/index.astro`.
 - Accounts app: `src/components/account/AccountApp.svelte`.
+- Public account homepage: `accounts.silentflare.com/u/{username}`, rendered by `src/components/account/PublicProfileApp.svelte` without requiring a session.
 - Admin page: `src/pages/admin/index.astro`.
 - Admin app: `src/components/admin/AdminApp.svelte`.
 - Blog navbar account entry: `src/components/auth/UserMenu.svelte`.
@@ -69,6 +70,7 @@ Accounts is a standalone account workspace. Do not restore the public blog navba
 - Direct unauthenticated visits to Accounts redirect to Auth with Accounts as the safe `return_url`.
 - Auth's create-account command navigates to Accounts registration. Auth must not render registration itself.
 - Comment prompts use the same auth redirect. Comment writes require the all-site session, Turnstile, and `X-CSRF-Token`.
+- Comment avatars, display names, and usernames link to the author's public Accounts homepage. Private, disabled, deleting, or unknown profiles render the same unavailable state.
 
 ## Blog Discussion And Markdown Contract
 
@@ -130,6 +132,7 @@ Accounts is a standalone account workspace. Do not restore the public blog navba
 - `POST /accounts/register/email/request`, `POST /accounts/register/email/verify`, `POST /accounts/register/email/verify-link`, `POST /accounts/register/complete`: verified email-first registration.
 - `POST /accounts/register/2fa/start`, `POST /accounts/register/2fa/verify`, `POST /accounts/register/2fa/skip`: registration onboarding security choice; no session is issued.
 - `GET/PATCH /accounts/profile`: read/update authenticated profile. PATCH requires CSRF.
+- `GET /accounts/public/{username}`: public profile projection. It never returns email, account IDs, security state, or IP data; `profilePublic`, `showRegion`, and `showComments` govern visibility.
 - `POST /accounts/profile/avatar`: upload avatar with CSRF.
 - `DELETE /accounts/profile/avatar`: clear the profile avatar and remove previous managed file when applicable.
 - `GET /account-avatars/{filename}`: immutable public delivery for managed avatars.

@@ -139,6 +139,48 @@ def test_registration_login_and_comment_contract_through_asgi(monkeypatch, tmp_p
 		assert listed.json()["totalCount"] == 1
 		assert listed.json()["items"][0]["content"] == "**Real ASGI comment**"
 
+		public_profile = client.get("/accounts/public/ASGIUSER")
+		assert public_profile.status_code == 200
+		public_payload = public_profile.json()
+		assert public_payload["profile"]["username"] == "asgiuser"
+		assert public_payload["profile"]["displayName"] == "ASGI User"
+		assert public_payload["profile"]["commentCount"] == 1
+		assert public_payload["comments"][0]["content"] == "**Real ASGI comment**"
+		assert "email" not in public_payload["profile"]
+
+		privacy = client.patch(
+			"/accounts/preferences/privacy",
+			json={
+				"profile_public": True,
+				"show_region": False,
+				"show_comments": False,
+				"allow_search": False,
+				"allow_data_export": True,
+			},
+			headers={"X-CSRF-Token": csrf},
+		)
+		assert privacy.status_code == 200
+		private_activity = client.get("/accounts/public/asgiuser")
+		assert private_activity.status_code == 200
+		assert private_activity.json()["profile"]["displayRegion"] == ""
+		assert private_activity.json()["profile"]["commentsVisible"] is False
+		assert private_activity.json()["profile"]["commentCount"] is None
+		assert private_activity.json()["comments"] == []
+
+		privacy = client.patch(
+			"/accounts/preferences/privacy",
+			json={
+				"profile_public": False,
+				"show_region": False,
+				"show_comments": False,
+				"allow_search": False,
+				"allow_data_export": True,
+			},
+			headers={"X-CSRF-Token": csrf},
+		)
+		assert privacy.status_code == 200
+		assert client.get("/accounts/public/asgiuser").status_code == 404
+
 
 def test_blog_cors_preflight_allows_credentials(monkeypatch, tmp_path: Path) -> None:
 	app, _runtime, _email = load_test_app(monkeypatch, tmp_path)

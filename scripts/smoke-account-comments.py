@@ -349,6 +349,14 @@ def main() -> None:
 			StubRequest({module.ACCOUNT_SESSION_COOKIE: cookie}, {"cf-connecting-ip": "8.8.4.4"}),
 			session["csrf"],
 		)
+		public_profile = module.accounts_public_profile("SMOKEUSER")
+		if (
+			public_profile["profile"]["username"] != "smokeuser"
+			or public_profile["profile"]["commentCount"] != 1
+			or public_profile["comments"][0]["id"] != created_comment["comment"]["id"]
+			or "email" in public_profile["profile"]
+		):
+			raise AssertionError("public profile did not expose the safe comment identity contract")
 		updated_comment = module.comment_update(
 			created_comment["comment"]["id"],
 			module.CommentUpdatePayload(content="**Updated smoke comment**\n\n- item"),

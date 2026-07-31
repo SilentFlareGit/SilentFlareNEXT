@@ -117,6 +117,11 @@ def accounts_profile_get(request: Request) -> dict[str, Any]:
 	return service.accounts_profile_get(request)
 
 
+@router.get("/accounts/public/{username}")
+def accounts_public_profile(username: str) -> dict[str, Any]:
+	return service.accounts_public_profile(username)
+
+
 @router.patch("/accounts/profile")
 def accounts_profile_patch(
 	payload: UnifiedProfilePayload,

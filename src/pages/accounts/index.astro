@@ -1,5 +1,5 @@
 ---
-import AccountApp from "../../components/account/AccountApp.svelte";
+import AccountsRoot from "../../components/account/AccountsRoot.svelte";
 import SubsiteLayout from "../../layouts/SubsiteLayout.astro";
 
 const apiBase = "/accounts-api";
@@ -7,5 +7,5 @@ const apiBase = "/accounts-api";
 
 <SubsiteLayout title="SilentFlare Accounts" description="SilentFlare profile, privacy, sessions, and account security center.">
 	<div class="sr-only" aria-hidden="true">SilentFlare accounts center unified login register email verification profile avatar upload IP region country city two factor security</div>
-	<AccountApp client:only="svelte" {apiBase} />
+	<AccountsRoot client:only="svelte" {apiBase} />
 </SubsiteLayout>

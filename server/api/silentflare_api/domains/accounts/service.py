@@ -280,6 +280,87 @@ def accounts_profile_get(request: Request) -> dict[str, Any]:
 	return {"ok": True, "user": account_user_payload(user)}
 
 
+def accounts_public_profile(username: str) -> dict[str, Any]:
+	try:
+		normalized_username = normalize_username(username)
+	except HTTPException as exc:
+		raise HTTPException(status_code=404, detail="Public profile not found") from exc
+	rows = d1_query(
+		"""
+		SELECT
+			users.id, users.username, users.display_name, users.avatar_url,
+			users.bio, users.display_region, users.display_region_code, users.created_at,
+			COALESCE(account_preferences.profile_public, 1) AS profile_public,
+			COALESCE(account_preferences.show_region, 1) AS show_region,
+			COALESCE(account_preferences.show_comments, 1) AS show_comments
+		FROM users
+		LEFT JOIN account_preferences ON account_preferences.user_id = users.id
+		WHERE users.username = ? COLLATE NOCASE
+			AND users.disabled_at IS NULL
+			AND users.deletion_requested_at IS NULL
+		LIMIT 1
+		""",
+		[normalized_username],
+	)
+	if not rows or not bool(rows[0].get("profile_public")):
+		raise HTTPException(status_code=404, detail="Public profile not found")
+	user = rows[0]
+	show_comments = bool(user.get("show_comments"))
+	comments: list[dict[str, Any]] = []
+	comment_count: int | None = None
+	if show_comments:
+		count_rows = d1_query(
+			"""
+			SELECT COUNT(*) AS count
+			FROM comments
+			WHERE user_id = ? AND status = 'published' AND deleted_at IS NULL
+			""",
+			[str(user["id"])],
+		)
+		comment_count = int(count_rows[0]["count"] if count_rows else 0)
+		comment_rows = d1_query(
+			"""
+			SELECT id, post_slug, content, created_at, updated_at
+			FROM comments
+			WHERE user_id = ? AND status = 'published' AND deleted_at IS NULL
+			ORDER BY created_at DESC, id DESC
+			LIMIT 20
+			""",
+			[str(user["id"])],
+		)
+		comments = [
+			{
+				"id": row["id"],
+				"postSlug": row["post_slug"],
+				"content": row["content"],
+				"createdAt": row["created_at"],
+				"updatedAt": row["updated_at"],
+			}
+			for row in comment_rows
+		]
+	return {
+		"ok": True,
+		"profile": {
+			"username": user["username"],
+			"displayName": user.get("display_name") or "",
+			"avatarUrl": user.get("avatar_url") or "",
+			"bio": user.get("bio") or "",
+			"displayRegion": (
+				user.get("display_region") or "" if bool(user.get("show_region")) else ""
+			),
+			"displayRegionCode": (
+				user.get("display_region_code") or ""
+				if bool(user.get("show_region"))
+				else ""
+			),
+			"createdAt": user["created_at"],
+			"commentsVisible": show_comments,
+			"commentCount": comment_count,
+		},
+		"comments": comments,
+	}
+
+
 def accounts_profile_patch(
 	payload: UnifiedProfilePayload,
 	request: Request,

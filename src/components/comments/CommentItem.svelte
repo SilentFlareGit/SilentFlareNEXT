@@ -43,6 +43,9 @@ const authorName = $derived(
 	comment.author.displayName || comment.author.username || comment.username,
 );
 const authorInitial = $derived(authorName.slice(0, 1).toUpperCase());
+const authorProfileHref = $derived(
+	`https://accounts.silentflare.com/u/${encodeURIComponent(comment.author.username)}`,
+);
 
 function formatTime(value: string) {
 	try {
@@ -121,20 +124,20 @@ function requestDelete() {
 }
 </script>
 
-<article class="comment-item py-5 first:pt-0 last:pb-0">
+<article id={`comment-${comment.id}`} class="comment-item scroll-mt-24 py-5 first:pt-0 last:pb-0">
 	<div class="flex min-w-0 items-start gap-3 sm:gap-4">
 		{#if comment.author.avatarUrl}
-			<img class="h-9 w-9 shrink-0 rounded-full object-cover sm:h-10 sm:w-10" src={comment.author.avatarUrl} alt="" loading="lazy" referrerpolicy="no-referrer" />
+			<a class="author-link shrink-0 rounded-full" href={authorProfileHref} aria-label={`View ${authorName}'s profile`}><img class="h-9 w-9 rounded-full object-cover sm:h-10 sm:w-10" src={comment.author.avatarUrl} alt="" loading="lazy" referrerpolicy="no-referrer" /></a>
 		{:else}
-			<div class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--btn-regular-bg)] font-bold text-[var(--primary)] sm:h-10 sm:w-10" aria-hidden="true">{authorInitial}</div>
+			<a class="author-link grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--btn-regular-bg)] font-bold text-[var(--primary)] sm:h-10 sm:w-10" href={authorProfileHref} aria-label={`View ${authorName}'s profile`}>{authorInitial}</a>
 		{/if}
 
 		<div class="min-w-0 flex-1">
 			<header class="flex min-w-0 items-start justify-between gap-2">
 				<div class="min-w-0">
 					<div class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-						<p class="max-w-full truncate font-bold text-90">{authorName}</p>
-						{#if comment.author.displayName}<span class="truncate text-sm text-50">@{comment.author.username}</span>{/if}
+						<a class="author-link max-w-full truncate font-bold text-90" href={authorProfileHref}>{authorName}</a>
+						{#if comment.author.displayName}<a class="author-link truncate text-sm text-50" href={authorProfileHref}>@{comment.author.username}</a>{/if}
 					</div>
 					<p class="flex flex-wrap items-center gap-x-1.5 text-sm text-50">
 						<time datetime={comment.createdAt} title={formatTime(comment.createdAt)}>{formatRelativeTime(comment.createdAt)}</time>
@@ -198,7 +201,23 @@ function requestDelete() {
 </article>
 
 <style>
+	.author-link {
+		text-decoration: none;
+		transition: color 150ms ease, box-shadow 150ms ease;
+	}
+	.author-link:hover {
+		color: var(--primary);
+	}
+	.author-link:focus-visible {
+		outline: 3px solid color-mix(in srgb, var(--primary) 35%, transparent);
+		outline-offset: 2px;
+	}
 	.action-menu summary::-webkit-details-marker {
 		display: none;
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.author-link {
+			transition: none;
+		}
 	}
 </style>

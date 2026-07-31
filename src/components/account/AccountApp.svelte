@@ -1016,6 +1016,11 @@ onMount(() => void loadSession());
 									{/if}
 									<blockquote>{bio || "Your short intro will appear here."}</blockquote>
 								</div>
+								{#if privacy.profilePublic}
+									<a class="command secondary profile-home-link" href={`https://accounts.silentflare.com/u/${encodeURIComponent(user.username)}`}><Icon icon="material-symbols:open-in-new-rounded" />View public homepage</a>
+								{:else}
+									<p class="preview-private-note"><Icon icon="material-symbols:visibility-lock-outline-rounded" />Public homepage is hidden</p>
+								{/if}
 							</article>
 						</section>
 					{:else if activePanel === "security"}
@@ -1761,6 +1766,19 @@ onMount(() => void loadSession());
 		margin: 0.25rem 0 0.8rem;
 		color: var(--text-75, #6c7b8c);
 		overflow-wrap: anywhere;
+	}
+	.profile-home-link {
+		width: 100%;
+	}
+	.preview-private-note {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.45rem;
+		margin: 0;
+		color: var(--sf-text-muted);
+		font-size: 0.82rem;
+		font-weight: 700;
 	}
 	.preview-region {
 		display: inline-flex;
