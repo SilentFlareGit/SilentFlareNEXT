@@ -2253,8 +2253,7 @@ onMount(() => void loadSession());
 		border: 0;
 		border-bottom: 1px solid var(--sf-border);
 		border-radius: 0;
-		padding-right: 0;
-		padding-left: 0;
+		padding: 1rem clamp(1rem, 2.5vw, 1.5rem);
 		background: transparent;
 	}
 	.row-icon {
@@ -2471,6 +2470,7 @@ onMount(() => void loadSession());
 			grid-template-columns: auto minmax(0, 1fr);
 		}
 		.security-row .status,
+		.security-row .command,
 		.session-list .status,
 		.session-list .command {
 			grid-column: 1 / -1;
