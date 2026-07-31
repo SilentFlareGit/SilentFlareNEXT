@@ -102,6 +102,16 @@ type SubjectType = {
 	elevated: number;
 	maximumScore: number;
 };
+type ControlAction =
+	| "set_score"
+	| "set_100"
+	| "set_0"
+	| "adjust"
+	| "score_cap"
+	| "score_floor"
+	| "response_exemption"
+	| "permanent_allowlist"
+	| "remove_permanent_allowlist";
 
 let { csrf }: { csrf: string } = $props();
 let subjects = $state<Subject[]>([]);
@@ -115,7 +125,7 @@ let detailLoading = $state(false);
 let ledgerLoading = $state(false);
 let saving = $state(false);
 let error = $state("");
-let action = $state("set_score");
+let action = $state<ControlAction>("set_score");
 let amount = $state(10);
 let duration = $state(86400);
 let reason = $state("");
@@ -149,6 +159,50 @@ const subjectTypeIcons: Record<string, string> = {
 const totalSubjects = $derived(
 	subjectTypes.reduce((total, item) => total + item.total, 0),
 );
+const controlModes: Array<{
+	value: Exclude<
+		ControlAction,
+		"permanent_allowlist" | "remove_permanent_allowlist"
+	>;
+	label: string;
+	icon: string;
+}> = [
+	{
+		value: "set_score",
+		label: "Custom score",
+		icon: "material-symbols:tune-rounded",
+	},
+	{
+		value: "set_100",
+		label: "Set to 100",
+		icon: "material-symbols:arrow-upward-rounded",
+	},
+	{
+		value: "set_0",
+		label: "Set to 0",
+		icon: "material-symbols:arrow-downward-rounded",
+	},
+	{
+		value: "adjust",
+		label: "Adjust by delta",
+		icon: "material-symbols:exposure-rounded",
+	},
+	{
+		value: "score_cap",
+		label: "Maximum score",
+		icon: "material-symbols:vertical-align-bottom-rounded",
+	},
+	{
+		value: "score_floor",
+		label: "Minimum score",
+		icon: "material-symbols:vertical-align-top-rounded",
+	},
+	{
+		value: "response_exemption",
+		label: "Response exemption",
+		icon: "material-symbols:shield-outline-rounded",
+	},
+];
 
 async function api<T>(path: string, init: RequestInit = {}) {
 	const response = await fetch(`/__shield/api/admin${path}`, {
@@ -207,6 +261,17 @@ async function openSubject(subject: { id: number }) {
 	detailLoading = true;
 	try {
 		selected = await api<SubjectDetail>(`/entities/${subject.id}`);
+		const hasPermanentAllowlist = selected.overrides.some(
+			(item) =>
+				!item.revokedAt &&
+				item.overrideType === "score_cap" &&
+				item.value === 0 &&
+				!item.expiresAt,
+		);
+		if (action === "permanent_allowlist" && hasPermanentAllowlist)
+			action = "remove_permanent_allowlist";
+		if (action === "remove_permanent_allowlist" && !hasPermanentAllowlist)
+			action = "permanent_allowlist";
 		if (action === "set_score") amount = selected.effectiveScore;
 		error = "";
 	} catch (cause) {
@@ -284,6 +349,19 @@ async function saveControl(requestedAction = action) {
 					duration_seconds: null,
 				}),
 			});
+		} else if (requestedAction === "remove_permanent_allowlist") {
+			const permanentOverride = activeOverrides.find(
+				(item) =>
+					item.overrideType === "score_cap" &&
+					item.value === 0 &&
+					!item.expiresAt,
+			);
+			if (!permanentOverride)
+				throw new Error("Permanent allowlist control is no longer active");
+			await api(`/overrides/${permanentOverride.id}/revoke`, {
+				method: "POST",
+				body: JSON.stringify({ reason: reason.trim() }),
+			});
 		} else {
 			await api(`/entities/${selected.id}/overrides`, {
 				method: "POST",
@@ -309,6 +387,11 @@ async function saveControl(requestedAction = action) {
 	} finally {
 		saving = false;
 	}
+}
+
+function selectControl(nextAction: ControlAction) {
+	action = nextAction;
+	if (nextAction === "set_score" && selected) amount = selected.effectiveScore;
 }
 
 async function revokeOverride(item: Override) {
@@ -511,30 +594,21 @@ onMount(loadSubjects);
 						saveControl();
 					}}
 				>
-					<h3>Manual control</h3>
-					<div class="quick-controls" role="group" aria-label="Score shortcuts">
-						<button class="score-up" type="button" onclick={() => saveControl("set_100")} disabled={saving || !reason.trim() || permanentlyAllowlisted}><Icon icon="material-symbols:arrow-upward-rounded" />Set to 100</button>
-						<button class="score-down" type="button" onclick={() => saveControl("set_0")} disabled={saving || !reason.trim()}><Icon icon="material-symbols:arrow-downward-rounded" />Set to 0</button>
-						<button class="allowlist" type="button" onclick={() => saveControl("permanent_allowlist")} disabled={saving || !reason.trim() || permanentlyAllowlisted}><Icon icon="material-symbols:verified-user-outline-rounded" />{permanentlyAllowlisted ? "Allowlisted" : "Permanent allowlist"}</button>
+					<header class="manual-heading"><h3>Manual control</h3><span>{permanentlyAllowlisted ? "Permanent allowlist active" : "Select a control"}</span></header>
+					<div class="control-modes" role="group" aria-label="Manual control">
+						{#each controlModes as mode (mode.value)}
+							<button class:selected={action === mode.value} data-action={mode.value} type="button" aria-pressed={action === mode.value} onclick={() => selectControl(mode.value)} disabled={saving}><Icon icon={mode.icon} />{mode.label}</button>
+						{/each}
+						<button class:selected={action === (permanentlyAllowlisted ? "remove_permanent_allowlist" : "permanent_allowlist")} data-action="permanent_allowlist" type="button" aria-pressed={action === (permanentlyAllowlisted ? "remove_permanent_allowlist" : "permanent_allowlist")} onclick={() => selectControl(permanentlyAllowlisted ? "remove_permanent_allowlist" : "permanent_allowlist")} disabled={saving}><Icon icon={permanentlyAllowlisted ? "material-symbols:remove-moderator-outline-rounded" : "material-symbols:verified-user-outline-rounded"} />{permanentlyAllowlisted ? "Remove allowlist" : "Permanent allowlist"}</button>
 					</div>
-					<div class:compact={action === "set_score"} class="control-fields">
-						<label>
-							<span>Action</span>
-							<select bind:value={action}>
-								<option value="set_score">Set custom score</option>
-								<option value="adjust">Adjust score</option>
-								<option value="score_cap">Maximum score</option>
-								<option value="score_floor">Minimum score</option>
-								<option value="response_exemption">Response exemption</option>
-							</select>
-						</label>
-						{#if action !== "response_exemption"}
+					<div class="control-fields">
+						{#if action === "set_score" || action === "adjust" || action === "score_cap" || action === "score_floor"}
 							<label>
 								<span>{action === "adjust" ? "Adjustment" : "Score"}</span>
 								<input type="number" min={action === "adjust" ? -100 : 0} max="100" bind:value={amount} required />
 							</label>
 						{/if}
-						{#if action !== "set_score"}
+						{#if action === "adjust" || action === "score_cap" || action === "score_floor" || action === "response_exemption"}
 							<label>
 								<span>Duration</span>
 								<select bind:value={duration}>
@@ -673,12 +747,17 @@ onMount(loadSubjects);
 	.close-button { display: none; }
 	.manual-control { border-bottom: 1px solid #dfe7ed; background: #f7fafc; padding: 1rem; }
 	h3 { margin: 0; font-size: .875rem; }
-	.quick-controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; margin-top: .75rem; }
-	.quick-controls button { min-height: 2.75rem; display: inline-flex; align-items: center; justify-content: center; gap: .4rem; border: 1px solid #cbd7e1; border-radius: .3rem; background: #fff; color: #425b70; font-weight: 800; }
-	.quick-controls button:disabled { cursor: not-allowed; opacity: .5; }
-	.quick-controls .score-up { border-color: #edc2c7; color: #ad3040; }
-	.quick-controls .score-down, .quick-controls .allowlist { border-color: #bcdcc9; color: #187348; }
-	.quick-controls .allowlist { background: #eef8f2; }
+	.manual-heading { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+	.manual-heading span { color: #718398; font-size: .75rem; font-weight: 700; text-align: right; }
+	.control-modes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; margin-top: .75rem; }
+	.control-modes button { min-height: 2.75rem; display: inline-flex; align-items: center; justify-content: flex-start; gap: .45rem; border: 1px solid #cbd7e1; border-radius: .3rem; background: #fff; color: #425b70; padding: .55rem .7rem; font-weight: 800; line-height: 1.25; text-align: left; transition: border-color .16s ease, background-color .16s ease, color .16s ease, box-shadow .16s ease, transform .16s ease; }
+	.control-modes button:hover:not(:disabled) { border-color: #8eafc7; background: #f1f7fb; color: #285a7c; transform: translateY(-1px); }
+	.control-modes button.selected { border-color: #72aedd; background: #e5f3fd; color: #176fae; box-shadow: inset 0 0 0 1px rgb(114 174 221 / 24%); }
+	.control-modes button[data-action="set_100"].selected { border-color: #df9fa7; background: #fff0f1; color: #a52839; }
+	.control-modes button[data-action="set_0"].selected,
+	.control-modes button[data-action="permanent_allowlist"].selected { border-color: #91c9aa; background: #eaf7ef; color: #126b40; }
+	.control-modes button:disabled { cursor: not-allowed; opacity: .55; transform: none; }
+	.control-modes :global(svg) { width: 1.05rem; height: 1.05rem; flex: 0 0 auto; }
 	.control-fields { display: grid; grid-template-columns: 1fr; gap: .75rem; margin-top: .75rem; }
 	.detail-section { border-bottom: 1px solid #dfe7ed; }
 	.detail-section > header { min-height: 3rem; display: flex; align-items: center; justify-content: space-between; padding: 0 1rem; }
@@ -717,8 +796,8 @@ onMount(loadSubjects);
 		.back-button { display: none; }
 		.close-button { display: inline-grid; }
 		.detail-header { grid-template-columns: auto minmax(0, 1fr) auto; }
-		.control-fields { grid-template-columns: minmax(8rem, 1fr) minmax(6rem, .7fr) minmax(8rem, .9fr) minmax(12rem, 1.6fr) auto; align-items: end; }
-		.control-fields.compact { grid-template-columns: minmax(10rem, 1fr) minmax(7rem, .7fr) minmax(14rem, 1.6fr) auto; }
+		.control-modes { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+		.control-fields { grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); align-items: end; }
 		.reason-field { min-width: 0; }
 		.ledger article { grid-template-columns: 2.75rem minmax(0, 1fr) auto; align-items: center; }
 		.ledger b { grid-column: 3; grid-row: 1; }
@@ -727,8 +806,12 @@ onMount(loadSubjects);
 		.evidence-list time { grid-column: 3; }
 	}
 
-	@media (max-width: 32rem) {
-		.quick-controls { grid-template-columns: 1fr; }
+	@media (max-width: 24rem) {
+		.control-modes { grid-template-columns: 1fr; }
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.control-modes button { transition: none; }
 	}
 
 	@media (min-width: 64rem) {

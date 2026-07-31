@@ -158,7 +158,7 @@ Future account signals include impossible travel, new-country session use, passw
 
 Policy actions can override the score. An allow list is evaluated before score enforcement; owner-authenticated administration can still be subject to a separate non-bypassable safety policy.
 
-The Subjects workspace supports audited exact score assignment from 0 to 100, one-command reset to 0 or escalation to 100, and permanent entity allowlisting. A permanent allowlist is stored as an unscoped, non-expiring score cap of 0: the raw and effective entity score remain 0, queued signals cannot raise it, and ordinary protected services allow the matching entity. Admin and CMS hosts retain their non-bypassable safety policy. Revoking the control returns the entity to normal scoring without deleting its append-only history.
+The Subjects workspace presents exact score assignment, reset to 0, escalation to 100, score adjustment, cap/floor, response exemption, and permanent allowlisting as selectable manual-control modes. Selecting a mode never writes immediately: an audit reason is required before Apply becomes available. A permanent allowlist is stored as an unscoped, non-expiring score cap of 0: the raw and effective entity score remain 0, queued signals cannot raise it, and ordinary protected services allow the matching entity. When active, the same mode becomes Remove allowlist and revokes that override without deleting the append-only history. Admin and CMS hosts retain their non-bypassable safety policy.
 
 ## 7. Gateway and Reverse Proxy Design
 
