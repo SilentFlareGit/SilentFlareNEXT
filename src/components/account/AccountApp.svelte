@@ -838,7 +838,6 @@ onMount(() => void loadSession());
 	</div>
 {:else if user}
 	<div class="accounts-stage">
-		<div class="account-theme-command"><ThemeToggle /></div>
 		<main class="accounts-workspace">
 			<div class="account-frame panel">
 				<aside class="identity-card">
@@ -876,17 +875,20 @@ onMount(() => void loadSession());
 							{/if}
 							<span>{displayRegion || "Region unavailable"}</span>
 						</div>
-						<button
-							class="mobile-menu-command"
-							type="button"
-							aria-label={mobileMenuOpen ? "Close account menu" : "Open account menu"}
-							aria-expanded={mobileMenuOpen}
-							aria-controls="account-navigation"
-							onclick={() => (mobileMenuOpen = !mobileMenuOpen)}
-						>
-							<Icon icon={mobileMenuOpen ? "material-symbols:close-rounded" : "material-symbols:menu-rounded"} />
-							<span>{mobileMenuOpen ? "Close menu" : "Account menu"}</span>
-						</button>
+						<div class="identity-commands">
+							<div class="account-theme-command"><ThemeToggle /></div>
+							<button
+								class="mobile-menu-command"
+								type="button"
+								aria-label={mobileMenuOpen ? "Close account menu" : "Open account menu"}
+								aria-expanded={mobileMenuOpen}
+								aria-controls="account-navigation"
+								onclick={() => (mobileMenuOpen = !mobileMenuOpen)}
+							>
+								<Icon icon={mobileMenuOpen ? "material-symbols:close-rounded" : "material-symbols:menu-rounded"} />
+								<span>{mobileMenuOpen ? "Close menu" : "Account menu"}</span>
+							</button>
+						</div>
 					</div>
 					<nav
 						id="account-navigation"
@@ -1197,10 +1199,8 @@ onMount(() => void loadSession());
 		padding-top: 3.75rem;
 	}
 	.account-theme-command {
-		position: absolute;
-		z-index: 10;
-		top: 1rem;
-		right: 1rem;
+		display: grid;
+		place-items: center;
 	}
 	.wordmark {
 		display: inline-flex;
@@ -1227,6 +1227,7 @@ onMount(() => void loadSession());
 		box-shadow: 0 0.75rem 2.5rem rgba(28, 53, 79, 0.06);
 	}
 	.account-frame {
+		position: relative;
 		display: grid;
 		gap: 1rem;
 	}
@@ -1244,6 +1245,14 @@ onMount(() => void loadSession());
 		grid-template-columns: auto minmax(0, 1fr) auto;
 		align-items: center;
 		gap: 0.75rem;
+	}
+	.identity-commands {
+		grid-column: 3;
+		grid-row: 1 / span 3;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.5rem;
 	}
 	.avatar-shell {
 		position: relative;
@@ -1443,8 +1452,6 @@ onMount(() => void loadSession());
 		border-left: 1px solid var(--sf-border);
 	}
 	.mobile-menu-command {
-		grid-column: 3;
-		grid-row: 1 / span 3;
 		min-width: 2.75rem;
 		min-height: 2.75rem;
 		display: inline-flex;
@@ -2143,7 +2150,7 @@ onMount(() => void loadSession());
 
 	/* Google Account-inspired structure, using SilentFlare color and type tokens. */
 	.accounts-stage {
-		padding: 4.5rem 1rem 1.5rem;
+		padding: 1rem;
 		background: var(--sf-page);
 	}
 	.accounts-workspace {
@@ -2305,8 +2312,14 @@ onMount(() => void loadSession());
 			padding-top: 0;
 		}
 		.account-theme-command {
-			top: 1.5rem;
-			right: max(1.5rem, calc((100vw - 76rem) / 2));
+			display: grid;
+		}
+		.identity-commands {
+			position: absolute;
+			z-index: 4;
+			top: 1rem;
+			right: 1rem;
+			display: block;
 		}
 		.account-frame {
 			height: clamp(40rem, calc(100svh - 3rem), 46rem);
@@ -2434,7 +2447,7 @@ onMount(() => void loadSession());
 	}
 	@media (max-width: 520px) {
 		.accounts-stage {
-			padding: 4rem 0.75rem 1rem;
+			padding: 0.75rem;
 		}
 		.account-content {
 			min-height: auto;
