@@ -55,6 +55,13 @@ function formatDate(value: string) {
 	}
 }
 
+function flagUrl(countryCode: string) {
+	const normalized = countryCode.trim().toLowerCase();
+	return /^[a-z]{2}$/.test(normalized)
+		? `https://flagcdn.com/${normalized}.svg`
+		: "";
+}
+
 function postHref(comment: PublicComment) {
 	return `https://blog.silentflare.com/posts/${encodeURIComponent(comment.postSlug)}/#discussion`;
 }
@@ -144,7 +151,7 @@ onMount(() => void loadProfile());
 					{#if profile.bio}<p class="bio">{profile.bio}</p>{/if}
 					<dl class="profile-facts">
 						{#if profile.displayRegion}
-							<div><dt><Icon icon="material-symbols:location-on-outline-rounded" />Region</dt><dd>{profile.displayRegion}</dd></div>
+							<div><dt><Icon icon="material-symbols:location-on-outline-rounded" />IP location</dt><dd class="region-value">{#if flagUrl(profile.displayRegionCode)}<img src={flagUrl(profile.displayRegionCode)} alt="" />{/if}<span>{profile.displayRegion}</span></dd></div>
 						{/if}
 						<div><dt><Icon icon="material-symbols:calendar-month-outline-rounded" />Member since</dt><dd>{formatDate(profile.createdAt)}</dd></div>
 						{#if profile.commentsVisible}
@@ -204,6 +211,8 @@ onMount(() => void loadProfile());
 	.profile-facts dt { display: flex; align-items: center; gap: 0.5rem; color: var(--sf-text-soft); font-size: 0.75rem; font-weight: 800; text-transform: uppercase; }
 	.profile-facts dt :global(svg) { color: var(--sf-accent-strong); font-size: 1.1rem; }
 	.profile-facts dd { margin: 0; color: var(--sf-text); font-weight: 700; line-height: 1.45; }
+	.profile-facts .region-value { display: flex; align-items: center; gap: 0.55rem; }
+	.profile-facts .region-value img { width: 1.4rem; height: 1rem; flex: none; border-radius: 2px; object-fit: cover; box-shadow: 0 0 0 1px var(--sf-border); }
 	.secondary-link, .primary-link { min-height: 2.75rem; display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; border-radius: var(--sf-radius-md); padding: 0 1rem; font-weight: 800; text-decoration: none; }
 	.secondary-link { margin-top: 1.5rem; border: 1px solid var(--sf-border-strong); color: var(--sf-text); background: var(--sf-surface); }
 	.profile-activity { min-width: 0; padding: 1.5rem; }
