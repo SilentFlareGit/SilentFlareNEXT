@@ -26,7 +26,7 @@ from starlette.requests import Request
 
 from app.config import settings
 from app.database import stable_hash
-from app.main import _apply_geo_policy_risk, _automatic_ban, _client_identity, _cloudflare_edge, _enforcement_risk, _entity_subjects, _geo_policy_action, _reconcile_entity_bans, _record_entity_signals, _resolve_account, app
+from app.main import _apply_entity_score, _apply_geo_policy_risk, _apply_permanent_allowlist, _automatic_ban, _client_identity, _cloudflare_edge, _enforcement_risk, _entity_subjects, _geo_policy_action, _reconcile_entity_bans, _record_entity_signals, _resolve_account, app
 from app.rate_limit import RateHit
 from app.risk import RiskResult
 from app.rules import RequestContext, RuleDecision
@@ -500,6 +500,25 @@ class ShieldApplicationTests(unittest.TestCase):
 	def test_entity_dashboard_supports_custom_adjustment_and_score_cap(self):
 		headers = {"Cookie": "sf_bot_session=valid-admin", "X-CSRF-Token": "admin-csrf"}
 		subject = app.state.entities.ensure_subject("ip", "203.0.113.70")
+		custom = self.client.put(
+			f"/__shield/api/admin/entities/{subject['id']}/score",
+			headers=headers,
+			json={"score": 37, "reason": "Exact integration score"},
+		)
+		self.assertEqual(custom.status_code, 200)
+		self.assertEqual(custom.json()["subject"]["currentScore"], 37)
+		set_high = self.client.put(
+			f"/__shield/api/admin/entities/{subject['id']}/score",
+			headers=headers,
+			json={"score": 100, "reason": "Integration escalation"},
+		)
+		self.assertEqual(set_high.json()["subject"]["effectiveScore"], 100)
+		set_zero = self.client.put(
+			f"/__shield/api/admin/entities/{subject['id']}/score",
+			headers=headers,
+			json={"score": 0, "reason": "Integration reset"},
+		)
+		self.assertEqual(set_zero.json()["subject"]["effectiveScore"], 0)
 		adjusted = self.client.post(
 			f"/__shield/api/admin/entities/{subject['id']}/adjust",
 			headers=headers,
@@ -514,6 +533,30 @@ class ShieldApplicationTests(unittest.TestCase):
 		)
 		self.assertEqual(exempted.status_code, 200)
 		self.assertEqual(exempted.json()["subject"]["effectiveScore"], 25)
+		allowlisted = self.client.post(
+			f"/__shield/api/admin/entities/{subject['id']}/overrides",
+			headers=headers,
+			json={
+				"override_type": "score_cap",
+				"value": 0,
+				"reason": "Permanent integration allowlist",
+				"duration_seconds": None,
+			},
+		)
+		self.assertEqual(allowlisted.status_code, 200)
+		self.assertEqual(
+			(
+				allowlisted.json()["subject"]["currentScore"],
+				allowlisted.json()["subject"]["effectiveScore"],
+			),
+			(0, 0),
+		)
+		blocked_raise = self.client.put(
+			f"/__shield/api/admin/entities/{subject['id']}/score",
+			headers=headers,
+			json={"score": 100, "reason": "Allowlist must stay zero"},
+		)
+		self.assertEqual(blocked_raise.json()["subject"]["effectiveScore"], 0)
 		listing = self.client.get("/__shield/api/admin/entities?subject_type=ip", headers=headers)
 		self.assertEqual(listing.status_code, 200)
 		self.assertTrue(any(item["id"] == subject["id"] for item in listing.json()["items"]))
@@ -522,6 +565,51 @@ class ShieldApplicationTests(unittest.TestCase):
 			{item["key"] for item in listing.json()["types"]},
 			{"account", "ip"},
 		)
+
+	def test_permanent_allowlist_forces_gateway_risk_to_zero_and_allow(self):
+		context = RequestContext(
+			request_id="permanent-allowlist-request",
+			host="blog.silentflare.com",
+			path="/allowlisted",
+			method="GET",
+			ip="203.0.113.71",
+		)
+		subject = app.state.entities.ensure_subject("ip", context.ip)
+		app.state.entities.set_score(
+			int(subject["id"]), 90, reason="Establish hostile score", actor="test"
+		)
+		app.state.entities.add_override(
+			int(subject["id"]),
+			override_type="score_cap",
+			value=0,
+			reason="Permanent trusted integration source",
+			actor="owner",
+			duration_seconds=None,
+		)
+		risk = RiskResult(100, "block", ["Explicit deny list"])
+		_apply_entity_score(app.state.entities, context, risk, {})
+		self.assertTrue(context.extra["permanent_allowlisted"])
+		self.assertEqual(risk.score, 0)
+		self.assertEqual(
+			_apply_permanent_allowlist(context, risk, ["block", "temporary_ban"]),
+			["allow"],
+		)
+		self.assertEqual((context.risk_score, risk.score, risk.level), (0, 0, "normal"))
+
+		admin_context = RequestContext(
+			request_id="protected-admin-request",
+			host="admin.silentflare.com",
+			path="/",
+			method="GET",
+			ip=context.ip,
+			extra={"permanent_allowlisted": True},
+		)
+		admin_risk = RiskResult(100, "block", ["Protected administration"])
+		self.assertEqual(
+			_apply_permanent_allowlist(admin_context, admin_risk, ["block"]),
+			["block"],
+		)
+		self.assertEqual(admin_risk.score, 100)
 
 	def test_every_gateway_factor_writes_subject_ledger_changes(self):
 		context = RequestContext(

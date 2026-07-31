@@ -191,6 +191,11 @@ class EntityAdjustmentInput(BaseModel):
 	duration_seconds: int | None = Field(default=86400, ge=300, le=31536000)
 
 
+class EntityScoreInput(BaseModel):
+	score: int = Field(ge=0, le=100)
+	reason: str = Field(min_length=3, max_length=300)
+
+
 class EntityOverrideInput(BaseModel):
 	override_type: str = Field(pattern=r"^(score_cap|score_floor|rule_exemption|response_exemption)$")
 	value: int | None = Field(default=None, ge=0, le=100)
@@ -1269,6 +1274,18 @@ def _apply_entity_score(
 			risk.score = max(0, min(100, risk.score + new_device_weight))
 			risk.level = entity_level(risk.score)
 			risk.reasons.append("New device observed")
+	permanently_allowlisted = any(
+		service.is_permanently_allowlisted(
+			int(subject["id"]), context.host, context.path
+		)
+		for subject in subjects.values()
+	)
+	if permanently_allowlisted:
+		risk.score = 0
+		risk.level = entity_level(0)
+		risk.reasons.append("Permanent entity allowlist")
+		context.extra["permanent_allowlisted"] = True
+		return subjects
 	root_scores = [
 		service.effective_score(subject, context.host, context.path)
 		for subject in subjects.values()
@@ -1293,6 +1310,22 @@ def _enforcement_risk(
 	):
 		return request_risk
 	return combined_risk
+
+
+def _apply_permanent_allowlist(
+	context: RequestContext,
+	risk: RiskResult,
+	actions: list[str],
+) -> list[str]:
+	if not context.extra.get("permanent_allowlisted") or context.host in {
+		"admin.silentflare.com",
+		"cms.silentflare.com",
+	}:
+		return actions
+	risk.score = 0
+	risk.level = entity_level(0)
+	context.risk_score = 0
+	return ["allow"]
 
 
 def _record_entity_signals(
@@ -2296,6 +2329,34 @@ async def admin_entity_ledger(subject_id: int, request: Request, before: int | N
 	return request.app.state.entities.ledger_page(subject_id, before=before, limit=limit)
 
 
+@app.put("/__shield/api/admin/entities/{subject_id}/score")
+async def admin_entity_score(subject_id: int, payload: EntityScoreInput, request: Request):
+	actor, _ = await _admin(request, csrf=True)
+	if not _root_risk_subject(request, subject_id):
+		raise HTTPException(status_code=404, detail="Risk subject not found")
+	try:
+		entry = request.app.state.entities.set_score(
+			subject_id,
+			payload.score,
+			reason=payload.reason,
+			actor=actor,
+		)
+	except ValueError as error:
+		raise HTTPException(status_code=422, detail=str(error)) from error
+	request.app.state.database.audit(
+		actor,
+		"risk_subject.score_set",
+		"risk_subject",
+		str(subject_id),
+		{
+			"score": payload.score,
+			"appliedScore": entry["score_after"],
+			"reason": payload.reason,
+		},
+	)
+	return {"ok": True, "entryId": entry["id"], "subject": request.app.state.entities.detail(subject_id)}
+
+
 @app.post("/__shield/api/admin/entities/{subject_id}/adjust")
 async def admin_entity_adjust(subject_id: int, payload: EntityAdjustmentInput, request: Request):
 	actor, _ = await _admin(request, csrf=True)
@@ -2352,6 +2413,8 @@ async def admin_entity_override(subject_id: int, payload: EntityOverrideInput, r
 		str(subject_id),
 		{"overrideType": payload.override_type, "value": payload.value, "durationSeconds": payload.duration_seconds},
 	)
+	if payload.override_type == "score_cap" and payload.value == 0 and payload.duration_seconds is None:
+		_reconcile_entity_bans(request.app.state.database, request.app.state.entities)
 	return {"ok": True, "overrideId": override["id"], "subject": request.app.state.entities.detail(subject_id)}
 
 
@@ -2849,6 +2912,7 @@ async def gateway(path: str, request: Request):
 			challenge_passed,
 			[geo_action] if geo_action else [],
 		)
+		actions = _apply_permanent_allowlist(context, risk, actions)
 		response_exempt = any(
 			request.app.state.entities.active_override(
 				int(subject["id"]), "response_exemption", context.host, context.path

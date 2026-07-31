@@ -158,6 +158,8 @@ Future account signals include impossible travel, new-country session use, passw
 
 Policy actions can override the score. An allow list is evaluated before score enforcement; owner-authenticated administration can still be subject to a separate non-bypassable safety policy.
 
+The Subjects workspace supports audited exact score assignment from 0 to 100, one-command reset to 0 or escalation to 100, and permanent entity allowlisting. A permanent allowlist is stored as an unscoped, non-expiring score cap of 0: the raw and effective entity score remain 0, queued signals cannot raise it, and ordinary protected services allow the matching entity. Admin and CMS hosts retain their non-bypassable safety policy. Revoking the control returns the entity to normal scoring without deleting its append-only history.
+
 ## 7. Gateway and Reverse Proxy Design
 
 Nginx restores the visitor address only when the socket peer belongs to Cloudflare's published network list, then sends that address to Shield in the internal `X-SF-Client-IP` header. Uvicorn proxy-header rewriting is disabled so Shield can independently verify the Nginx socket peer before accepting this header. Shield ignores public `X-Forwarded-For` input, removes edge identity and inbound `X-SF-Shield-*` values before proxying, resolves the host through an explicit upstream map, evaluates the request, creates new signed headers, and proxies with bounded connection/read timeouts.
@@ -229,6 +231,7 @@ Implemented routes:
 | `POST/DELETE /__shield/api/admin/geo-policies...` | Publish or disable country/region controls |
 | `GET/PUT /__shield/api/admin/geography/restrictions` | List the complete ISO catalog and audit country/region restrictions |
 | `PUT /__shield/api/admin/accounts/{digest}/risk` | Apply, replace, or clear an expiring manual risk adjustment |
+| `PUT /__shield/api/admin/entities/{id}/score` | Set an exact audited entity score from 0 to 100; permanent allowlisting uses the existing override endpoint with a non-expiring score cap of 0 |
 | `POST /__shield/api/admin/accounts/{digest}/response` | Send a signed re-authenticate, revoke-session, review, or freeze command to FastAPI |
 | `GET /__shield/api/admin/events` | Filter-ready recent risk events |
 | `GET /__shield/api/admin/intel` | Cached redacted IP intelligence |

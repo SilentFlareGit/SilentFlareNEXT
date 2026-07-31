@@ -268,6 +268,49 @@ class ShieldMvpTests(unittest.TestCase):
 		self.assertEqual(detail["ledger"][0]["reasonCode"], "SCORE_CAP_EXPIRED")
 		self.assertEqual((detail["ledger"][0]["scoreBefore"], detail["ledger"][0]["scoreAfter"]), (30, 80))
 
+	def test_exact_score_and_permanent_allowlist_keep_score_at_zero(self):
+		service = EntityRiskService(self.database, KEY)
+		subject = service.ensure_subject("ip", "203.0.113.46")
+		subject_id = int(subject["id"])
+
+		service.set_score(subject_id, 47, reason="Custom review score", actor="owner")
+		self.assertEqual(service.detail(subject_id)["currentScore"], 47)
+		service.set_score(subject_id, 100, reason="Escalate confirmed threat", actor="owner")
+		self.assertEqual(service.detail(subject_id)["currentScore"], 100)
+		service.set_score(subject_id, 0, reason="Clear false positive", actor="owner")
+		self.assertEqual(service.detail(subject_id)["currentScore"], 0)
+
+		service.set_score(subject_id, 65, reason="Prepare allowlist test", actor="owner")
+		allowlist = service.add_override(
+			subject_id,
+			override_type="score_cap",
+			value=0,
+			reason="Permanently trusted service",
+			actor="owner",
+			duration_seconds=None,
+		)
+		detail = service.detail(subject_id)
+		self.assertEqual((detail["currentScore"], detail["effectiveScore"]), (0, 0))
+		self.assertTrue(service.is_permanently_allowlisted(subject_id))
+		self.assertIsNone(allowlist["expires_at"])
+
+		service.set_score(subject_id, 100, reason="Attempted escalation", actor="owner")
+		service.adjust(
+			subject_id,
+			50,
+			reason_code="TEST_SIGNAL",
+			reason="Risk signal while allowlisted",
+			source="test",
+			actor="shield",
+		)
+		detail = service.detail(subject_id)
+		self.assertEqual((detail["currentScore"], detail["effectiveScore"]), (0, 0))
+
+		service.revoke_override(int(allowlist["id"]), "owner", "Permanent trust revoked")
+		self.assertEqual(service.detail(subject_id)["effectiveScore"], 65)
+		service.set_score(subject_id, 100, reason="Escalation after revocation", actor="owner")
+		self.assertEqual(service.detail(subject_id)["effectiveScore"], 100)
+
 	def test_gateway_signal_queue_is_applied_idempotently_by_worker(self):
 		service = EntityRiskService(self.database, KEY)
 		subject = service.ensure_subject("device", "device-reference")

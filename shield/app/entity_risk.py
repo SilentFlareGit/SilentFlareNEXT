@@ -120,7 +120,14 @@ class EntityRiskService:
 			if not subject:
 				raise ValueError("Risk subject not found")
 			before = int(subject["current_score"])
-			after = max(0, min(100, before + int(delta)))
+			permanent_allowlist = connection.execute(
+				"""SELECT 1 FROM risk_overrides WHERE subject_id = ?
+				AND override_type = 'score_cap' AND value_integer = 0
+				AND expires_at IS NULL AND revoked_at IS NULL
+				AND scope_host IS NULL AND scope_path IS NULL LIMIT 1""",
+				(subject_id,),
+			).fetchone()
+			after = 0 if permanent_allowlist else max(0, min(100, before + int(delta)))
 			applied_delta = after - before
 			if applied_delta == 0:
 				return {
@@ -285,6 +292,29 @@ class EntityRiskService:
 				(subject_id, entry["id"], entry["delta"], step, now + interval, expires_at, now),
 			)
 		return entry
+
+	def set_score(
+		self,
+		subject_id: int,
+		score: int,
+		*,
+		reason: str,
+		actor: str,
+		reason_code: str = "MANUAL_SCORE_SET",
+	) -> dict[str, Any]:
+		subject = self.subject_by_public_id(subject_id)
+		if not subject:
+			raise ValueError("Risk subject not found")
+		target = max(0, min(100, int(score)))
+		return self._apply(
+			subject_id,
+			target - int(subject["current_score"]),
+			reason_code=reason_code,
+			reason=reason,
+			source="admin",
+			source_ref=None,
+			actor=actor,
+		)
 
 	def record_signal(
 		self,
@@ -480,6 +510,15 @@ class EntityRiskService:
 		before_effective = self.effective_score(subject)
 		expires_at = now + duration_seconds if duration_seconds else None
 		ledger_entry_id = None
+		permanent_allowlist = (
+			override_type == "score_cap"
+			and value == 0
+			and duration_seconds is None
+			and scope_host is None
+			and scope_path is None
+		)
+		if permanent_allowlist and self.is_permanently_allowlisted(subject_id):
+			raise ValueError("Risk subject is already permanently allowlisted")
 		if override_type == "adjustment":
 			if value is None or value == 0:
 				raise ValueError("Adjustment requires a non-zero value")
@@ -493,13 +532,22 @@ class EntityRiskService:
 				duration_seconds=duration_seconds,
 			)
 			ledger_entry_id = entry["id"]
+		elif permanent_allowlist:
+			entry = self.set_score(
+				subject_id,
+				0,
+				reason=reason,
+				actor=actor,
+				reason_code="PERMANENT_ALLOWLIST_APPLIED",
+			)
+			ledger_entry_id = entry["id"]
 		override_id = self.database.execute(
 			"""INSERT INTO risk_overrides(subject_id, override_type, value_integer, scope_host,
 			scope_path, scope_rule_id, reason, created_at, created_by, expires_at, ledger_entry_id)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
 			(subject_id, override_type, value, scope_host, scope_path, scope_rule_id, reason, now, actor, expires_at, ledger_entry_id),
 		)
-		if override_type in {"score_cap", "score_floor"}:
+		if override_type in {"score_cap", "score_floor"} and not permanent_allowlist:
 			after_effective = self.effective_score(self.subject_by_public_id(subject_id) or subject)
 			self._record_effective_change(
 				subject_id,
@@ -546,7 +594,35 @@ class EntityRiskService:
 			"UPDATE risk_effects SET status = 'revoked', updated_at = ? WHERE source_entry_id = ?",
 			(now, override["ledger_entry_id"]),
 		)
-		if subject and override["override_type"] in {"score_cap", "score_floor"}:
+		permanent_allowlist = bool(
+			override["override_type"] == "score_cap"
+			and override["value_integer"] is not None
+			and int(override["value_integer"]) == 0
+			and override["expires_at"] is None
+			and override["scope_host"] is None
+			and override["scope_path"] is None
+		)
+		if subject and permanent_allowlist and override["ledger_entry_id"]:
+			entries = self.database.query(
+				"SELECT score_before FROM risk_ledger WHERE id = ? LIMIT 1",
+				(override["ledger_entry_id"],),
+			)
+			if entries:
+				restore_score = int(entries[0]["score_before"])
+				if subject["subject_type"] == "account":
+					restore_score = int(subject["base_score"])
+				self.set_score(
+					int(subject["id"]),
+					restore_score,
+					reason=reason,
+					actor=actor,
+					reason_code="PERMANENT_ALLOWLIST_REVOKED",
+				)
+		if (
+			subject
+			and override["override_type"] in {"score_cap", "score_floor"}
+			and not permanent_allowlist
+		):
 			after_effective = self.effective_score(self.subject_by_public_id(int(subject["id"])) or subject)
 			self._record_effective_change(
 				int(subject["id"]),
@@ -578,6 +654,20 @@ class EntityRiskService:
 			(subject_id, override_type, now, host, path),
 		)
 		return rows[0] if rows else None
+
+	def is_permanently_allowlisted(
+		self,
+		subject_id: int,
+		host: str = "",
+		path: str = "",
+	) -> bool:
+		override = self.active_override(subject_id, "score_cap", host, path)
+		return bool(
+			override
+			and override["value_integer"] is not None
+			and int(override["value_integer"]) == 0
+			and override["expires_at"] is None
+		)
 
 	def matching_rule_exemption(
 		self,

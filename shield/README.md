@@ -69,7 +69,7 @@ The split deployment uses one image with four least-purpose commands. `gateway` 
 
 Every Account and IP root has an independent score from 0 to 100. Changes are written to the append-only `risk_ledger` with before/after values, delta, raw/effective score kind, reason code, human reason, source, actor, expiry, and parent event. Gateway factors, account-posture factors, manual adjustments, cap/floor activation, revocation, expiry, decay, and automatic expiry all produce explicit entries rather than silently changing a score. Supporting identity and network facts are pseudonymous evidence, not independently adjustable scores. The Admin workspace pages the complete history instead of truncating it to the latest rows.
 
-Admin operators can apply an exact temporary positive or negative adjustment, a score cap or floor, or a scoped rule/response exemption. Authentication, authorization, CSRF, Admin-session enforcement, and the Admin/CMS non-bypassable perimeter are never disabled by a response exemption.
+Admin operators can set an exact score from 0 to 100, apply a temporary positive or negative adjustment, set a score cap or floor, or add a scoped rule/response exemption. The Subjects workspace includes audited shortcuts to set 100, reset to 0, and permanently allowlist an Account or IP root. Permanent allowlisting keeps both raw and effective scores at 0 despite later signals, while authentication, authorization, CSRF, Admin-session enforcement, and the Admin/CMS non-bypassable perimeter remain protected.
 
 ## Operational Guardrails
 

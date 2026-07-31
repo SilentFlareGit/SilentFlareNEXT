@@ -115,7 +115,7 @@ let detailLoading = $state(false);
 let ledgerLoading = $state(false);
 let saving = $state(false);
 let error = $state("");
-let action = $state("adjust");
+let action = $state("set_score");
 let amount = $state(10);
 let duration = $state(86400);
 let reason = $state("");
@@ -126,6 +126,12 @@ const activeOverrides = $derived(
 			!item.revokedAt &&
 			(!item.expiresAt || item.expiresAt > Date.now() / 1000),
 	) ?? [],
+);
+const permanentlyAllowlisted = $derived(
+	activeOverrides.some(
+		(item) =>
+			item.overrideType === "score_cap" && item.value === 0 && !item.expiresAt,
+	),
 );
 const subjectTypeIcons: Record<string, string> = {
 	account: "material-symbols:person-outline-rounded",
@@ -201,6 +207,7 @@ async function openSubject(subject: { id: number }) {
 	detailLoading = true;
 	try {
 		selected = await api<SubjectDetail>(`/entities/${subject.id}`);
+		if (action === "set_score") amount = selected.effectiveScore;
 		error = "";
 	} catch (cause) {
 		error =
@@ -239,11 +246,26 @@ async function loadOlderLedger() {
 	}
 }
 
-async function saveControl() {
+async function saveControl(requestedAction = action) {
 	if (!selected || !reason.trim()) return;
 	saving = true;
 	try {
-		if (action === "adjust") {
+		if (
+			requestedAction === "set_score" ||
+			requestedAction === "set_100" ||
+			requestedAction === "set_0"
+		) {
+			const score =
+				requestedAction === "set_100"
+					? 100
+					: requestedAction === "set_0"
+						? 0
+						: Number(amount);
+			await api(`/entities/${selected.id}/score`, {
+				method: "PUT",
+				body: JSON.stringify({ score, reason: reason.trim() }),
+			});
+		} else if (requestedAction === "adjust") {
 			await api(`/entities/${selected.id}/adjust`, {
 				method: "POST",
 				body: JSON.stringify({
@@ -252,13 +274,25 @@ async function saveControl() {
 					duration_seconds: Number(duration),
 				}),
 			});
+		} else if (requestedAction === "permanent_allowlist") {
+			await api(`/entities/${selected.id}/overrides`, {
+				method: "POST",
+				body: JSON.stringify({
+					override_type: "score_cap",
+					value: 0,
+					reason: reason.trim(),
+					duration_seconds: null,
+				}),
+			});
 		} else {
 			await api(`/entities/${selected.id}/overrides`, {
 				method: "POST",
 				body: JSON.stringify({
-					override_type: action,
+					override_type: requestedAction,
 					value:
-						action === "response_exemption" ? null : Math.abs(Number(amount)),
+						requestedAction === "response_exemption"
+							? null
+							: Math.abs(Number(amount)),
 					reason: reason.trim(),
 					duration_seconds: Number(duration),
 				}),
@@ -310,6 +344,14 @@ function formatTime(timestamp?: number) {
 
 function typeLabel(value: string) {
 	return value.replaceAll("_", " ");
+}
+
+function overrideLabel(item: Override) {
+	return item.overrideType === "score_cap" &&
+		item.value === 0 &&
+		!item.expiresAt
+		? "Permanent allowlist"
+		: typeLabel(item.overrideType);
 }
 
 onMount(loadSubjects);
@@ -402,6 +444,7 @@ onMount(loadSubjects);
 						<small>{typeLabel(selected.subjectType)}</small>
 						<h2>{selected.displayValue}</h2>
 						<p>Raw {selected.currentScore} / Effective {selected.effectiveScore} / {selected.riskLevel}</p>
+						{#if permanentlyAllowlisted}<span class="allowlist-status"><Icon icon="material-symbols:verified-user-outline-rounded" />Permanently allowlisted</span>{/if}
 					</div>
 					<button class="close-button" onclick={() => (selected = null)} aria-label="Close subject details">
 						<Icon icon="material-symbols:close-rounded" />
@@ -469,10 +512,16 @@ onMount(loadSubjects);
 					}}
 				>
 					<h3>Manual control</h3>
-					<div class="control-fields">
+					<div class="quick-controls" role="group" aria-label="Score shortcuts">
+						<button class="score-up" type="button" onclick={() => saveControl("set_100")} disabled={saving || !reason.trim() || permanentlyAllowlisted}><Icon icon="material-symbols:arrow-upward-rounded" />Set to 100</button>
+						<button class="score-down" type="button" onclick={() => saveControl("set_0")} disabled={saving || !reason.trim()}><Icon icon="material-symbols:arrow-downward-rounded" />Set to 0</button>
+						<button class="allowlist" type="button" onclick={() => saveControl("permanent_allowlist")} disabled={saving || !reason.trim() || permanentlyAllowlisted}><Icon icon="material-symbols:verified-user-outline-rounded" />{permanentlyAllowlisted ? "Allowlisted" : "Permanent allowlist"}</button>
+					</div>
+					<div class:compact={action === "set_score"} class="control-fields">
 						<label>
 							<span>Action</span>
 							<select bind:value={action}>
+								<option value="set_score">Set custom score</option>
 								<option value="adjust">Adjust score</option>
 								<option value="score_cap">Maximum score</option>
 								<option value="score_floor">Minimum score</option>
@@ -485,16 +534,18 @@ onMount(loadSubjects);
 								<input type="number" min={action === "adjust" ? -100 : 0} max="100" bind:value={amount} required />
 							</label>
 						{/if}
-						<label>
-							<span>Duration</span>
-							<select bind:value={duration}>
-								<option value={3600}>1 hour</option>
-								<option value={21600}>6 hours</option>
-								<option value={86400}>24 hours</option>
-								<option value={604800}>7 days</option>
-								<option value={2592000}>30 days</option>
-							</select>
-						</label>
+						{#if action !== "set_score"}
+							<label>
+								<span>Duration</span>
+								<select bind:value={duration}>
+									<option value={3600}>1 hour</option>
+									<option value={21600}>6 hours</option>
+									<option value={86400}>24 hours</option>
+									<option value={604800}>7 days</option>
+									<option value={2592000}>30 days</option>
+								</select>
+							</label>
+						{/if}
 						<label class="reason-field">
 							<span>Audit reason</span>
 							<input bind:value={reason} minlength="3" maxlength="300" required placeholder="Required" />
@@ -513,7 +564,7 @@ onMount(loadSubjects);
 						<div class="override-list">
 							{#each activeOverrides as item (item.id)}
 								<div>
-									<span><strong>{typeLabel(item.overrideType)}</strong><small>{item.value === null || item.value === undefined ? "Exempt" : item.value}</small></span>
+									<span><strong>{overrideLabel(item)}</strong><small>{item.value === null || item.value === undefined ? "Exempt" : item.value}</small></span>
 									<p>{item.reason}</p>
 									<time>{item.expiresAt ? `Until ${formatTime(item.expiresAt)}` : "No expiry"}</time>
 									<button class="icon-button" title="Revoke control" aria-label="Revoke control" onclick={() => revokeOverride(item)} disabled={saving}>
@@ -618,9 +669,16 @@ onMount(loadSubjects);
 	.detail-header { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: .75rem; align-items: center; border-bottom: 1px solid #dfe7ed; padding: 1rem; }
 	.detail-header h2 { margin: .1rem 0; overflow-wrap: anywhere; font-size: 1.125rem; }
 	.detail-header small, .detail-header p { margin: 0; color: #6c7e91; font-size: .75rem; text-transform: capitalize; }
+	.allowlist-status { display: inline-flex; align-items: center; gap: .35rem; margin-top: .4rem; color: #187348; font-size: .75rem; font-weight: 800; }
 	.close-button { display: none; }
 	.manual-control { border-bottom: 1px solid #dfe7ed; background: #f7fafc; padding: 1rem; }
 	h3 { margin: 0; font-size: .875rem; }
+	.quick-controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; margin-top: .75rem; }
+	.quick-controls button { min-height: 2.75rem; display: inline-flex; align-items: center; justify-content: center; gap: .4rem; border: 1px solid #cbd7e1; border-radius: .3rem; background: #fff; color: #425b70; font-weight: 800; }
+	.quick-controls button:disabled { cursor: not-allowed; opacity: .5; }
+	.quick-controls .score-up { border-color: #edc2c7; color: #ad3040; }
+	.quick-controls .score-down, .quick-controls .allowlist { border-color: #bcdcc9; color: #187348; }
+	.quick-controls .allowlist { background: #eef8f2; }
 	.control-fields { display: grid; grid-template-columns: 1fr; gap: .75rem; margin-top: .75rem; }
 	.detail-section { border-bottom: 1px solid #dfe7ed; }
 	.detail-section > header { min-height: 3rem; display: flex; align-items: center; justify-content: space-between; padding: 0 1rem; }
@@ -660,12 +718,17 @@ onMount(loadSubjects);
 		.close-button { display: inline-grid; }
 		.detail-header { grid-template-columns: auto minmax(0, 1fr) auto; }
 		.control-fields { grid-template-columns: minmax(8rem, 1fr) minmax(6rem, .7fr) minmax(8rem, .9fr) minmax(12rem, 1.6fr) auto; align-items: end; }
+		.control-fields.compact { grid-template-columns: minmax(10rem, 1fr) minmax(7rem, .7fr) minmax(14rem, 1.6fr) auto; }
 		.reason-field { min-width: 0; }
 		.ledger article { grid-template-columns: 2.75rem minmax(0, 1fr) auto; align-items: center; }
 		.ledger b { grid-column: 3; grid-row: 1; }
 		.linked-list time { display: block; }
 		.evidence-list > div { grid-template-columns: 2.5rem minmax(0, 1fr) auto; }
 		.evidence-list time { grid-column: 3; }
+	}
+
+	@media (max-width: 32rem) {
+		.quick-controls { grid-template-columns: 1fr; }
 	}
 
 	@media (min-width: 64rem) {
