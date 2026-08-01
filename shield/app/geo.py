@@ -274,6 +274,9 @@ class GeoService:
 		cached = self._cached(ip)
 		if cached:
 			return cached, "cache"
+		return await self.refresh(ip, headers)
+
+	async def refresh(self, ip: str, headers: dict[str, str]) -> tuple[IpIntel, str]:
 		cloudflare = self._from_cloudflare(ip, headers)
 		try:
 			address = ipaddress.ip_address(ip)

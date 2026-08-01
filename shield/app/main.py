@@ -2295,7 +2295,8 @@ async def admin_entity_detail(subject_id: int, request: Request):
 	if not detail:
 		raise HTTPException(status_code=404, detail="Risk subject not found")
 	if subject and subject["subject_type"] == "ip":
-		rows = request.app.state.database.query(
+		def intelligence_rows():
+			return request.app.state.database.query(
 			"""SELECT country_code AS countryCode, region, region_code AS regionCode, city,
 			latitude, longitude, asn,
 			network_prefix AS networkPrefix, country_source AS countrySource,
@@ -2305,6 +2306,11 @@ async def admin_entity_detail(subject_id: int, request: Request):
 			last_seen_at AS lastSeenAt FROM ip_intel WHERE ip_hash = ? LIMIT 1""",
 			(subject["subject_hash"],),
 		)
+
+		rows = intelligence_rows()
+		if not rows or rows[0]["latitude"] is None or rows[0]["longitude"] is None:
+			await request.app.state.geo.refresh(str(subject["display_value"]), {})
+			rows = intelligence_rows()
 		if rows:
 			rows[0]["conflictFields"] = json.loads(rows[0]["conflictFields"] or "[]")
 			country = pycountry.countries.get(alpha_2=str(rows[0]["countryCode"] or "").upper())

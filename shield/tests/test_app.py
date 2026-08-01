@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 
@@ -591,6 +592,43 @@ class ShieldApplicationTests(unittest.TestCase):
 		self.assertEqual(
 			(intelligence["latitude"], intelligence["longitude"]),
 			(37.386, -122.0838),
+		)
+
+	def test_ip_entity_detail_refreshes_legacy_intel_without_coordinates(self):
+		headers = {"Cookie": "sf_bot_session=valid-admin"}
+		ip = "198.51.100.42"
+		subject = app.state.entities.ensure_subject("ip", ip)
+		app.state.geo._store(
+			IpIntel(ip, country_code="BE", region="Bruxelles-Capitale", city="Brussels"),
+			{},
+		)
+
+		async def refresh(ip_address, request_headers):
+			self.assertEqual(ip_address, ip)
+			self.assertEqual(request_headers, {})
+			intel = IpIntel(
+				ip,
+				country_code="BE",
+				region="Bruxelles-Capitale",
+				city="Brussels",
+				latitude=50.8503,
+				longitude=4.3517,
+			)
+			app.state.geo._store(intel, {})
+			return intel, "provider"
+
+		with patch.object(app.state.geo, "refresh", side_effect=refresh) as mocked_refresh:
+			response = self.client.get(
+				f"/__shield/api/admin/entities/{subject['id']}", headers=headers
+			)
+
+		mocked_refresh.assert_awaited_once()
+		self.assertEqual(response.status_code, 200)
+		intelligence = response.json()["intelligence"]
+		self.assertEqual(intelligence["countryName"], "Belgium")
+		self.assertEqual(
+			(intelligence["latitude"], intelligence["longitude"]),
+			(50.8503, 4.3517),
 		)
 
 	def test_permanent_allowlist_forces_gateway_risk_to_zero_and_allow(self):

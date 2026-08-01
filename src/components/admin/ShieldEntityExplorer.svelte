@@ -199,6 +199,23 @@ function locationLabel(
 		"Unknown"
 	);
 }
+
+function googleMapsUrl(
+	intelligence: NonNullable<SubjectDetail["intelligence"]>,
+) {
+	const query = hasMapCoordinates(intelligence)
+		? `${intelligence.latitude},${intelligence.longitude}`
+		: [intelligence.city, intelligence.region, intelligence.countryName]
+				.filter(Boolean)
+				.join(", ");
+	return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+}
+
+function coordinateLabel(
+	intelligence: NonNullable<SubjectDetail["intelligence"]>,
+) {
+	return `${intelligence.latitude?.toFixed(4)}, ${intelligence.longitude?.toFixed(4)}`;
+}
 const controlModes: Array<{
 	value: Exclude<
 		ControlAction,
@@ -587,19 +604,23 @@ onMount(loadSubjects);
 							</div>
 							<div class="map-intel">
 								<div class="map-heading"><small>Region</small><span>{selected.intelligence.regionConfidence || "unknown"} / {selected.intelligence.regionSource || "no source"}</span></div>
-								<div
+								<a
 									class:map-unavailable={!hasMapCoordinates(selected.intelligence)}
 									class="mini-map"
-									role="img"
-									aria-label={hasMapCoordinates(selected.intelligence) ? `Approximate location: ${locationLabel(selected.intelligence)}` : `Location unavailable: ${locationLabel(selected.intelligence)}`}
+									href={googleMapsUrl(selected.intelligence)}
+									target="_blank"
+									rel="noreferrer"
+									title="Open location in Google Maps"
+									aria-label={`Open ${locationLabel(selected.intelligence)} in Google Maps`}
 									style={`--map-x: ${mapX(selected.intelligence.longitude)}%; --map-y: ${mapY(selected.intelligence.latitude)}%;`}
 								>
+									<span class="map-open" aria-hidden="true"><Icon icon="material-symbols:open-in-new-rounded" /></span>
 									{#if hasMapCoordinates(selected.intelligence)}
-										<span class:label-left={(selected.intelligence.longitude ?? 0) > 45} class="map-marker"><i></i><b>{locationLabel(selected.intelligence)}</b></span>
+										<span class:label-left={(selected.intelligence.longitude ?? 0) > 45} class="map-marker"><i></i><b><span>{locationLabel(selected.intelligence)}</span><em>{coordinateLabel(selected.intelligence)}</em></b></span>
 									{:else}
-										<strong>{selected.intelligence.region || selected.intelligence.countryName || "Location unavailable"}{selected.intelligence.regionCode ? ` (${selected.intelligence.regionCode})` : ""}</strong>
+										<strong><Icon icon="material-symbols:location-on-outline-rounded" /><span>{selected.intelligence.region || selected.intelligence.countryName || "Location unavailable"}{selected.intelligence.regionCode ? ` (${selected.intelligence.regionCode})` : ""}</span></strong>
 									{/if}
-								</div>
+								</a>
 							</div>
 							<div><small>ASN</small><strong>{selected.intelligence.asn || (selected.subjectType === "asn" ? selected.displayValue : "Unknown")}</strong><span>{selected.intelligence.asnConfidence || "unknown"} / {selected.intelligence.asnSource || `${selected.intelligence.observedIps || 0} observed IPs`}</span></div>
 							<div><small>{selected.subjectType === "asn" ? "Coverage" : "Prefix"}</small><strong>{selected.subjectType === "asn" ? `${selected.intelligence.observedCountries || 0} countries` : selected.intelligence.networkPrefix || "Not resolved"}</strong><span>{selected.intelligence.conflictFields?.length ? `Conflict: ${selected.intelligence.conflictFields.join(", ")}` : "No source conflict"}</span></div>
@@ -750,13 +771,21 @@ onMount(loadSubjects);
 	.map-intel { display: grid; gap: .5rem; }
 	.map-heading { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; }
 	.map-heading > span { text-align: right; }
-	.mini-map { position: relative; width: 100%; aspect-ratio: 2 / 1; min-height: 5.25rem; overflow: hidden; border: 1px solid #cfdae2; border-radius: .25rem; background: #dfeef6 url("/shield-world-map.png") center / 100% 100% no-repeat; }
+	.mini-map { position: relative; width: 100%; aspect-ratio: 2 / 1; min-height: 5.25rem; display: block; overflow: hidden; border: 1px solid #cfdae2; border-radius: .25rem; background: #dfeef6 url("/shield-world-map.png") center / 100% 100% no-repeat; color: inherit; cursor: zoom-in; text-decoration: none; transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }
+	.mini-map:hover { border-color: #5f9fc9; box-shadow: 0 .2rem .65rem rgb(32 83 117 / 18%); transform: translateY(-1px); }
+	.mini-map:focus-visible { outline: 2px solid #2584c4; outline-offset: 2px; }
+	.map-open { position: absolute; z-index: 2; top: .35rem; right: .35rem; width: 1.65rem; height: 1.65rem; display: grid !important; place-items: center; border: 1px solid rgb(24 50 71 / 14%); border-radius: .2rem; background: rgb(255 255 255 / 88%); color: #315d7a !important; box-shadow: 0 .1rem .25rem rgb(24 50 71 / 12%); }
+	.map-open :global(svg) { width: 1rem; height: 1rem; }
 	.map-marker { position: absolute; left: var(--map-x); top: var(--map-y); display: flex !important; align-items: center; gap: .3rem; transform: translate(-.35rem, -50%); overflow: visible !important; white-space: nowrap; }
 	.map-marker i { width: .7rem; height: .7rem; flex: 0 0 auto; border: .15rem solid #fff; border-radius: 50%; background: #cf3549; box-shadow: 0 0 0 1px #9b1f31, 0 .15rem .35rem rgb(30 52 68 / 30%); }
-	.map-marker b { max-width: 8.5rem; overflow: hidden; border-radius: .2rem; background: rgb(19 45 64 / 88%); color: #fff; padding: .18rem .32rem; font-size: .65rem; line-height: 1.2; text-overflow: ellipsis; }
+	.map-marker b { max-width: 8.5rem; display: grid; gap: .05rem; overflow: hidden; border-radius: .2rem; background: rgb(19 45 64 / 90%); color: #fff; padding: .2rem .35rem; line-height: 1.2; }
+	.map-marker b span { overflow: hidden; color: #fff; font-size: .65rem; text-overflow: ellipsis; }
+	.map-marker b em { color: rgb(255 255 255 / 72%); font-size: .55rem; font-style: normal; font-weight: 500; }
 	.map-marker.label-left { flex-direction: row-reverse; transform: translate(calc(-100% + .35rem), -50%); }
 	.mini-map.map-unavailable { display: grid; place-items: center; background-color: #edf4f8; filter: grayscale(.45); }
-	.mini-map.map-unavailable > strong { max-width: calc(100% - 1rem); margin: 0; border-radius: .2rem; background: rgb(255 255 255 / 88%); padding: .35rem .5rem; text-align: center; }
+	.mini-map.map-unavailable:hover, .mini-map.map-unavailable:focus-visible { filter: grayscale(0); }
+	.mini-map.map-unavailable > strong { max-width: calc(100% - 1rem); display: flex; align-items: center; gap: .3rem; margin: 0; border-radius: .2rem; background: rgb(255 255 255 / 88%); padding: .35rem .5rem; text-align: center; }
+	.mini-map.map-unavailable > strong :global(svg) { flex: 0 0 auto; color: #a93446; }
 	.filters { display: grid; gap: .75rem; margin-bottom: 1rem; border: 1px solid #d7e0e7; background: #fff; padding: .75rem; }
 	.filters > header { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
 	.filters > header strong { font-size: .8rem; }
@@ -889,7 +918,7 @@ onMount(loadSubjects);
 	}
 
 	@media (prefers-reduced-motion: reduce) {
-		.control-modes button { transition: none; }
+		.control-modes button, .mini-map { transition: none; }
 	}
 
 </style>
