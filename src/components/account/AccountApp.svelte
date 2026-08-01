@@ -1113,7 +1113,7 @@ onMount(() => void loadSession());
 								<Toggle label="System notifications" description="Important account and policy updates." bind:checked={notifications.systemEmail} />
 								<Toggle label="Email announcements" description="Occasional SilentFlare updates." bind:checked={notifications.marketingEmail} />
 							</div>
-							<Button icon="material-symbols:save-outline-rounded" loading={submitting} disabled={!notificationsChanged} onclick={() => void saveNotifications()}>Save notifications</Button>
+							<div class="card-actions"><Button icon="material-symbols:save-outline-rounded" loading={submitting} disabled={!notificationsChanged} onclick={() => void saveNotifications()}>Save notifications</Button></div>
 						</section>
 					{:else}
 						<div class="danger-grid">
@@ -1801,15 +1801,15 @@ onMount(() => void loadSession());
 		display: grid;
 		gap: 0;
 		overflow: hidden;
-		margin-bottom: 1rem;
+		margin-bottom: 1.25rem;
 		border: 1px solid var(--line-divider, rgba(70, 100, 130, 0.12));
-		border-radius: 0.8rem;
+		border-radius: 0.5rem;
 		background: var(--sf-surface-subtle);
 	}
 	.event-list {
 		display: grid;
-		gap: 0.7rem;
-		margin-bottom: 1rem;
+		gap: 1rem;
+		margin-bottom: 1.25rem;
 	}
 	.group-label {
 		margin: 0 0 0.75rem;
@@ -1823,9 +1823,9 @@ onMount(() => void loadSession());
 	.toggle-list label {
 		display: grid;
 		align-items: center;
-		gap: 0.85rem;
-		min-height: 4.75rem;
-		padding: 0.9rem;
+		gap: 1.15rem;
+		min-height: 5.75rem;
+		padding: 1.15rem 1.25rem;
 		border: 0;
 		border-radius: 0;
 		background: transparent;
@@ -1849,12 +1849,12 @@ onMount(() => void loadSession());
 	.session-list p,
 	.session-list small,
 	.toggle-list small {
-		margin: 0.25rem 0 0;
+		margin: 0.35rem 0 0;
 		overflow-wrap: anywhere;
 		color: var(--text-75, #6c7b8c);
 		font-size: 0.86rem;
 		font-weight: 600;
-		line-height: 1.45;
+		line-height: 1.55;
 	}
 	.status.good {
 		background: #e5f6ec;
@@ -1862,7 +1862,7 @@ onMount(() => void loadSession());
 	}
 	.totp-box,
 	.event-list div {
-		padding: 1rem;
+		padding: 1.25rem;
 		border: 1px solid var(--line-divider, rgba(70, 100, 130, 0.14));
 		border-radius: 0.9rem;
 		background: var(--btn-regular-bg, #f5f8fb);
@@ -1940,12 +1940,13 @@ onMount(() => void loadSession());
 	}
 	.toggle-list label {
 		grid-template-columns: minmax(0, 1fr) auto;
+		column-gap: 1.5rem;
 		cursor: pointer;
 	}
 	.toggle-list label span {
 		min-width: 0;
 		display: grid;
-		gap: 0.2rem;
+		gap: 0.3rem;
 	}
 	.toggle-list label strong {
 		line-height: 1.25;
@@ -1953,6 +1954,7 @@ onMount(() => void loadSession());
 	.toggle-list input {
 		appearance: none;
 		position: relative;
+		flex: none;
 		width: 3.05rem;
 		height: 1.7rem;
 		margin: 0;
@@ -2019,14 +2021,16 @@ onMount(() => void loadSession());
 	.risk-action {
 		display: flex;
 		flex-direction: column;
-		gap: 1rem;
-		padding: 1rem;
+		gap: 1.25rem;
+		padding: 1.25rem;
 		border: 1px solid var(--line-divider, rgba(70, 100, 130, 0.12));
 		border-radius: 0.8rem;
 		background: var(--btn-regular-bg, #f8fbfd);
 	}
 	.card-actions {
-		margin-top: 1rem;
+		display: flex;
+		align-items: center;
+		margin-top: 1.25rem;
 	}
 	.modal-backdrop {
 		position: fixed;
@@ -2243,13 +2247,13 @@ onMount(() => void loadSession());
 		padding: 0;
 	}
 	.account-card + .account-card {
-		margin-top: 1.5rem;
-		padding-top: 1.5rem;
+		margin-top: 2rem;
+		padding-top: 2rem;
 		border-top: 1px solid var(--sf-border);
 	}
 	.section-heading {
 		align-items: center;
-		margin-bottom: 1rem;
+		margin-bottom: 1.5rem;
 	}
 	.section-icon {
 		width: 2.5rem;
@@ -2262,16 +2266,17 @@ onMount(() => void loadSession());
 	.session-list,
 	.toggle-list {
 		gap: 0;
-		border-top: 1px solid var(--sf-border);
+		border: 1px solid var(--sf-border);
+		border-radius: var(--sf-radius-md);
+		background: var(--sf-surface-subtle);
 	}
 	.security-row,
 	.session-list article,
 	.toggle-list label {
-		min-height: 5rem;
+		min-height: 5.75rem;
 		border: 0;
-		border-bottom: 1px solid var(--sf-border);
 		border-radius: 0;
-		padding: 1rem clamp(1rem, 2.5vw, 1.5rem);
+		padding: 1.15rem clamp(1.25rem, 3vw, 1.75rem);
 		background: transparent;
 	}
 	.row-icon {
@@ -2279,7 +2284,7 @@ onMount(() => void loadSession());
 		color: var(--sf-accent-strong);
 	}
 	.risk-action {
-		padding: 1rem 0;
+		padding: 1.35rem 0;
 		border: 0;
 		border-top: 1px solid var(--sf-border);
 		border-radius: 0;
@@ -2426,6 +2431,7 @@ onMount(() => void loadSession());
 			flex-direction: row;
 			align-items: center;
 			justify-content: space-between;
+			gap: 2rem;
 		}
 		.danger-card {
 			flex-direction: row;
@@ -2501,7 +2507,10 @@ onMount(() => void loadSession());
 			grid-template-columns: repeat(2, minmax(0, 1fr));
 		}
 		.toggle-list label {
-			align-items: start;
+			min-height: 6rem;
+			align-items: center;
+			gap: 1rem;
+			padding: 1.1rem;
 		}
 	}
 	@keyframes spin {
