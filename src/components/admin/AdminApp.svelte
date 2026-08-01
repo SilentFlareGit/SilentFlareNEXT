@@ -597,7 +597,7 @@ onDestroy(() => {
 .sidebar-brand{min-height:4.75rem;display:flex;align-items:center;justify-content:space-between;gap:1rem;border-bottom:1px solid var(--sf-border);padding:1rem 1.1rem}
 .wordmark{min-width:0;display:flex;align-items:center;gap:.7rem;color:var(--sf-text);font-weight:800;text-decoration:none}
 .wordmark>span:first-child{width:2.25rem;height:2.25rem;display:grid;flex:none;place-items:center;border-radius:var(--sf-radius-md);background:var(--sf-accent);color:#fff}
-.wordmark>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wordmark>span:last-child{width:auto;height:auto;display:inline;overflow:hidden;border-radius:0;background:transparent;color:inherit;text-overflow:ellipsis;white-space:nowrap}
 .wordmark b{color:var(--sf-text-muted);font-weight:600}
 .admin-sidebar nav{min-height:0;overflow:auto;padding:.75rem}
 .nav-group{margin:0 0 .35rem;padding:0;border:0;background:transparent}
