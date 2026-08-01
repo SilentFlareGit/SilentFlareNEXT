@@ -79,9 +79,12 @@ type SubjectDetail = Subject & {
 	};
 	intelligence?: {
 		countryCode?: string;
+		countryName?: string;
 		region?: string;
 		regionCode?: string;
 		city?: string;
+		latitude?: number;
+		longitude?: number;
 		asn?: string;
 		networkPrefix?: string;
 		countrySource?: string;
@@ -159,6 +162,43 @@ const subjectTypeIcons: Record<string, string> = {
 const totalSubjects = $derived(
 	subjectTypes.reduce((total, item) => total + item.total, 0),
 );
+
+function countryFlagClass(countryCode?: string) {
+	const code = countryCode?.trim().toUpperCase() ?? "";
+	if (!/^[A-Z]{2}$/.test(code)) return "";
+	return `flag:${code}`;
+}
+
+function hasMapCoordinates(
+	intelligence: NonNullable<SubjectDetail["intelligence"]>,
+) {
+	return (
+		typeof intelligence.latitude === "number" &&
+		Number.isFinite(intelligence.latitude) &&
+		typeof intelligence.longitude === "number" &&
+		Number.isFinite(intelligence.longitude)
+	);
+}
+
+function mapX(longitude?: number) {
+	return Math.min(98, Math.max(2, (((longitude ?? 0) + 180) / 360) * 100));
+}
+
+function mapY(latitude?: number) {
+	return Math.min(96, Math.max(4, ((90 - (latitude ?? 0)) / 180) * 100));
+}
+
+function locationLabel(
+	intelligence: NonNullable<SubjectDetail["intelligence"]>,
+) {
+	return (
+		intelligence.city ||
+		intelligence.region ||
+		intelligence.countryName ||
+		intelligence.countryCode ||
+		"Unknown"
+	);
+}
 const controlModes: Array<{
 	value: Exclude<
 		ControlAction,
@@ -440,6 +480,10 @@ function overrideLabel(item: Override) {
 onMount(loadSubjects);
 </script>
 
+<svelte:head>
+	<link rel="stylesheet" href="/country-flags.css" />
+</svelte:head>
+
 <section class="subjects-workspace" class:detail-open={selected !== null}>
 	<section class="filters" aria-label="Subject filters">
 		<header><strong>Subject type</strong><span>{totalSubjects} total</span></header>
@@ -536,8 +580,27 @@ onMount(loadSubjects);
 
 					{#if selected.intelligence}
 						<section class="intelligence" aria-label="Network intelligence">
-							<div><small>Country</small><strong>{selected.intelligence.countryCode || "Unknown"}</strong><span>{selected.intelligence.countryConfidence || "unknown"} / {selected.intelligence.countrySource || "no source"}</span></div>
-							<div><small>Region</small><strong>{selected.intelligence.region || "Unknown"}{selected.intelligence.regionCode ? ` (${selected.intelligence.regionCode})` : ""}</strong><span>{selected.intelligence.regionConfidence || "unknown"} / {selected.intelligence.regionSource || "no source"}</span></div>
+							<div class="country-intel">
+								<small>Country</small>
+								<strong><span class={`country-flag ${countryFlagClass(selected.intelligence.countryCode)}`} aria-hidden="true"></span>{selected.intelligence.countryName || selected.intelligence.countryCode || "Unknown"}</strong>
+								<span>{selected.intelligence.countryConfidence || "unknown"} / {selected.intelligence.countrySource || "no source"}</span>
+							</div>
+							<div class="map-intel">
+								<div class="map-heading"><small>Region</small><span>{selected.intelligence.regionConfidence || "unknown"} / {selected.intelligence.regionSource || "no source"}</span></div>
+								<div
+									class:map-unavailable={!hasMapCoordinates(selected.intelligence)}
+									class="mini-map"
+									role="img"
+									aria-label={hasMapCoordinates(selected.intelligence) ? `Approximate location: ${locationLabel(selected.intelligence)}` : `Location unavailable: ${locationLabel(selected.intelligence)}`}
+									style={`--map-x: ${mapX(selected.intelligence.longitude)}%; --map-y: ${mapY(selected.intelligence.latitude)}%;`}
+								>
+									{#if hasMapCoordinates(selected.intelligence)}
+										<span class:label-left={(selected.intelligence.longitude ?? 0) > 45} class="map-marker"><i></i><b>{locationLabel(selected.intelligence)}</b></span>
+									{:else}
+										<strong>{selected.intelligence.region || selected.intelligence.countryName || "Location unavailable"}{selected.intelligence.regionCode ? ` (${selected.intelligence.regionCode})` : ""}</strong>
+									{/if}
+								</div>
+							</div>
 							<div><small>ASN</small><strong>{selected.intelligence.asn || (selected.subjectType === "asn" ? selected.displayValue : "Unknown")}</strong><span>{selected.intelligence.asnConfidence || "unknown"} / {selected.intelligence.asnSource || `${selected.intelligence.observedIps || 0} observed IPs`}</span></div>
 							<div><small>{selected.subjectType === "asn" ? "Coverage" : "Prefix"}</small><strong>{selected.subjectType === "asn" ? `${selected.intelligence.observedCountries || 0} countries` : selected.intelligence.networkPrefix || "Not resolved"}</strong><span>{selected.intelligence.conflictFields?.length ? `Conflict: ${selected.intelligence.conflictFields.join(", ")}` : "No source conflict"}</span></div>
 						</section>
@@ -677,11 +740,23 @@ onMount(loadSubjects);
 <style>
 	:global(*) { box-sizing: border-box; }
 	.subjects-workspace { min-width: 0; }
-	.intelligence, .posture { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-bottom: 1px solid #d7e0e7; background: #f8fbfd; }
+	.intelligence, .posture { display: grid; grid-template-columns: minmax(0, 1fr); border-bottom: 1px solid #d7e0e7; background: #f8fbfd; }
 	.intelligence > div, .posture > div { min-width: 0; padding: .75rem; border-right: 1px solid #e2e9ee; border-bottom: 1px solid #e2e9ee; }
-	.intelligence > div:nth-child(2n), .posture > div:nth-child(2n) { border-right: 0; }
+	.intelligence > div, .posture > div { border-right: 0; }
 	.intelligence small, .intelligence span, .posture small, .posture span { display: block; color: #63798b; font-size: .72rem; overflow-wrap: anywhere; }
 	.intelligence strong, .posture strong { display: block; margin: .18rem 0; color: #183247; font-size: .86rem; overflow-wrap: anywhere; }
+	.country-intel > strong { display: flex; align-items: center; gap: .5rem; }
+	.country-flag { --CountryFlagIcon-height: 1.15rem; flex: 0 0 auto; border: 1px solid rgb(24 50 71 / 12%); border-radius: .1rem; box-shadow: 0 .1rem .2rem rgb(24 50 71 / 12%); }
+	.map-intel { display: grid; gap: .5rem; }
+	.map-heading { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; }
+	.map-heading > span { text-align: right; }
+	.mini-map { position: relative; width: 100%; aspect-ratio: 2 / 1; min-height: 5.25rem; overflow: hidden; border: 1px solid #cfdae2; border-radius: .25rem; background: #dfeef6 url("/shield-world-map.png") center / 100% 100% no-repeat; }
+	.map-marker { position: absolute; left: var(--map-x); top: var(--map-y); display: flex !important; align-items: center; gap: .3rem; transform: translate(-.35rem, -50%); overflow: visible !important; white-space: nowrap; }
+	.map-marker i { width: .7rem; height: .7rem; flex: 0 0 auto; border: .15rem solid #fff; border-radius: 50%; background: #cf3549; box-shadow: 0 0 0 1px #9b1f31, 0 .15rem .35rem rgb(30 52 68 / 30%); }
+	.map-marker b { max-width: 8.5rem; overflow: hidden; border-radius: .2rem; background: rgb(19 45 64 / 88%); color: #fff; padding: .18rem .32rem; font-size: .65rem; line-height: 1.2; text-overflow: ellipsis; }
+	.map-marker.label-left { flex-direction: row-reverse; transform: translate(calc(-100% + .35rem), -50%); }
+	.mini-map.map-unavailable { display: grid; place-items: center; background-color: #edf4f8; filter: grayscale(.45); }
+	.mini-map.map-unavailable > strong { max-width: calc(100% - 1rem); margin: 0; border-radius: .2rem; background: rgb(255 255 255 / 88%); padding: .35rem .5rem; text-align: center; }
 	.filters { display: grid; gap: .75rem; margin-bottom: 1rem; border: 1px solid #d7e0e7; background: #fff; padding: .75rem; }
 	.filters > header { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
 	.filters > header strong { font-size: .8rem; }
@@ -786,6 +861,9 @@ onMount(loadSubjects);
 	.load-older { width: calc(100% - 2rem); margin: .75rem 1rem; border: 1px solid #cbd7e1; background: #fff; color: #425b70; font-weight: 700; }
 
 	@media (min-width: 48rem) {
+		.intelligence, .posture { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+		.intelligence > div, .posture > div { border-right: 1px solid #e2e9ee; }
+		.intelligence > div:nth-child(2n), .posture > div:nth-child(2n) { border-right: 0; }
 		.filter-tools { grid-template-columns: minmax(16rem, .8fr) minmax(18rem, 1.2fr); align-items: end; }
 		.subject-layout { grid-template-columns: minmax(20rem, 40%) minmax(0, 60%); min-height: 38rem; }
 		.subject-list { display: block !important; border-right: 1px solid #d7e0e7; }
@@ -814,10 +892,4 @@ onMount(loadSubjects);
 		.control-modes button { transition: none; }
 	}
 
-	@media (min-width: 64rem) {
-		.intelligence, .posture { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-		.intelligence > div, .posture > div { border-bottom: 0; }
-		.intelligence > div:nth-child(2), .posture > div:nth-child(2) { border-right: 1px solid #e2e9ee; }
-		.intelligence > div:last-child, .posture > div:last-child { border-right: 0; }
-	}
 </style>

@@ -2296,7 +2296,8 @@ async def admin_entity_detail(subject_id: int, request: Request):
 		raise HTTPException(status_code=404, detail="Risk subject not found")
 	if subject and subject["subject_type"] == "ip":
 		rows = request.app.state.database.query(
-			"""SELECT country_code AS countryCode, region, region_code AS regionCode, city, asn,
+			"""SELECT country_code AS countryCode, region, region_code AS regionCode, city,
+			latitude, longitude, asn,
 			network_prefix AS networkPrefix, country_source AS countrySource,
 			region_source AS regionSource, asn_source AS asnSource,
 			country_confidence AS countryConfidence, region_confidence AS regionConfidence,
@@ -2306,6 +2307,8 @@ async def admin_entity_detail(subject_id: int, request: Request):
 		)
 		if rows:
 			rows[0]["conflictFields"] = json.loads(rows[0]["conflictFields"] or "[]")
+			country = pycountry.countries.get(alpha_2=str(rows[0]["countryCode"] or "").upper())
+			rows[0]["countryName"] = country.name if country else ""
 			detail["intelligence"] = rows[0]
 	elif subject and subject["subject_type"] == "account":
 		rows = request.app.state.database.query(

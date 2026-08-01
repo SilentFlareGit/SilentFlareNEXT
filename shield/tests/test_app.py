@@ -26,6 +26,7 @@ from starlette.requests import Request
 
 from app.config import settings
 from app.database import stable_hash
+from app.geo import IpIntel
 from app.main import _apply_entity_score, _apply_geo_policy_risk, _apply_permanent_allowlist, _automatic_ban, _client_identity, _cloudflare_edge, _enforcement_risk, _entity_subjects, _geo_policy_action, _reconcile_entity_bans, _record_entity_signals, _resolve_account, app
 from app.rate_limit import RateHit
 from app.risk import RiskResult
@@ -564,6 +565,32 @@ class ShieldApplicationTests(unittest.TestCase):
 		self.assertEqual(
 			{item["key"] for item in listing.json()["types"]},
 			{"account", "ip"},
+		)
+
+	def test_ip_entity_detail_exposes_country_name_and_map_coordinates(self):
+		headers = {"Cookie": "sf_bot_session=valid-admin"}
+		ip = "8.8.4.4"
+		subject = app.state.entities.ensure_subject("ip", ip)
+		app.state.geo._store(
+			IpIntel(
+				ip,
+				country_code="US",
+				region="California",
+				city="Mountain View",
+				latitude=37.386,
+				longitude=-122.0838,
+			),
+			{},
+		)
+		response = self.client.get(
+			f"/__shield/api/admin/entities/{subject['id']}", headers=headers
+		)
+		self.assertEqual(response.status_code, 200)
+		intelligence = response.json()["intelligence"]
+		self.assertEqual(intelligence["countryName"], "United States")
+		self.assertEqual(
+			(intelligence["latitude"], intelligence["longitude"]),
+			(37.386, -122.0838),
 		)
 
 	def test_permanent_allowlist_forces_gateway_risk_to_zero_and_allow(self):

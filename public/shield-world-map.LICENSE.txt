@@ -1,0 +1,4 @@
+BlankMap-Equirectangular.svg
+Source: https://commons.wikimedia.org/wiki/File:BlankMap-Equirectangular.svg
+License: CC0 1.0 Universal public domain dedication
+Changes: rendered by Wikimedia Commons at 960 pixels wide and stored as PNG.

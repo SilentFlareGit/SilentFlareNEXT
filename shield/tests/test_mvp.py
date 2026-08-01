@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import tempfile
 import time
 import unittest
 from pathlib import Path
+
+import httpx
 
 from app.blocking import ban_error_code, ban_subject_display, normalize_ban_subject
 from app.database import Database
@@ -136,6 +139,44 @@ class ShieldMvpTests(unittest.TestCase):
 		self.assertEqual(intel.asn, "AS15169")
 		self.assertEqual(intel.country_confidence, "medium")
 		self.assertCountEqual(intel.conflict_fields, ["country", "region", "asn"])
+
+	def test_geo_provider_persists_valid_map_coordinates(self):
+		service = GeoService(
+			self.database,
+			KEY,
+			"https://geo.test/{ip}",
+			"https://routing.test/{ip}",
+			3600,
+			False,
+		)
+
+		async def lookup():
+			def provider(_request: httpx.Request) -> httpx.Response:
+				return httpx.Response(
+					200,
+					json={
+						"success": True,
+						"country_code": "US",
+						"region": "California",
+						"city": "Mountain View",
+						"latitude": 37.386,
+						"longitude": -122.0838,
+						"connection": {"asn": 15169},
+					},
+				)
+
+			async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as client:
+				return await service._provider(client, "8.8.8.8")
+
+		intel, raw = asyncio.run(lookup())
+		self.assertIsNotNone(intel)
+		assert intel is not None
+		self.assertEqual((intel.latitude, intel.longitude), (37.386, -122.0838))
+		service._store(intel, raw)
+		cached = service._cached("8.8.8.8")
+		self.assertIsNotNone(cached)
+		assert cached is not None
+		self.assertEqual((cached.latitude, cached.longitude), (37.386, -122.0838))
 
 	def test_risk_thresholds_are_configurable(self):
 		intel = IpIntel("203.0.113.8", is_proxy=True)

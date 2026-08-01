@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import math
 import time
 from dataclasses import asdict, dataclass, field
 
@@ -18,6 +19,8 @@ class IpIntel:
 	region: str = ""
 	region_code: str = ""
 	city: str = ""
+	latitude: float | None = None
+	longitude: float | None = None
 	timezone: str = ""
 	asn: str = ""
 	network_prefix: str = ""
@@ -48,6 +51,14 @@ def _normalized_asn(value: object) -> str:
 
 def _same_text(left: str, right: str) -> bool:
 	return " ".join(left.lower().split()) == " ".join(right.lower().split())
+
+
+def _coordinate(value: object, minimum: float, maximum: float) -> float | None:
+	try:
+		coordinate = float(value)
+	except (TypeError, ValueError):
+		return None
+	return coordinate if math.isfinite(coordinate) and minimum <= coordinate <= maximum else None
 
 
 class GeoService:
@@ -103,6 +114,8 @@ class GeoService:
 			region=row["region"] or "",
 			region_code=row.get("region_code") or "",
 			city=row["city"] or "",
+			latitude=_coordinate(row.get("latitude"), -90, 90),
+			longitude=_coordinate(row.get("longitude"), -180, 180),
 			timezone=row["timezone"] or "",
 			asn=row["asn"] or "",
 			network_prefix=row.get("network_prefix") or "",
@@ -128,14 +141,15 @@ class GeoService:
 		now = int(time.time())
 		self.database.execute(
 			"""
-			INSERT INTO ip_intel(ip_hash, ip_masked, country_code, region, city, timezone, asn, isp,
+			INSERT INTO ip_intel(ip_hash, ip_masked, country_code, region, city, latitude, longitude, timezone, asn, isp,
 			organization, ip_type, is_vpn, is_proxy, is_tor, is_crawler, is_malicious, risk_score,
 			first_seen_at, last_seen_at, cache_expires_at, raw_json, region_code, network_prefix,
 			country_source, region_source, asn_source, country_confidence, region_confidence,
 			asn_confidence, conflict_fields, provenance_status)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'verified')
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'verified')
 			ON CONFLICT(ip_hash) DO UPDATE SET country_code=excluded.country_code, region=excluded.region,
-			city=excluded.city, timezone=excluded.timezone, asn=excluded.asn, isp=excluded.isp,
+			city=excluded.city, latitude=excluded.latitude, longitude=excluded.longitude,
+			timezone=excluded.timezone, asn=excluded.asn, isp=excluded.isp,
 			organization=excluded.organization, ip_type=excluded.ip_type, is_vpn=excluded.is_vpn,
 			is_proxy=excluded.is_proxy, is_tor=excluded.is_tor, is_crawler=excluded.is_crawler,
 			is_malicious=excluded.is_malicious, risk_score=excluded.risk_score,
@@ -149,7 +163,8 @@ class GeoService:
 			""",
 			(
 				stable_hash(intel.ip, self.hash_key), mask_ip(intel.ip), intel.country_code, intel.region,
-				intel.city, intel.timezone, intel.asn, intel.isp, intel.organization, intel.ip_type,
+				intel.city, intel.latitude, intel.longitude, intel.timezone, intel.asn, intel.isp,
+				intel.organization, intel.ip_type,
 				int(intel.is_vpn), int(intel.is_proxy), int(intel.is_tor), int(intel.is_crawler),
 				int(intel.is_malicious), intel.provider_risk, now, now, now + self.cache_ttl,
 				json.dumps(raw, separators=(",", ":"))[:8000], intel.region_code,
@@ -174,6 +189,8 @@ class GeoService:
 				country_code=str(data.get("country_code") or "").upper(),
 				region=str(data.get("region") or "").strip(),
 				city=str(data.get("city") or "").strip(),
+				latitude=_coordinate(data.get("latitude"), -90, 90),
+				longitude=_coordinate(data.get("longitude"), -180, 180),
 				timezone=str((data.get("timezone") or {}).get("id") or ""),
 				asn=_normalized_asn(connection.get("asn")),
 				isp=str(connection.get("isp") or ""),
