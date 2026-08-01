@@ -31,10 +31,15 @@ type Site = {
 	updatedBy: string;
 };
 
-let { csrf }: { csrf: string } = $props();
-let activeView = $state<"subjects" | "factors" | "geography" | "sites">(
-	"subjects",
-);
+let {
+	csrf,
+	activeView = $bindable("subjects"),
+	embedded = false,
+}: {
+	csrf: string;
+	activeView?: "subjects" | "factors" | "geography" | "sites";
+	embedded?: boolean;
+} = $props();
 let factors = $state<Factor[]>([]);
 let sites = $state<Site[]>([]);
 let version = $state(0);
@@ -201,6 +206,7 @@ onMount(() => {
 </script>
 
 <div class="shield-shell">
+	{#if !embedded}
 	<header class="shell-header">
 		<div>
 			<span class="product-label">SilentFlare Shield</span>
@@ -233,6 +239,7 @@ onMount(() => {
 			<span>Sites</span>
 		</button>
 	</nav>
+	{/if}
 
 	{#if error}<div class="notice error" role="alert"><Icon icon="material-symbols:error-outline-rounded" />{error}</div>{/if}
 	{#if success}<div class="notice success" role="status"><Icon icon="material-symbols:check-circle-outline-rounded" />{success}</div>{/if}
@@ -423,4 +430,20 @@ onMount(() => {
 	@media (min-width: 64rem) {
 		.factor-columns { display: grid; grid-template-columns: minmax(14rem, 1.6fr) minmax(9rem, 1fr) 6rem; gap: .75rem; border-top: 1px solid #e2e8ed; background: #fbfcfd; color: #718398; padding: .5rem 1rem; font-size: .6875rem; font-weight: 700; text-transform: uppercase; }
 	}
+
+	.shield-shell { color: var(--sf-text); }
+	.workspace { overflow: hidden; border-color: var(--sf-border); border-radius: var(--sf-radius-md); background: var(--sf-surface); }
+	.workspace-header, .factor-group + .factor-group, .factor-row, .site-row, .save-bar, .confirmation > header, .confirmation footer { border-color: var(--sf-border); }
+	.workspace-header p, .factor-row small, .subject-types, .save-bar > div span, .site-row small, .site-state, .confirmation p { color: var(--sf-text-muted); }
+	.factor-group h3, .save-bar, .factor-columns { background: var(--sf-surface-subtle); color: var(--sf-text-muted); }
+	.factor-row input, .save-bar input, textarea, .secondary, .icon-button, .confirmation { border-color: var(--sf-border-strong); background: var(--sf-surface); }
+	.secondary, .icon-button { color: var(--sf-text-muted); }
+	.primary { border-color: var(--sf-accent); background: var(--sf-accent); }
+	.factor-row input:focus, .save-bar input:focus, textarea:focus { outline-color: var(--sf-accent); }
+	.site-icon { background: var(--sf-accent-soft); color: var(--sf-accent-strong); }
+	.site-state.enabled { color: var(--sf-success); }
+	.switch.enabled::before { background: var(--sf-success); }
+	.notice.error { border-color: var(--sf-danger); background: var(--sf-danger-soft); color: var(--sf-danger); }
+	.notice.success { border-color: var(--sf-success); background: var(--sf-success-soft); color: var(--sf-success); }
+	.confirmation { border-radius: var(--sf-radius-md); box-shadow: var(--sf-shadow-surface); }
 </style>

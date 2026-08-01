@@ -1,6 +1,7 @@
 <script lang="ts">
 import Icon from "@iconify/svelte";
 import { onDestroy, onMount } from "svelte";
+import { fade, slide } from "svelte/transition";
 import ShieldDashboard from "./ShieldDashboard.svelte";
 import SiteEditor from "./SiteEditor.svelte";
 
@@ -94,6 +95,8 @@ type AdminStatus = {
 	storage?: string;
 	totp_enabled?: boolean;
 };
+type AdminTab = "users" | "comments" | "shield" | "site";
+type ShieldView = "subjects" | "factors" | "geography" | "sites";
 
 let {
 	apiBase,
@@ -112,7 +115,13 @@ let csrf = $state(
 		: (sessionStorage.getItem("silentflare_admin_csrf") ?? ""),
 );
 let status = $state<AdminStatus | null>(null);
-let activeTab = $state<"users" | "comments" | "shield" | "site">("users");
+let activeTab = $state<AdminTab>("users");
+let shieldView = $state<ShieldView>("subjects");
+let shieldRefreshKey = $state(0);
+let navigationOpen = $state(false);
+let membersExpanded = $state(true);
+let protectionExpanded = $state(true);
+let publishingExpanded = $state(true);
 let users = $state<UserRow[]>([]);
 let comments = $state<CommentRow[]>([]);
 let selectedUser = $state<UserRow | null>(null);
@@ -150,6 +159,42 @@ const visibleComments = $derived(
 	),
 );
 const disabledCount = $derived(users.filter((user) => user.disabled_at).length);
+const pageMeta = $derived.by(() => {
+	if (activeTab === "users")
+		return {
+			eyebrow: "MEMBERS",
+			title: "Users",
+			icon: "material-symbols:group-outline-rounded",
+		};
+	if (activeTab === "comments")
+		return {
+			eyebrow: "MEMBERS",
+			title: "Comments",
+			icon: "material-symbols:forum-outline-rounded",
+		};
+	if (activeTab === "site")
+		return {
+			eyebrow: "PUBLISHING",
+			title: "Blog appearance",
+			icon: "material-symbols:format-paint-outline-rounded",
+		};
+	const shieldPages: Record<ShieldView, { title: string; icon: string }> = {
+		subjects: {
+			title: "Subjects",
+			icon: "material-symbols:person-search-outline-rounded",
+		},
+		factors: { title: "Risk factors", icon: "material-symbols:tune-rounded" },
+		geography: {
+			title: "Geography",
+			icon: "material-symbols:public-off-outline-rounded",
+		},
+		sites: {
+			title: "Protected sites",
+			icon: "material-symbols:domain-verification-outline-rounded",
+		},
+	};
+	return { eyebrow: "PROTECTION", ...shieldPages[shieldView] };
+});
 
 function formatTime(value?: string | null) {
 	if (!value) return "Not recorded";
@@ -400,11 +445,19 @@ async function logout() {
 	authenticated = false;
 	redirectToAuth();
 }
-async function switchTab(tab: "users" | "comments" | "shield" | "site") {
+async function switchTab(tab: AdminTab, nextShieldView?: ShieldView) {
 	activeTab = tab;
+	if (nextShieldView) shieldView = nextShieldView;
+	navigationOpen = false;
 	search = "";
 	if (tab === "users") await loadUsers();
 	else if (tab === "comments") await loadComments();
+}
+async function refreshActiveView() {
+	if (activeTab === "users") await loadUsers();
+	else if (activeTab === "comments") await loadComments();
+	else if (activeTab === "shield") shieldRefreshKey += 1;
+	else window.location.reload();
 }
 onMount(() => {
 	void checkExistingSession();
@@ -413,25 +466,50 @@ onMount(() => {
 		15_000,
 	);
 	const handleVisibility = () => void verifyAdminSession();
+	const handleKeydown = (event: KeyboardEvent) => {
+		if (event.key === "Escape") navigationOpen = false;
+	};
 	document.addEventListener("visibilitychange", handleVisibility);
-	return () =>
+	document.addEventListener("keydown", handleKeydown);
+	return () => {
 		document.removeEventListener("visibilitychange", handleVisibility);
+		document.removeEventListener("keydown", handleKeydown);
+	};
 });
 onDestroy(() => {
 	if (sessionCheckTimer) window.clearInterval(sessionCheckTimer);
 });
 </script>
 
-<main class="sf-app admin-shell">
+<main class="sf-app admin-stage">
 {#if checkingSession || !authenticated}
 	<section class="session-check"><span></span><p>Opening the secure Admin workspace...</p></section>
 {:else}
-	<header><a class="wordmark" href="https://blog.silentflare.com/"><span>S</span> SilentFlare <b>Admin</b></a><div class="header-actions"><button class="icon-button" title="Refresh" onclick={() => activeTab === "users" ? loadUsers() : activeTab === "comments" ? loadComments() : activeTab === "shield" ? switchTab("shield") : location.reload()}><Icon icon="material-symbols:refresh-rounded"/></button><button class="icon-button" title="Sign out" onclick={logout}><Icon icon="material-symbols:logout-rounded"/></button></div></header>
-	<div class="workspace">
-		<aside><p class="nav-label">Workspace</p><button class:active={activeTab === "users"} onclick={() => switchTab("users")}><Icon icon="material-symbols:group-outline-rounded"/>Users <span>{users.length}</span></button><button class:active={activeTab === "comments"} onclick={() => switchTab("comments")}><Icon icon="material-symbols:forum-outline-rounded"/>Comments</button><button class:active={activeTab === "shield"} onclick={() => switchTab("shield")}><Icon icon="material-symbols:shield-outline-rounded"/>Security</button><button class:active={activeTab === "site"} onclick={() => switchTab("site")}><Icon icon="material-symbols:format-paint-outline-rounded"/>Blog appearance</button><div class="storage"><i class:ok={status?.d1_configured}></i><div><strong>Account database</strong><small>{status?.d1_configured ? "Connected on FNS1" : "Unavailable"}</small></div></div></aside>
-		<section class="content">
-			{#if activeTab !== "shield"}<div class="page-head"><div><p class="eyebrow">{activeTab === "users" ? "ACCOUNT DIRECTORY" : activeTab === "comments" ? "COMMENT MODERATION" : "PUBLIC BLOG"}</p><h1>{activeTab === "users" ? "Users" : activeTab === "comments" ? "Comments" : "Blog appearance"}</h1></div>{#if activeTab !== "site"}<label class="search"><Icon icon="material-symbols:search-rounded"/><input bind:value={search} placeholder="Search"/></label>{/if}</div>{/if}
+	<section class="admin-frame">
+		{#if navigationOpen}<button class="navigation-backdrop" aria-label="Close navigation" onclick={() => navigationOpen = false}></button>{/if}
+		<aside class:open={navigationOpen} class="admin-sidebar" aria-label="Admin navigation">
+			<div class="sidebar-brand"><a class="wordmark" href="https://blog.silentflare.com/"><span>S</span><span>SilentFlare <b>Admin</b></span></a><button class="sidebar-close icon-button" aria-label="Close navigation" title="Close navigation" onclick={() => navigationOpen = false}><Icon icon="material-symbols:close-rounded"/></button></div>
+			<nav>
+				<section class="nav-group">
+					<button class="nav-group-toggle" aria-expanded={membersExpanded} onclick={() => membersExpanded = !membersExpanded}><Icon icon="material-symbols:badge-outline-rounded"/><span>Members</span><Icon class="group-chevron" icon="material-symbols:expand-more-rounded"/></button>
+					{#if membersExpanded}<div class="nav-children" transition:slide={{ duration: 160 }}><button class:active={activeTab === "users"} onclick={() => switchTab("users")}><Icon icon="material-symbols:group-outline-rounded"/><span>Users</span><i>{users.length}</i></button><button class:active={activeTab === "comments"} onclick={() => switchTab("comments")}><Icon icon="material-symbols:forum-outline-rounded"/><span>Comments</span></button></div>{/if}
+				</section>
+				<section class="nav-group">
+					<button class="nav-group-toggle" aria-expanded={protectionExpanded} onclick={() => protectionExpanded = !protectionExpanded}><Icon icon="material-symbols:shield-outline-rounded"/><span>Protection</span><Icon class="group-chevron" icon="material-symbols:expand-more-rounded"/></button>
+					{#if protectionExpanded}<div class="nav-children" transition:slide={{ duration: 160 }}><button class:active={activeTab === "shield" && shieldView === "subjects"} onclick={() => switchTab("shield", "subjects")}><Icon icon="material-symbols:person-search-outline-rounded"/><span>Subjects</span></button><button class:active={activeTab === "shield" && shieldView === "factors"} onclick={() => switchTab("shield", "factors")}><Icon icon="material-symbols:tune-rounded"/><span>Risk factors</span></button><button class:active={activeTab === "shield" && shieldView === "geography"} onclick={() => switchTab("shield", "geography")}><Icon icon="material-symbols:public-off-outline-rounded"/><span>Geography</span></button><button class:active={activeTab === "shield" && shieldView === "sites"} onclick={() => switchTab("shield", "sites")}><Icon icon="material-symbols:domain-verification-outline-rounded"/><span>Protected sites</span></button></div>{/if}
+				</section>
+				<section class="nav-group">
+					<button class="nav-group-toggle" aria-expanded={publishingExpanded} onclick={() => publishingExpanded = !publishingExpanded}><Icon icon="material-symbols:edit-square-outline-rounded"/><span>Publishing</span><Icon class="group-chevron" icon="material-symbols:expand-more-rounded"/></button>
+					{#if publishingExpanded}<div class="nav-children" transition:slide={{ duration: 160 }}><button class:active={activeTab === "site"} onclick={() => switchTab("site")}><Icon icon="material-symbols:format-paint-outline-rounded"/><span>Blog appearance</span></button></div>{/if}
+				</section>
+			</nav>
+			<div class="sidebar-footer"><div class="storage"><i class:ok={status?.d1_configured}></i><div><strong>Account database</strong><small>{status?.d1_configured ? "Connected on FNS1" : "Unavailable"}</small></div></div><button class="sidebar-signout" onclick={logout}><Icon icon="material-symbols:logout-rounded"/><span>Sign out</span></button></div>
+		</aside>
+		<section class="workspace-pane">
+			<header class="workspace-header"><button class="menu-button icon-button" aria-label="Open navigation" title="Open navigation" onclick={() => navigationOpen = true}><Icon icon="material-symbols:menu-rounded"/></button><span class="page-icon"><Icon icon={pageMeta.icon}/></span><div class="workspace-title"><p>{pageMeta.eyebrow}</p><h1>{pageMeta.title}</h1></div><div class="header-actions">{#if activeTab === "users" || activeTab === "comments"}<label class="search"><Icon icon="material-symbols:search-rounded"/><input bind:value={search} aria-label={`Search ${pageMeta.title.toLowerCase()}`} placeholder={`Search ${pageMeta.title.toLowerCase()}`}/></label>{/if}<button class="icon-button" title="Refresh" aria-label="Refresh current workspace" onclick={refreshActiveView}><Icon icon="material-symbols:refresh-rounded"/></button></div></header>
+			<div class="content-scroll"><section class="content">
 			{#if actionMessage}<div class:success={actionTone === "success"} class:error={actionTone === "error"} class="notice">{actionMessage}</div>{/if}
+			{#key activeTab === "shield" ? `shield-${shieldView}-${shieldRefreshKey}` : activeTab}<div class="view-transition" in:fade={{ duration: 180 }}>
 			{#if activeTab === "users"}
 				<div class="metrics"><div><span>Total users</span><strong>{users.length}</strong></div><div><span>Active sessions</span><strong>{users.reduce((sum, user) => sum + Number(user.active_session_count ?? 0), 0)}</strong></div><div><span>Disabled</span><strong>{disabledCount}</strong></div></div>
 				<div class="table-wrap"><table><thead><tr><th>User</th><th>Location / IP</th><th>Security</th><th>Registered</th><th>Activity</th><th></th></tr></thead><tbody>{#if loading}<tr><td colspan="6">Loading users...</td></tr>{:else}{#each visibleUsers as user}<tr><td><button class="user-cell" onclick={() => selectUser(user)}>{#if user.avatar_url}<img src={user.avatar_url} alt=""/>{:else}<span>{initials(user)}</span>{/if}<div><strong>{user.display_name || user.username}</strong><small>@{user.username}<br/>{user.email}</small></div></button></td><td><strong>{countryFlag(user.display_region_code)} {user.display_region || "Unknown"}</strong><small>{user.last_seen_ip || user.registration_ip || "IP not recorded"}</small></td><td><div class="badges"><i>{user.role}</i>{#if user.email_verified_at}<i>verified</i>{/if}{#if user.totp_enabled}<i>2FA</i>{/if}{#if user.profile_public === 0}<i>private</i>{/if}{#if user.security_email === 0}<i>no security mail</i>{/if}{#if user.deletion_review_status}<i class="danger">deletion {user.deletion_review_status}</i>{/if}{#if user.disabled_at}<i class="danger">disabled</i>{/if}</div></td><td>{formatTime(user.created_at)}</td><td><strong>{user.comment_count ?? 0} comments</strong><small>{user.active_session_count ?? 0} active sessions</small></td><td><button class="icon-button" title="View user" onclick={() => selectUser(user)}><Icon icon="material-symbols:chevron-right-rounded"/></button></td></tr>{/each}{/if}</tbody></table></div>
@@ -462,12 +540,14 @@ onDestroy(() => {
 				</div>
 				{#if commentNextCursor}<div class="load-more"><button class="secondary" disabled={loadingMoreComments} onclick={() => loadComments(true)}>{loadingMoreComments ? "Loading..." : "Load more"}</button></div>{/if}
 			{:else if activeTab === "shield"}
-				<ShieldDashboard {csrf} />
+				<ShieldDashboard {csrf} bind:activeView={shieldView} embedded />
 			{:else}
 				<SiteEditor {apiOrigin} {csrf} {fallbackAssets} />
 			{/if}
+			</div>{/key}
+			</section></div>
 		</section>
-	</div>
+	</section>
 	{#if selectedUser}
 		<div class="drawer-backdrop" role="presentation" onclick={() => selectedUser = null}></div>
 		<aside class="drawer">
@@ -506,4 +586,85 @@ onDestroy(() => {
 @media(max-width:800px){.workspace{grid-template-columns:1fr}.workspace>aside{display:flex;position:sticky;top:0;z-index:1;border-right:0;border-bottom:1px solid #dce5ed;padding:.5rem}.workspace>aside .nav-label,.storage{display:none}.workspace>aside button{flex:1;width:auto;min-height:3.5rem;justify-content:center}.content{padding:1rem}.page-head{align-items:stretch;flex-direction:column}.metrics{grid-template-columns:1fr 1fr}.metrics div:last-child{grid-column:1/-1;border-top:1px solid #e3eaf0}.comment-list footer{align-items:flex-start;flex-direction:column}.comment-list footer button{margin-left:0;width:100%}header{padding:0 1rem}}
 @media(max-width:480px){header{height:3.75rem}.wordmark b{display:none}.workspace{min-height:calc(100vh - 3.75rem)}.workspace>aside{display:grid;position:static;grid-template-columns:repeat(2,minmax(0,1fr));gap:.25rem}.workspace>aside button{min-width:0;font-size:.8rem}.metrics strong{font-size:1.25rem}.drawer-actions{display:grid;grid-template-columns:1fr}.drawer-actions button{width:100%}dl div{grid-template-columns:1fr;gap:.2rem}.filter{flex-direction:column}.filter .secondary,.comment-filter select{width:100%;max-width:none}.moderation-actions{display:grid;grid-template-columns:1fr}.moderation-actions button{width:100%}}
 @media(prefers-reduced-motion:reduce){.session-check span{animation:none}}
+
+/* Admin workbench shell: mobile first, then progressively enhanced. */
+:global(body){overflow:hidden;background:var(--sf-page);color:var(--sf-text)}
+.admin-stage{height:100svh;min-height:0;display:grid;place-items:stretch;overflow:hidden;padding:0;background:var(--sf-page)}
+.admin-frame{position:relative;width:100%;height:100svh;min-width:0;display:grid;grid-template-columns:minmax(0,1fr);overflow:hidden;border:0;background:var(--sf-surface)}
+.admin-sidebar{position:fixed;z-index:31;inset:0 auto 0 0;width:min(18rem,calc(100vw - 3rem));display:grid;grid-template-rows:auto minmax(0,1fr) auto;overflow:hidden;border:0;border-right:1px solid var(--sf-border);padding:0;background:var(--sf-surface-subtle);transform:translateX(-102%);transition:transform 180ms ease}
+.admin-sidebar.open{transform:translateX(0)}
+.navigation-backdrop{position:fixed;z-index:30;inset:0;width:100%;height:100%;min-height:0;border:0;border-radius:0;background:rgb(24 34 48 / 38%);cursor:pointer}
+.sidebar-brand{min-height:4.75rem;display:flex;align-items:center;justify-content:space-between;gap:1rem;border-bottom:1px solid var(--sf-border);padding:1rem 1.1rem}
+.wordmark{min-width:0;display:flex;align-items:center;gap:.7rem;color:var(--sf-text);font-weight:800;text-decoration:none}
+.wordmark>span:first-child{width:2.25rem;height:2.25rem;display:grid;flex:none;place-items:center;border-radius:var(--sf-radius-md);background:var(--sf-accent);color:#fff}
+.wordmark>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wordmark b{color:var(--sf-text-muted);font-weight:600}
+.admin-sidebar nav{min-height:0;overflow:auto;padding:.75rem}
+.nav-group{margin:0 0 .35rem;padding:0;border:0;background:transparent}
+.nav-group-toggle,.nav-children button,.sidebar-signout{width:100%;min-height:2.75rem;display:grid;grid-template-columns:1.25rem minmax(0,1fr) auto;align-items:center;gap:.65rem;border:0;border-radius:var(--sf-radius-md);padding:0 .75rem;background:transparent;color:var(--sf-text-muted);font-weight:800;text-align:left;cursor:pointer}
+.nav-group-toggle{color:var(--sf-text-soft);font-size:.72rem;text-transform:uppercase}
+.nav-group-toggle .group-chevron{transition:transform 160ms ease}
+.nav-group-toggle[aria-expanded="true"] .group-chevron{transform:rotate(180deg)}
+.nav-children{display:grid;gap:.2rem;margin:.15rem 0 .65rem .6rem;border-left:1px solid var(--sf-border);padding-left:.55rem;overflow:hidden}
+.nav-children button{font-size:.9rem}
+.nav-children button:hover,.sidebar-signout:hover{background:var(--sf-surface-muted);color:var(--sf-text)}
+.nav-children button.active{background:var(--sf-accent-soft);color:var(--sf-accent-strong)}
+.nav-children i{min-width:1.75rem;border-radius:999px;padding:.16rem .42rem;background:var(--sf-surface);color:var(--sf-text-soft);font-size:.7rem;font-style:normal;text-align:center}
+.sidebar-footer{border-top:1px solid var(--sf-border);padding:.75rem}
+.storage{display:flex;gap:.7rem;margin:0;padding:.75rem;color:var(--sf-text)}
+.storage i{width:.55rem;height:.55rem;flex:none;margin-top:.25rem;border-radius:50%;background:var(--sf-danger)}
+.storage i.ok{background:var(--sf-success)}
+.storage strong,.storage small{display:block}.storage strong{font-size:.82rem}.storage small{margin-top:.2rem;color:var(--sf-text-soft);font-size:.72rem;line-height:1.35}
+.sidebar-signout{color:var(--sf-danger)}
+.workspace-pane{min-width:0;min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr);background:var(--sf-surface)}
+.workspace-header{min-height:auto;display:grid;grid-template-columns:auto auto minmax(0,1fr);align-items:center;gap:.75rem;border:0;border-bottom:1px solid var(--sf-border);padding:1rem;background:var(--sf-surface)}
+.menu-button,.sidebar-close,.icon-button{width:var(--sf-control-height);height:var(--sf-control-height);min-width:var(--sf-control-height);min-height:var(--sf-control-height);display:inline-grid;place-items:center;border:1px solid var(--sf-border-strong);border-radius:var(--sf-radius-md);padding:0;background:var(--sf-surface);color:var(--sf-text-muted);cursor:pointer}
+.icon-button:hover{background:var(--sf-surface-muted);color:var(--sf-accent-strong)}
+.page-icon{width:2.75rem;height:2.75rem;display:grid;flex:none;place-items:center;border-radius:50%;background:var(--sf-accent-soft);color:var(--sf-accent-strong);font-size:1.35rem}
+.workspace-title{min-width:0}.workspace-title p{margin:0;color:var(--sf-accent-strong);font-size:.7rem;font-weight:800}.workspace-title h1{overflow:hidden;margin:.2rem 0 0;color:var(--sf-text);font-size:1.35rem;line-height:1.2;text-overflow:ellipsis;white-space:nowrap}
+.header-actions{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.65rem}
+.search{width:100%;height:var(--sf-control-height);display:flex;align-items:center;gap:.55rem;border:1px solid var(--sf-border-strong);border-radius:var(--sf-radius-md);padding:0 .8rem;background:var(--sf-surface);color:var(--sf-text-soft)}
+.search input{min-width:0;width:100%;border:0;padding:0;outline:0;background:transparent;color:var(--sf-text);font:inherit}
+.content-scroll{min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain;background:var(--sf-page)}
+.content{box-sizing:border-box;width:100%;max-width:96rem;min-width:0;margin:0 auto;padding:1rem;background:transparent}
+.view-transition{min-width:0}
+.notice{margin:0 0 1rem;padding:.85rem 1rem;border:1px solid var(--sf-border);border-radius:var(--sf-radius-md);background:var(--sf-surface-subtle);color:var(--sf-text-muted);font-size:.88rem;line-height:1.5}
+.notice.error{border-color:color-mix(in srgb,var(--sf-danger) 30%,var(--sf-border));background:var(--sf-danger-soft);color:var(--sf-danger)}
+.notice.success{border-color:color-mix(in srgb,var(--sf-success) 30%,var(--sf-border));background:var(--sf-success-soft);color:var(--sf-success)}
+.metrics{display:grid;grid-template-columns:1fr;margin:0 0 1rem;overflow:hidden;border:1px solid var(--sf-border);border-radius:var(--sf-radius-md);background:var(--sf-surface)}
+.metrics div{min-height:5rem;padding:1rem 1.25rem;border:0;border-bottom:1px solid var(--sf-border)}
+.metrics div:last-child{border:0}.metrics span{color:var(--sf-text-muted);font-size:.78rem}.metrics strong{margin-top:.35rem;color:var(--sf-text);font-size:1.45rem}
+.table-wrap{max-width:100%;overflow:auto;border:1px solid var(--sf-border);border-radius:var(--sf-radius-md);background:var(--sf-surface);overscroll-behavior-x:contain}
+table{min-width:58rem;width:100%;border-collapse:collapse;white-space:nowrap}
+th,td{padding:1rem 1.15rem;border-bottom:1px solid var(--sf-border);font-size:.82rem;text-align:left}
+th{position:sticky;z-index:1;top:0;background:var(--sf-surface-subtle);color:var(--sf-text-muted);font-size:.7rem;text-transform:uppercase}
+td{color:var(--sf-text)}td>small{margin-top:.3rem;color:var(--sf-text-muted);line-height:1.4}
+.user-cell{min-height:2.75rem;color:var(--sf-text)}
+.badges{display:flex;flex-wrap:wrap;gap:.35rem}.badges i{background:var(--sf-accent-soft);color:var(--sf-accent-strong)}.badges i.danger{background:var(--sf-danger-soft);color:var(--sf-danger)}
+.filter{display:grid;grid-template-columns:1fr;gap:.75rem;max-width:none;margin-bottom:1rem;padding:1rem;border:1px solid var(--sf-border);border-radius:var(--sf-radius-md);background:var(--sf-surface)}
+.field{min-height:var(--sf-control-height);border:1px solid var(--sf-border-strong);border-radius:var(--sf-radius-md);padding:.7rem .8rem;background:var(--sf-surface);color:var(--sf-text)}
+.primary,.secondary,.danger-button{min-height:var(--sf-control-height);border-radius:var(--sf-radius-md);padding:0 1rem}
+.primary{background:var(--sf-accent);color:#fff}.secondary{border-color:var(--sf-border-strong);background:var(--sf-surface);color:var(--sf-text)}.danger-button{border-color:color-mix(in srgb,var(--sf-danger) 30%,var(--sf-border));background:var(--sf-danger-soft);color:var(--sf-danger)}
+.result-count{margin:0 0 1rem;color:var(--sf-text-muted);font-size:.82rem}
+.comment-list{gap:1rem}.comment-list article{padding:1.25rem;border-color:var(--sf-border);border-radius:var(--sf-radius-md);background:var(--sf-surface)}
+.comment-list article>p{margin:1rem 0;line-height:1.65}.comment-list footer{align-items:flex-start;flex-direction:column;gap:.75rem}.comment-list footer button{width:100%;margin:0}
+.drawer{z-index:41;width:min(36rem,100%);border-left:1px solid var(--sf-border);background:var(--sf-surface);color:var(--sf-text);box-shadow:-1rem 0 3rem rgb(28 53 79 / 12%)}
+.drawer-backdrop{z-index:40}.drawer-head,.drawer-actions{background:var(--sf-surface);border-color:var(--sf-border)}
+.drawer-body section{border-color:var(--sf-border)}dt,.mini-comment small,.drawer-empty{color:var(--sf-text-muted)}
+.moderation-modal{border-color:var(--sf-border);border-radius:var(--sf-radius-lg);background:var(--sf-surface);color:var(--sf-text)}
+.moderation-actions{display:grid;grid-template-columns:1fr;gap:.65rem}.moderation-actions button{width:100%}
+
+@media(min-width:640px){
+	.workspace-header{grid-template-columns:auto auto minmax(0,1fr) auto;padding:1rem 1.25rem}.header-actions{grid-column:auto;display:flex}.search{width:min(19rem,32vw)}
+	.metrics{grid-template-columns:repeat(3,1fr)}.metrics div{border-right:1px solid var(--sf-border);border-bottom:0}
+	.filter{grid-template-columns:minmax(15rem,1fr) minmax(9rem,12rem) auto;align-items:end}.comment-list footer{align-items:center;flex-direction:row;flex-wrap:wrap}.comment-list footer button{width:auto;margin-left:auto}
+	.moderation-actions{display:flex;justify-content:flex-end}.moderation-actions button{width:auto}
+}
+@media(min-width:1024px){
+	.admin-stage{place-items:center;padding:1.5rem}.admin-frame{height:min(60rem,calc(100svh - 3rem));min-height:38rem;grid-template-columns:17rem minmax(0,1fr);border:1px solid var(--sf-border-strong);border-radius:var(--sf-radius-lg);box-shadow:var(--sf-shadow-surface)}
+	.admin-sidebar{position:static;z-index:auto;width:auto;transform:none}.navigation-backdrop,.menu-button,.sidebar-close{display:none}
+	.workspace-header{min-height:5rem;padding:1rem 1.5rem}.content{padding:1.5rem clamp(1.5rem,3vw,2.5rem) 2.5rem}
+}
+@media(min-width:1280px){.content{padding-inline:3rem}.search{width:22rem}}
+@media(prefers-reduced-motion:reduce){.admin-sidebar,.nav-group-toggle .group-chevron{transition:none}}
 </style>
