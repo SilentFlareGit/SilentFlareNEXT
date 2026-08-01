@@ -165,7 +165,7 @@ Accounts is a standalone account workspace. Do not restore the public blog navba
 - Admin must stay light-only and match the Blog's pale blue/white visual language.
 - `src/pages/admin/index.astro` must not add the `dark` class, read the Blog theme preference, or apply a dark body background.
 - The unauthenticated Admin screen uses one responsive owner-console shell.
-- The authenticated workspace provides compact Users and Comments navigation, account totals, active-session and disabled-user metrics, search/filter controls, responsive user table, comment moderation rows, and user-detail drawer.
+- The authenticated workspace uses one `Shield` navigation group for the account directory, comment moderation, risk subjects, risk factors, geography, and protected sites. Account records and comment mutations remain FastAPI-owned; Shield views call the separate Shield control API. The workspace still provides account totals, active-session and disabled-user metrics, search/filter controls, a responsive user table, comment moderation rows, and a user-detail drawer.
 - User rows and the detail drawer expose deletion-review state without exposing verification material. Pending requests provide explicit owner-only approve and reject actions.
 - On narrow screens, tables may scroll inside bounded containers, but the document itself must not overflow horizontally.
 - Admin data actions require admin session plus `X-CSRF-Token`.

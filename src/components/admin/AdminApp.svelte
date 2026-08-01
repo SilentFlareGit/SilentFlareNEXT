@@ -119,8 +119,7 @@ let activeTab = $state<AdminTab>("users");
 let shieldView = $state<ShieldView>("subjects");
 let shieldRefreshKey = $state(0);
 let navigationOpen = $state(false);
-let membersExpanded = $state(true);
-let protectionExpanded = $state(true);
+let shieldExpanded = $state(true);
 let publishingExpanded = $state(true);
 let users = $state<UserRow[]>([]);
 let comments = $state<CommentRow[]>([]);
@@ -162,14 +161,14 @@ const disabledCount = $derived(users.filter((user) => user.disabled_at).length);
 const pageMeta = $derived.by(() => {
 	if (activeTab === "users")
 		return {
-			eyebrow: "MEMBERS",
-			title: "Users",
+			eyebrow: "SHIELD",
+			title: "Account directory",
 			icon: "material-symbols:group-outline-rounded",
 		};
 	if (activeTab === "comments")
 		return {
-			eyebrow: "MEMBERS",
-			title: "Comments",
+			eyebrow: "SHIELD",
+			title: "Comment moderation",
 			icon: "material-symbols:forum-outline-rounded",
 		};
 	if (activeTab === "site")
@@ -193,7 +192,7 @@ const pageMeta = $derived.by(() => {
 			icon: "material-symbols:domain-verification-outline-rounded",
 		},
 	};
-	return { eyebrow: "PROTECTION", ...shieldPages[shieldView] };
+	return { eyebrow: "SHIELD", ...shieldPages[shieldView] };
 });
 
 function formatTime(value?: string | null) {
@@ -491,12 +490,8 @@ onDestroy(() => {
 			<div class="sidebar-brand"><a class="wordmark" href="https://blog.silentflare.com/"><span>S</span><span>SilentFlare <b>Admin</b></span></a><button class="sidebar-close icon-button" aria-label="Close navigation" title="Close navigation" onclick={() => navigationOpen = false}><Icon icon="material-symbols:close-rounded"/></button></div>
 			<nav>
 				<section class="nav-group">
-					<button class="nav-group-toggle" aria-expanded={membersExpanded} onclick={() => membersExpanded = !membersExpanded}><Icon icon="material-symbols:badge-outline-rounded"/><span>Members</span><Icon class="group-chevron" icon="material-symbols:expand-more-rounded"/></button>
-					{#if membersExpanded}<div class="nav-children" transition:slide={{ duration: 160 }}><button class:active={activeTab === "users"} onclick={() => switchTab("users")}><Icon icon="material-symbols:group-outline-rounded"/><span>Users</span><i>{users.length}</i></button><button class:active={activeTab === "comments"} onclick={() => switchTab("comments")}><Icon icon="material-symbols:forum-outline-rounded"/><span>Comments</span></button></div>{/if}
-				</section>
-				<section class="nav-group">
-					<button class="nav-group-toggle" aria-expanded={protectionExpanded} onclick={() => protectionExpanded = !protectionExpanded}><Icon icon="material-symbols:shield-outline-rounded"/><span>Protection</span><Icon class="group-chevron" icon="material-symbols:expand-more-rounded"/></button>
-					{#if protectionExpanded}<div class="nav-children" transition:slide={{ duration: 160 }}><button class:active={activeTab === "shield" && shieldView === "subjects"} onclick={() => switchTab("shield", "subjects")}><Icon icon="material-symbols:person-search-outline-rounded"/><span>Subjects</span></button><button class:active={activeTab === "shield" && shieldView === "factors"} onclick={() => switchTab("shield", "factors")}><Icon icon="material-symbols:tune-rounded"/><span>Risk factors</span></button><button class:active={activeTab === "shield" && shieldView === "geography"} onclick={() => switchTab("shield", "geography")}><Icon icon="material-symbols:public-off-outline-rounded"/><span>Geography</span></button><button class:active={activeTab === "shield" && shieldView === "sites"} onclick={() => switchTab("shield", "sites")}><Icon icon="material-symbols:domain-verification-outline-rounded"/><span>Protected sites</span></button></div>{/if}
+					<button class="nav-group-toggle" aria-expanded={shieldExpanded} onclick={() => shieldExpanded = !shieldExpanded}><Icon icon="material-symbols:shield-outline-rounded"/><span>Shield</span><Icon class="group-chevron" icon="material-symbols:expand-more-rounded"/></button>
+					{#if shieldExpanded}<div class="nav-children" transition:slide={{ duration: 160 }}><button class:active={activeTab === "users"} title="Business account records" onclick={() => switchTab("users")}><Icon icon="material-symbols:group-outline-rounded"/><span>Account directory</span><i>{users.length}</i></button><button class:active={activeTab === "comments"} title="Comment review and moderation" onclick={() => switchTab("comments")}><Icon icon="material-symbols:forum-outline-rounded"/><span>Comment moderation</span></button><button class:active={activeTab === "shield" && shieldView === "subjects"} title="Account and IP risk roots managed by Shield" onclick={() => switchTab("shield", "subjects")}><Icon icon="material-symbols:person-search-outline-rounded"/><span>Risk subjects</span></button><button class:active={activeTab === "shield" && shieldView === "factors"} onclick={() => switchTab("shield", "factors")}><Icon icon="material-symbols:tune-rounded"/><span>Risk factors</span></button><button class:active={activeTab === "shield" && shieldView === "geography"} onclick={() => switchTab("shield", "geography")}><Icon icon="material-symbols:public-off-outline-rounded"/><span>Geography</span></button><button class:active={activeTab === "shield" && shieldView === "sites"} onclick={() => switchTab("shield", "sites")}><Icon icon="material-symbols:domain-verification-outline-rounded"/><span>Protected sites</span></button></div>{/if}
 				</section>
 				<section class="nav-group">
 					<button class="nav-group-toggle" aria-expanded={publishingExpanded} onclick={() => publishingExpanded = !publishingExpanded}><Icon icon="material-symbols:edit-square-outline-rounded"/><span>Publishing</span><Icon class="group-chevron" icon="material-symbols:expand-more-rounded"/></button>

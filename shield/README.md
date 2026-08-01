@@ -13,11 +13,11 @@ The MVP includes:
 - A versioned JSON rule model, nested conditions, priority, simulation, actions, and hit counts.
 - Signed, spoof-resistant internal decision headers.
 - A separate English administration console that reuses the existing SilentFlare Admin session, CSRF proof, and append-only audit records.
-- A real Security workspace inside SilentFlare Admin with live trends, contextual event actions, automated policies, service coverage, and account-risk projections synchronized from FastAPI without sharing the business database.
+- A real Shield workspace inside SilentFlare Admin with live trends, contextual event actions, automated policies, service coverage, and account-risk projections synchronized from FastAPI without sharing the business database.
 - Network intelligence, access-list and ban operations, signed account/session response commands, risk-model simulation/versioning/rollback, configurable alerts, and rolling daily reports.
 - A public `shield.silentflare.com` decision portal with signed case links, stable public ban IDs, and subject/duration-specific error codes.
 - Two operator-visible risk roots, Account and IP, with sessions, devices, CIDR, ASN, email/domain, API-key, and geography retained as linked evidence under both roots.
-- Split gateway, control, portal, and worker entry points that keep Shield deployable as an external security exoskeleton; only `ShieldDashboard.svelte` and its entity explorer are integrated into SilentFlare Admin.
+- Split gateway, control, portal, and worker entry points that keep the Shield backend deployable as an external security exoskeleton; only presentation components are integrated into SilentFlare Admin.
 - SQLite/WAL persistence, migrations, health probes, Docker Compose, and an Nginx reference configuration.
 
 The full architecture, data model, integration contract, API plan, failure matrix, and phased roadmap are in [docs/SILENTFLARE_SHIELD.md](../docs/SILENTFLARE_SHIELD.md).
