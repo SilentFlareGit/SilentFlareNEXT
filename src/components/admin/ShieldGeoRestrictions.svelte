@@ -169,7 +169,10 @@ async function saveRestriction() {
 	const target = pending;
 	saving = true;
 	try {
-		await api("/geography/restrictions", {
+		const response = await api<{
+			affectedSubjects: number;
+			restoredSubjects: number;
+		}>("/geography/restrictions", {
 			method: "PUT",
 			body: JSON.stringify({
 				country_code: target.countryCode,
@@ -183,7 +186,10 @@ async function saveRestriction() {
 		await loadCountries();
 		if (target.regionCode && selectedCountry)
 			await loadRegions(selectedCountry);
-		success = `${target.restricted ? "Restricted" : "Restored"} ${target.label}.`;
+		const changedSubjects = target.restricted
+			? response.affectedSubjects
+			: response.restoredSubjects;
+		success = `${target.restricted ? "Restricted" : "Restored"} ${target.label}. ${changedSubjects} subject score${changedSubjects === 1 ? "" : "s"} ${target.restricted ? "set to 100" : "restored"}.`;
 		window.setTimeout(() => {
 			success = "";
 		}, 3000);

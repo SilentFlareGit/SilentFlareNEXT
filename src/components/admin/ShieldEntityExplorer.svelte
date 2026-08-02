@@ -7,6 +7,7 @@ type Subject = {
 	subjectType: string;
 	displayValue: string;
 	currentScore: number;
+	effectiveScore: number;
 	riskLevel: string;
 	firstSeenAt: number;
 	lastSeenAt: number;
@@ -35,6 +36,8 @@ type Override = {
 	createdBy: string;
 	expiresAt?: number;
 	revokedAt?: number;
+	controlSource?: "manual" | "geo_policy";
+	controlRef?: string;
 };
 type Evidence = {
 	id: number;
@@ -50,6 +53,7 @@ type LinkedSubject = {
 	subjectType: "account" | "ip";
 	displayValue: string;
 	currentScore: number;
+	effectiveScore: number;
 	riskLevel: string;
 	firstSeenAt: number;
 	lastSeenAt: number;
@@ -58,7 +62,6 @@ type LinkedSubject = {
 	confidence: number;
 };
 type SubjectDetail = Subject & {
-	effectiveScore: number;
 	ledger: LedgerEntry[];
 	ledgerTotal: number;
 	ledgerHasMore: boolean;
@@ -487,6 +490,7 @@ function typeLabel(value: string) {
 }
 
 function overrideLabel(item: Override) {
+	if (item.controlSource === "geo_policy") return "Geography restriction";
 	return item.overrideType === "score_cap" &&
 		item.value === 0 &&
 		!item.expiresAt
@@ -560,7 +564,7 @@ onMount(loadSubjects);
 				{:else}
 					{#each subjects as subject (subject.id)}
 						<button class="subject-row" class:selected={selected?.id === subject.id} onclick={() => openSubject(subject)}>
-							<span class={`score ${subject.riskLevel}`}>{subject.currentScore}</span>
+							<span class={`score ${subject.riskLevel}`}>{subject.effectiveScore ?? subject.currentScore}</span>
 							<span class="identity"><strong>{subject.displayValue}</strong><small>{typeLabel(subject.subjectType)} / {subject.riskLevel}</small></span>
 							<time>{formatTime(subject.lastChangedAt)}</time>
 							<Icon class="chevron" icon="material-symbols:chevron-right-rounded" />
@@ -644,7 +648,7 @@ onMount(loadSubjects);
 							<div class="linked-list">
 								{#each selected.linkedSubjects as linked (linked.id)}
 									<button type="button" onclick={() => openSubject(linked)}>
-										<span class={`score ${linked.riskLevel}`}>{linked.currentScore}</span>
+										<span class={`score ${linked.riskLevel}`}>{linked.effectiveScore ?? linked.currentScore}</span>
 										<span><strong>{linked.displayValue}</strong><small>{linked.requestCount} requests / {linked.confidence}% confidence</small></span>
 										<time>{formatTime(linked.lastSeenAt)}</time>
 										<Icon icon="material-symbols:chevron-right-rounded" />
@@ -725,9 +729,13 @@ onMount(loadSubjects);
 									<span><strong>{overrideLabel(item)}</strong><small>{item.value === null || item.value === undefined ? "Exempt" : item.value}</small></span>
 									<p>{item.reason}</p>
 									<time>{item.expiresAt ? `Until ${formatTime(item.expiresAt)}` : "No expiry"}</time>
-									<button class="icon-button" title="Revoke control" aria-label="Revoke control" onclick={() => revokeOverride(item)} disabled={saving}>
-										<Icon icon="material-symbols:delete-outline-rounded" />
-									</button>
+									{#if item.controlSource === "geo_policy"}
+										<span class="managed-control" title="Managed in Geography" aria-label="Managed in Geography"><Icon icon="material-symbols:policy-outline-rounded" /></span>
+									{:else}
+										<button class="icon-button" title="Revoke control" aria-label="Revoke control" onclick={() => revokeOverride(item)} disabled={saving}>
+											<Icon icon="material-symbols:delete-outline-rounded" />
+										</button>
+									{/if}
 								</div>
 							{/each}
 						</div>
@@ -880,6 +888,8 @@ onMount(loadSubjects);
 	.override-list small, .override-list p, .override-list time { color: #718398; font-size: .75rem; }
 	.override-list p, .override-list time { grid-column: 1; margin: 0; }
 	.override-list .icon-button { grid-column: 2; grid-row: 1 / 4; align-self: center; }
+	.override-list .managed-control { grid-column: 2; grid-row: 1 / 4; align-self: center; width: 2rem; height: 2rem; display: grid; place-items: center; border: 1px solid #cfe0ea; border-radius: .25rem; background: #edf6fb; color: #2f7da9; }
+	.override-list .managed-control :global(svg) { width: 1rem; height: 1rem; }
 	.ledger article { display: grid; grid-template-columns: 2.75rem minmax(0, 1fr); gap: .75rem; border-top: 1px solid #edf1f4; padding: .875rem 1rem; }
 	.delta { display: inline-grid; place-items: center; align-self: start; min-height: 2rem; border-radius: .25rem; background: #ffe0e3; color: #b52f40; font-weight: 800; }
 	.delta.negative { background: #e5f3ea; color: #187348; }

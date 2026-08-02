@@ -366,6 +366,35 @@ class ShieldApplicationTests(unittest.TestCase):
 		self.assertEqual(regions.status_code, 200)
 		self.assertIn("US-CA", {region["code"] for region in regions.json()["regions"]})
 
+		ip = "203.0.113.221"
+		account_id = "geography-account"
+		ip_subject = app.state.entities.ensure_subject("ip", ip)
+		account_subject = app.state.entities.ensure_subject("account", account_id)
+		app.state.entities.set_score(
+			int(ip_subject["id"]),
+			23,
+			reason="Establish IP score before geography restriction",
+			actor="test-suite",
+		)
+		app.state.entities.set_score(
+			int(account_subject["id"]),
+			11,
+			reason="Establish account score before geography restriction",
+			actor="test-suite",
+		)
+		app.state.geo._store(
+			IpIntel(
+				ip,
+				country_code="US",
+				region="California",
+				region_code="CA",
+			),
+			{},
+		)
+		app.state.entities.relate_account_ip(
+			int(account_subject["id"]), int(ip_subject["id"])
+		)
+
 		restriction = {
 			"country_code": "US",
 			"region_code": "US-CA",
@@ -378,18 +407,47 @@ class ShieldApplicationTests(unittest.TestCase):
 			json=restriction,
 		)
 		self.assertEqual(created.status_code, 200)
-		subjects = {}
+		self.assertEqual(created.json()["affectedSubjects"], 2)
+		subjects = {"ip": ip_subject, "account": account_subject}
+		restored = False
 		try:
+			for subject, raw_score in ((ip_subject, 23), (account_subject, 11)):
+				detail = app.state.entities.detail(int(subject["id"]))
+				self.assertEqual(detail["currentScore"], raw_score)
+				self.assertEqual(detail["effectiveScore"], 100)
+				self.assertEqual(detail["riskLevel"], "block")
+				control = next(
+					item
+					for item in detail["overrides"]
+					if item["controlSource"] == "geo_policy" and not item["revokedAt"]
+				)
+				self.assertEqual((control["overrideType"], control["value"]), ("score_floor", 100))
+				entry = next(
+					item
+					for item in detail["ledger"]
+					if item["reasonCode"] == "GEOGRAPHY_RESTRICTION_APPLIED"
+				)
+				self.assertEqual((entry["scoreAfter"], entry["scoreKind"]), (100, "effective"))
+
+			listing = self.client.get(
+				"/__shield/api/admin/entities?minimum_score=80",
+				headers=headers,
+			)
+			self.assertEqual(listing.status_code, 200)
+			listed = {item["id"]: item for item in listing.json()["items"]}
+			for subject in subjects.values():
+				self.assertEqual(listed[int(subject["id"])]["effectiveScore"], 100)
+
 			context = RequestContext(
 				request_id="geography-restriction-request",
 				host="blog.silentflare.com",
 				path="/restricted-region",
 				method="GET",
-				ip="203.0.113.221",
+				ip=ip,
 				country="US",
 				region="California",
 				region_code="CA",
-				account_id="geography-account",
+				account_id=account_id,
 			)
 			action, reason = _geo_policy_action(app.state.database, context)
 			self.assertEqual(action, "block")
@@ -407,14 +465,41 @@ class ShieldApplicationTests(unittest.TestCase):
 				subjects,
 				{},
 			)
-			self.assertGreater(app.state.entities.process_signal_queue(), 0)
 			for subject in subjects.values():
-				ledger = app.state.entities.detail(int(subject["id"]))["ledger"]
-				entry = next(
-					item for item in ledger if item["reasonCode"] == "GEOGRAPHY_RESTRICTION"
+				detail = app.state.entities.detail(int(subject["id"]))
+				self.assertEqual(detail["effectiveScore"], 100)
+				self.assertFalse(
+					any(item["reasonCode"] == "GEOGRAPHY_RESTRICTION" for item in detail["ledger"])
 				)
-				self.assertEqual(entry["scoreAfter"], 100)
+
+			restriction["restricted"] = False
+			restriction["reason"] = "Integration restriction cleanup"
+			restore_response = self.client.put(
+				"/__shield/api/admin/geography/restrictions",
+				headers=headers,
+				json=restriction,
+			)
+			self.assertEqual(restore_response.status_code, 200)
+			self.assertEqual(restore_response.json()["restoredSubjects"], 2)
+			restored = True
+			for subject, raw_score in ((ip_subject, 23), (account_subject, 11)):
+				detail = app.state.entities.detail(int(subject["id"]))
+				self.assertEqual((detail["currentScore"], detail["effectiveScore"]), (raw_score, raw_score))
+				self.assertTrue(
+					any(
+						item["reasonCode"] == "GEOGRAPHY_RESTRICTION_REVOKED"
+						for item in detail["ledger"]
+					)
+				)
 		finally:
+			if not restored:
+				restriction["restricted"] = False
+				restriction["reason"] = "Integration restriction cleanup"
+				self.client.put(
+					"/__shield/api/admin/geography/restrictions",
+					headers=headers,
+					json=restriction,
+				)
 			for subject in subjects.values():
 				current_score = int(
 					app.state.entities.detail(int(subject["id"]))["currentScore"]
@@ -428,14 +513,6 @@ class ShieldApplicationTests(unittest.TestCase):
 						source="test",
 						actor="test-suite",
 					)
-			restriction["restricted"] = False
-			restriction["reason"] = "Integration restriction cleanup"
-			restored = self.client.put(
-				"/__shield/api/admin/geography/restrictions",
-				headers=headers,
-				json=restriction,
-			)
-			self.assertEqual(restored.status_code, 200)
 
 		audit = app.state.database.query(
 			"SELECT action FROM audit_log WHERE target_id = 'US-CA' ORDER BY id DESC LIMIT 1"
@@ -675,6 +752,49 @@ class ShieldApplicationTests(unittest.TestCase):
 			["block"],
 		)
 		self.assertEqual(admin_risk.score, 100)
+
+	def test_revoking_geography_policy_restores_legacy_timed_signal(self):
+		subject = app.state.entities.ensure_subject("ip", "203.0.113.222")
+		app.state.entities.set_score(
+			int(subject["id"]),
+			14,
+			reason="Establish score before legacy geography signal",
+			actor="test-suite",
+		)
+		app.state.entities.adjust(
+			int(subject["id"]),
+			86,
+			reason_code="GEOGRAPHY_RESTRICTION",
+			reason="Legacy restricted geography matched",
+			source="gateway",
+			source_ref="geo-policy:4242:legacy",
+			actor="shield-worker",
+			duration_seconds=86400,
+			decay_steps=1,
+		)
+		self.assertEqual(app.state.entities.detail(int(subject["id"]))["currentScore"], 100)
+
+		revoked = app.state.entities.revoke_geo_policy_signals(
+			[4242],
+			actor="test-suite",
+			reason="Legacy geography restriction removed",
+		)
+		self.assertEqual(revoked, {int(subject["id"])})
+		detail = app.state.entities.detail(int(subject["id"]))
+		self.assertEqual((detail["currentScore"], detail["effectiveScore"]), (14, 14))
+		self.assertTrue(
+			any(
+				item["reasonCode"] == "GEOGRAPHY_RESTRICTION_REVOKED"
+				for item in detail["ledger"]
+			)
+		)
+
+		app.state.entities.set_score(
+			int(subject["id"]),
+			0,
+			reason="Legacy geography test cleanup",
+			actor="test-suite",
+		)
 
 	def test_every_gateway_factor_writes_subject_ledger_changes(self):
 		context = RequestContext(

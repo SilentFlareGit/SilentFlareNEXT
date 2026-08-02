@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import sqlite3
 import time
 import uuid
 from typing import Any
@@ -500,9 +501,16 @@ class EntityRiskService:
 		scope_host: str | None = None,
 		scope_path: str | None = None,
 		scope_rule_id: int | None = None,
+		control_source: str = "manual",
+		control_ref: str | None = None,
+		effective_reason_code: str | None = None,
 	) -> dict[str, Any]:
 		if override_type not in {"adjustment", "score_cap", "score_floor", "rule_exemption", "response_exemption"}:
 			raise ValueError("Unsupported override type")
+		if control_source not in {"manual", "geo_policy"}:
+			raise ValueError("Unsupported score control source")
+		if control_source == "geo_policy" and not control_ref:
+			raise ValueError("Geography policy control requires a reference")
 		now = int(time.time())
 		subject = self.subject_by_public_id(subject_id)
 		if not subject:
@@ -543,9 +551,10 @@ class EntityRiskService:
 			ledger_entry_id = entry["id"]
 		override_id = self.database.execute(
 			"""INSERT INTO risk_overrides(subject_id, override_type, value_integer, scope_host,
-			scope_path, scope_rule_id, reason, created_at, created_by, expires_at, ledger_entry_id)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-			(subject_id, override_type, value, scope_host, scope_path, scope_rule_id, reason, now, actor, expires_at, ledger_entry_id),
+			scope_path, scope_rule_id, reason, created_at, created_by, expires_at, ledger_entry_id,
+			control_source, control_ref)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+			(subject_id, override_type, value, scope_host, scope_path, scope_rule_id, reason, now, actor, expires_at, ledger_entry_id, control_source, control_ref),
 		)
 		if override_type in {"score_cap", "score_floor"} and not permanent_allowlist:
 			after_effective = self.effective_score(self.subject_by_public_id(subject_id) or subject)
@@ -553,7 +562,7 @@ class EntityRiskService:
 				subject_id,
 				before_effective,
 				after_effective,
-				reason_code="SCORE_CAP_APPLIED" if override_type == "score_cap" else "SCORE_FLOOR_APPLIED",
+				reason_code=effective_reason_code or ("SCORE_CAP_APPLIED" if override_type == "score_cap" else "SCORE_FLOOR_APPLIED"),
 				reason=reason,
 				source_ref=f"override:{override_id}:apply",
 				actor=actor,
@@ -561,13 +570,131 @@ class EntityRiskService:
 			)
 		return self.database.query("SELECT * FROM risk_overrides WHERE id = ?", (override_id,))[0]
 
-	def revoke_override(self, override_id: int, actor: str, reason: str) -> dict[str, Any]:
+	def ensure_geo_policy_floor(
+		self,
+		subject_id: int,
+		policy_id: int,
+		*,
+		label: str,
+		reason: str,
+		actor: str,
+	) -> tuple[dict[str, Any], bool]:
+		control_ref = str(policy_id)
+		existing = self.database.query(
+			"""SELECT * FROM risk_overrides WHERE subject_id = ? AND override_type = 'score_floor'
+			AND control_source = 'geo_policy' AND control_ref = ? AND revoked_at IS NULL LIMIT 1""",
+			(subject_id, control_ref),
+		)
+		if existing:
+			return existing[0], False
+		try:
+			return self.add_override(
+				subject_id,
+				override_type="score_floor",
+				value=100,
+				reason=f"Restricted geography: {label}. {reason}"[:300],
+				actor=actor,
+				duration_seconds=None,
+				control_source="geo_policy",
+				control_ref=control_ref,
+				effective_reason_code="GEOGRAPHY_RESTRICTION_APPLIED",
+			), True
+		except sqlite3.IntegrityError:
+			existing = self.database.query(
+				"""SELECT * FROM risk_overrides WHERE subject_id = ? AND override_type = 'score_floor'
+				AND control_source = 'geo_policy' AND control_ref = ? AND revoked_at IS NULL LIMIT 1""",
+				(subject_id, control_ref),
+			)
+			if existing:
+				return existing[0], False
+			raise
+
+	def revoke_geo_policy_floors(
+		self,
+		policy_ids: list[int],
+		*,
+		actor: str,
+		reason: str,
+	) -> set[int]:
+		if not policy_ids:
+			return set()
+		placeholders = ",".join("?" for _ in policy_ids)
+		rows = self.database.query(
+			f"""SELECT id, subject_id FROM risk_overrides WHERE control_source = 'geo_policy'
+			AND control_ref IN ({placeholders}) AND revoked_at IS NULL ORDER BY id""",
+			[str(policy_id) for policy_id in policy_ids],
+		)
+		for row in rows:
+			self.revoke_override(
+				int(row["id"]),
+				actor,
+				reason,
+				allow_managed=True,
+			)
+		return {int(row["subject_id"]) for row in rows}
+
+	def revoke_geo_policy_signals(
+		self,
+		policy_ids: list[int],
+		*,
+		actor: str,
+		reason: str,
+	) -> set[int]:
+		now = int(time.time())
+		processed: set[int] = set()
+		for policy_id in policy_ids:
+			prefix = f"geo-policy:{policy_id}:%"
+			self.database.execute(
+				"""UPDATE risk_signal_queue SET status = 'failed', processed_at = ?,
+				detail = 'geography restriction revoked' WHERE reason_code = 'GEOGRAPHY_RESTRICTION'
+				AND source_ref LIKE ? AND status IN ('queued', 'processing')""",
+				(now, prefix),
+			)
+			effects = self.database.query(
+				"""SELECT risk_effects.id, risk_effects.subject_id, risk_effects.source_entry_id,
+				risk_effects.remaining_delta FROM risk_effects JOIN risk_ledger
+				ON risk_ledger.id = risk_effects.source_entry_id
+				WHERE risk_effects.status = 'active'
+				AND risk_ledger.reason_code = 'GEOGRAPHY_RESTRICTION'
+				AND risk_ledger.source_ref LIKE ?""",
+				(prefix,),
+			)
+			for effect in effects:
+				remaining = int(effect["remaining_delta"])
+				if remaining:
+					self._apply(
+						int(effect["subject_id"]),
+						-remaining,
+						reason_code="GEOGRAPHY_RESTRICTION_REVOKED",
+						reason=reason,
+						source="admin",
+						source_ref=f"geo-policy:{policy_id}:revoke:{effect['id']}",
+						actor=actor,
+						parent_entry_id=effect["source_entry_id"],
+					)
+				self.database.execute(
+					"UPDATE risk_effects SET status = 'revoked', remaining_delta = 0, updated_at = ? WHERE id = ?",
+					(now, effect["id"]),
+				)
+				processed.add(int(effect["subject_id"]))
+		return processed
+
+	def revoke_override(
+		self,
+		override_id: int,
+		actor: str,
+		reason: str,
+		*,
+		allow_managed: bool = False,
+	) -> dict[str, Any]:
 		rows = self.database.query(
 			"SELECT * FROM risk_overrides WHERE id = ? AND revoked_at IS NULL LIMIT 1", (override_id,)
 		)
 		if not rows:
 			raise ValueError("Active risk override not found")
 		override = rows[0]
+		if override.get("control_source") != "manual" and not allow_managed:
+			raise ValueError("Managed controls must be changed from their policy workspace")
 		now = int(time.time())
 		subject = self.subject_by_public_id(int(override["subject_id"]))
 		before_effective = self.effective_score(subject) if subject else 0
@@ -628,7 +755,11 @@ class EntityRiskService:
 				int(subject["id"]),
 				before_effective,
 				after_effective,
-				reason_code="SCORE_CAP_REVOKED" if override["override_type"] == "score_cap" else "SCORE_FLOOR_REVOKED",
+				reason_code=(
+					"GEOGRAPHY_RESTRICTION_REVOKED"
+					if override.get("control_source") == "geo_policy"
+					else "SCORE_CAP_REVOKED" if override["override_type"] == "score_cap" else "SCORE_FLOOR_REVOKED"
+				),
 				reason=reason,
 				source_ref=f"override:{override_id}:revoke",
 				actor=actor,
@@ -661,13 +792,15 @@ class EntityRiskService:
 		host: str = "",
 		path: str = "",
 	) -> bool:
-		override = self.active_override(subject_id, "score_cap", host, path)
-		return bool(
-			override
-			and override["value_integer"] is not None
-			and int(override["value_integer"]) == 0
-			and override["expires_at"] is None
+		rows = self.database.query(
+			"""SELECT 1 FROM risk_overrides WHERE subject_id = ?
+			AND override_type = 'score_cap' AND value_integer = 0
+			AND expires_at IS NULL AND revoked_at IS NULL
+			AND (scope_host IS NULL OR scope_host = ?)
+			AND (scope_path IS NULL OR ? GLOB scope_path) LIMIT 1""",
+			(subject_id, host, path),
 		)
+		return bool(rows)
 
 	def matching_rule_exemption(
 		self,
@@ -699,13 +832,98 @@ class EntityRiskService:
 		at: int | None = None,
 	) -> int:
 		score = int(subject["current_score"])
-		cap = self.active_override(int(subject["id"]), "score_cap", host, path, at)
-		floor = self.active_override(int(subject["id"]), "score_floor", host, path, at)
-		if cap and cap["value_integer"] is not None:
-			score = min(score, int(cap["value_integer"]))
-		if floor and floor["value_integer"] is not None:
-			score = max(score, int(floor["value_integer"]))
+		now = at if at is not None else int(time.time())
+		overrides = self.database.query(
+			"""SELECT override_type, value_integer, expires_at, scope_host, scope_path
+			FROM risk_overrides WHERE subject_id = ?
+			AND override_type IN ('score_cap', 'score_floor') AND revoked_at IS NULL
+			AND (expires_at IS NULL OR expires_at > ?)
+			AND (scope_host IS NULL OR scope_host = ?)
+			AND (scope_path IS NULL OR ? GLOB scope_path)""",
+			(subject["id"], now, host, path),
+		)
+		if any(
+			row["override_type"] == "score_cap"
+			and row["value_integer"] is not None
+			and int(row["value_integer"]) == 0
+			and row["expires_at"] is None
+			and row["scope_host"] is None
+			and row["scope_path"] is None
+			for row in overrides
+		):
+			return 0
+		caps = [
+			int(row["value_integer"])
+			for row in overrides
+			if row["override_type"] == "score_cap" and row["value_integer"] is not None
+		]
+		floors = [
+			int(row["value_integer"])
+			for row in overrides
+			if row["override_type"] == "score_floor" and row["value_integer"] is not None
+		]
+		if caps:
+			score = min(score, min(caps))
+		if floors:
+			score = max(score, max(floors))
 		return max(0, min(100, score))
+
+	def effective_score_map(
+		self,
+		subjects: list[dict[str, Any]],
+		*,
+		at: int | None = None,
+	) -> dict[int, int]:
+		now = at if at is not None else int(time.time())
+		overrides: dict[tuple[int, str], list[dict[str, Any]]] = {}
+		ids = [int(subject["id"]) for subject in subjects]
+		for offset in range(0, len(ids), 800):
+			chunk = ids[offset : offset + 800]
+			if not chunk:
+				continue
+			placeholders = ",".join("?" for _ in chunk)
+			rows = self.database.query(
+				f"""SELECT * FROM risk_overrides WHERE subject_id IN ({placeholders})
+				AND override_type IN ('score_cap', 'score_floor') AND revoked_at IS NULL
+				AND (expires_at IS NULL OR expires_at > ?)
+				AND scope_host IS NULL AND scope_path IS NULL ORDER BY id DESC""",
+				(*chunk, now),
+			)
+			for row in rows:
+				overrides.setdefault(
+					(int(row["subject_id"]), str(row["override_type"])), []
+				).append(row)
+		scores: dict[int, int] = {}
+		for subject in subjects:
+			subject_id = int(subject["id"])
+			score = int(subject.get("current_score", subject.get("currentScore", 0)))
+			caps = overrides.get((subject_id, "score_cap"), [])
+			floors = overrides.get((subject_id, "score_floor"), [])
+			permanent_allowlist = any(
+				cap["value_integer"] is not None
+				and int(cap["value_integer"]) == 0
+				and cap["expires_at"] is None
+				for cap in caps
+			)
+			if permanent_allowlist:
+				scores[subject_id] = 0
+				continue
+			cap_values = [
+				int(cap["value_integer"])
+				for cap in caps
+				if cap["value_integer"] is not None
+			]
+			floor_values = [
+				int(floor["value_integer"])
+				for floor in floors
+				if floor["value_integer"] is not None
+			]
+			if cap_values:
+				score = min(score, min(cap_values))
+			if floor_values:
+				score = max(score, max(floor_values))
+			scores[subject_id] = max(0, min(100, score))
+		return scores
 
 	def expire_due_overrides(self, now: int | None = None, limit: int = 500) -> int:
 		now = now or int(time.time())
@@ -787,8 +1005,8 @@ class EntityRiskService:
 		query: str = "",
 		limit: int = 100,
 	) -> list[dict[str, Any]]:
-		conditions = ["current_score >= ?", "provenance_status = 'verified'", "subject_type IN ('account', 'ip')"]
-		parameters: list[Any] = [minimum_score]
+		conditions = ["provenance_status = 'verified'", "subject_type IN ('account', 'ip')"]
+		parameters: list[Any] = []
 		if subject_type:
 			conditions.append("subject_type = ?")
 			parameters.append(subject_type)
@@ -799,15 +1017,53 @@ class EntityRiskService:
 			)
 			needle = f"%{query.lower()}%"
 			parameters.extend((needle, needle))
-		parameters.append(min(500, max(1, limit)))
-		return self.database.query(
-			f"""SELECT id, subject_type AS subjectType, display_value AS displayValue,
-			current_score AS currentScore, risk_level AS riskLevel, first_seen_at AS firstSeenAt,
-			last_seen_at AS lastSeenAt, last_changed_at AS lastChangedAt, version
-			FROM risk_subjects WHERE {' AND '.join(conditions)}
-			ORDER BY current_score DESC, last_changed_at DESC LIMIT ?""",
+		rows = self.database.query(
+			f"""SELECT id, subject_type, display_value, current_score, risk_level,
+			first_seen_at, last_seen_at, last_changed_at, version
+			FROM risk_subjects WHERE {' AND '.join(conditions)}""",
 			parameters,
 		)
+		scores = self.effective_score_map(rows)
+		items = [
+			{
+				"id": row["id"],
+				"subjectType": row["subject_type"],
+				"displayValue": row["display_value"],
+				"currentScore": row["current_score"],
+				"effectiveScore": scores[int(row["id"])],
+				"riskLevel": entity_level(scores[int(row["id"])]),
+				"firstSeenAt": row["first_seen_at"],
+				"lastSeenAt": row["last_seen_at"],
+				"lastChangedAt": row["last_changed_at"],
+				"version": row["version"],
+			}
+			for row in rows
+			if scores[int(row["id"])] >= minimum_score
+		]
+		items.sort(
+			key=lambda item: (int(item["effectiveScore"]), int(item["lastChangedAt"])),
+			reverse=True,
+		)
+		return items[: min(500, max(1, limit))]
+
+	def subject_type_statistics(self) -> list[dict[str, Any]]:
+		rows = self.database.query(
+			"""SELECT id, subject_type, current_score FROM risk_subjects
+			WHERE provenance_status = 'verified' AND subject_type IN ('account', 'ip')"""
+		)
+		scores = self.effective_score_map(rows)
+		statistics: dict[str, dict[str, Any]] = {}
+		for row in rows:
+			subject_type = str(row["subject_type"])
+			score = scores[int(row["id"])]
+			item = statistics.setdefault(
+				subject_type,
+				{"subjectType": subject_type, "total": 0, "elevated": 0, "maximumScore": 0},
+			)
+			item["total"] += 1
+			item["elevated"] += int(score >= 50)
+			item["maximumScore"] = max(int(item["maximumScore"]), score)
+		return [statistics[key] for key, _label in SUBJECT_TYPE_CATALOG if key in statistics]
 
 	def ledger_page(
 		self,
@@ -851,7 +1107,8 @@ class EntityRiskService:
 		overrides = self.database.query(
 			"""SELECT id, override_type AS overrideType, value_integer AS value, scope_host AS scopeHost,
 			scope_path AS scopePath, reason, created_at AS createdAt, created_by AS createdBy,
-			expires_at AS expiresAt, revoked_at AS revokedAt FROM risk_overrides
+			expires_at AS expiresAt, revoked_at AS revokedAt,
+			control_source AS controlSource, control_ref AS controlRef FROM risk_overrides
 			WHERE subject_id = ? ORDER BY id DESC LIMIT 100""",
 			(subject_id,),
 		)
@@ -902,13 +1159,19 @@ class EntityRiskService:
 			)
 		else:
 			linked_subjects = []
+		linked_scores = self.effective_score_map(linked_subjects)
+		for linked in linked_subjects:
+			linked_score = linked_scores[int(linked["id"])]
+			linked["effectiveScore"] = linked_score
+			linked["riskLevel"] = entity_level(linked_score)
+		effective_score = self.effective_score(subject)
 		return {
 			"id": subject["id"],
 			"subjectType": subject["subject_type"],
 			"displayValue": subject["display_value"],
 			"currentScore": subject["current_score"],
-			"effectiveScore": self.effective_score(subject),
-			"riskLevel": subject["risk_level"],
+			"effectiveScore": effective_score,
+			"riskLevel": entity_level(effective_score),
 			"firstSeenAt": subject["first_seen_at"],
 			"lastSeenAt": subject["last_seen_at"],
 			"lastChangedAt": subject["last_changed_at"],

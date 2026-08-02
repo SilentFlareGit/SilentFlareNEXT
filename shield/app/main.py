@@ -832,6 +832,10 @@ async def _operations_loop(application: FastAPI) -> None:
 			await _deliver_alerts(application)
 			decayed = application.state.entities.run_due_decay()
 			decayed += application.state.entities.expire_due_overrides()
+			geo_controls = _reconcile_geo_policy_scores(
+				application.state.database,
+				application.state.entities,
+			)
 			automated = _reconcile_entity_bans(application.state.database, application.state.entities)
 			automated += await _reconcile_account_responses(application)
 			application.state.database.execute("DELETE FROM rate_counters WHERE updated_at < ?", (int(time.time()) - 2592000,))
@@ -840,7 +844,7 @@ async def _operations_loop(application: FastAPI) -> None:
 			)
 			application.state.database.execute(
 				"UPDATE automation_runs SET completed_at = ?, status = 'completed', processed_count = ? WHERE id = ?",
-				(int(time.time()), decayed + automated, run_id),
+				(int(time.time()), decayed + geo_controls + automated, run_id),
 			)
 		except Exception as error:
 			if run_id:
@@ -1390,10 +1394,15 @@ def _record_entity_signals(
 	reasons = set(risk.reasons)
 	geo_policy_id = context.extra.get("geo_restriction_policy_id")
 	if geo_policy_id:
-		reference = f"geo-policy:{geo_policy_id}:{int(time.time()) // 3600}"
 		label = str(context.extra.get("geo_restriction_label") or context.country)
-		signal("ip", 100, "GEOGRAPHY_RESTRICTION", f"Restricted geography matched: {label}", 86400, 1, reference)
-		signal("account", 100, "GEOGRAPHY_RESTRICTION", f"Restricted geography matched: {label}", 86400, 1, reference)
+		for subject in subjects.values():
+			service.ensure_geo_policy_floor(
+				int(subject["id"]),
+				int(geo_policy_id),
+				label=label,
+				reason="Restricted geography matched",
+				actor="shield",
+			)
 	if "VPN network" in reasons:
 		signal_roots(weighted("vpn", 0.5), "VPN_NETWORK", "VPN network observed", 86400, account_ratio=0.2)
 	if "Proxy network" in reasons:
@@ -1968,8 +1977,15 @@ async def admin_geo_policy_disable(policy_id: int, request: Request):
 	if not db.query("SELECT id FROM geo_policies WHERE id = ?", (policy_id,)):
 		raise HTTPException(status_code=404, detail="Geographic policy not found")
 	db.execute("UPDATE geo_policies SET enabled = 0, updated_at = ? WHERE id = ?", (int(time.time()), policy_id))
+	restored_subject_ids = request.app.state.entities.revoke_geo_policy_floors(
+		[policy_id], actor=actor, reason="Geographic policy disabled"
+	)
+	restored_subject_ids |= request.app.state.entities.revoke_geo_policy_signals(
+		[policy_id], actor=actor, reason="Geographic policy disabled"
+	)
+	_reconcile_entity_bans(db, request.app.state.entities)
 	db.audit(actor, "geo_policy.disable", "geo_policy", str(policy_id), {})
-	return {"disabled": True}
+	return {"disabled": True, "restoredSubjects": len(restored_subject_ids)}
 
 
 def _active_geo_restrictions(database: Database) -> list[dict[str, Any]]:
@@ -1980,6 +1996,96 @@ def _active_geo_restrictions(database: Database) -> list[dict[str, Any]]:
 		AND (expires_at IS NULL OR expires_at > ?)
 		ORDER BY id DESC""",
 		(int(time.time()),),
+	)
+
+
+def _geo_policy_subject_ids(
+	database: Database,
+	*,
+	country_code: str,
+	region_code: str | None,
+	region_name: str | None,
+) -> list[int]:
+	region_suffix = region_code.rsplit("-", 1)[-1] if region_code else ""
+	region_clause = ""
+	region_parameters: tuple[Any, ...] = ()
+	if region_code:
+		region_clause = """AND (UPPER(intel.region_code) IN (?, ?)
+		OR LOWER(intel.region) = LOWER(?))"""
+		region_parameters = (region_code, region_suffix, region_name or "")
+	elif region_name:
+		region_clause = "AND LOWER(intel.region) = LOWER(?)"
+		region_parameters = (region_name,)
+	ip_rows = database.query(
+		f"""SELECT subject.id FROM risk_subjects AS subject JOIN ip_intel AS intel
+		ON intel.ip_hash = subject.subject_hash WHERE subject.subject_type = 'ip'
+		AND subject.provenance_status = 'verified' AND intel.provenance_status = 'verified'
+		AND UPPER(intel.country_code) = ? {region_clause}""",
+		(country_code, *region_parameters),
+	)
+	account_rows = database.query(
+		f"""SELECT DISTINCT account.id FROM risk_subjects AS account
+		JOIN account_ip_relations AS relation ON relation.account_subject_id = account.id
+		JOIN risk_subjects AS ip ON ip.id = relation.ip_subject_id
+		JOIN ip_intel AS intel ON intel.ip_hash = ip.subject_hash
+		WHERE account.subject_type = 'account' AND account.provenance_status = 'verified'
+		AND ip.provenance_status = 'verified' AND intel.provenance_status = 'verified'
+		AND UPPER(intel.country_code) = ? {region_clause}""",
+		(country_code, *region_parameters),
+	)
+	if not region_code and not region_name:
+		account_rows.extend(
+			database.query(
+				"""SELECT account.id FROM risk_subjects AS account
+				JOIN account_projections AS projection
+				ON projection.account_id_hash = account.subject_hash
+				WHERE account.subject_type = 'account' AND account.provenance_status = 'verified'
+				AND UPPER(projection.country_code) = ?""",
+				(country_code,),
+			)
+		)
+	return sorted({int(row["id"]) for row in [*ip_rows, *account_rows]})
+
+
+def _ensure_geo_policy_scores(
+	database: Database,
+	entities: EntityRiskService,
+	policy: dict[str, Any],
+	*,
+	actor: str,
+) -> int:
+	country_code = str(policy.get("countryCode") or policy.get("country_code") or "").upper()
+	region_code = str(policy.get("regionCode") or policy.get("region_code") or "").upper() or None
+	region_name = str(policy.get("region") or "") or None
+	label = region_name or region_code or country_code
+	reason = str(policy.get("note") or "Geography restriction enabled")
+	created = 0
+	for subject_id in _geo_policy_subject_ids(
+		database,
+		country_code=country_code,
+		region_code=region_code,
+		region_name=region_name,
+	):
+		_override, added = entities.ensure_geo_policy_floor(
+			subject_id,
+			int(policy["id"]),
+			label=label,
+			reason=reason,
+			actor=actor,
+		)
+		created += int(added)
+	return created
+
+
+def _reconcile_geo_policy_scores(
+	database: Database,
+	entities: EntityRiskService,
+	*,
+	actor: str = "shield-worker",
+) -> int:
+	return sum(
+		_ensure_geo_policy_scores(database, entities, policy, actor=actor)
+		for policy in _active_geo_restrictions(database)
 	)
 
 
@@ -2108,6 +2214,8 @@ async def admin_geo_restriction_update(payload: GeoRestrictionInput, request: Re
 			(country_code, now),
 		)
 	policy_id = int(active[0]["id"]) if active else None
+	affected_subjects = 0
+	restored_subjects = 0
 	if payload.restricted and policy_id:
 		db.execute(
 			"UPDATE geo_policies SET note = ?, updated_at = ? WHERE id = ?",
@@ -2127,6 +2235,30 @@ async def admin_geo_restriction_update(payload: GeoRestrictionInput, request: Re
 			f"UPDATE geo_policies SET enabled = 0, note = ?, updated_at = ? WHERE id IN ({placeholders})",
 			(payload.reason, now, *ids),
 		)
+		restored_subject_ids = request.app.state.entities.revoke_geo_policy_floors(
+			ids,
+			actor=actor,
+			reason=f"Geography restriction restored: {payload.reason}",
+		)
+		restored_subject_ids |= request.app.state.entities.revoke_geo_policy_signals(
+			ids,
+			actor=actor,
+			reason=f"Geography restriction restored: {payload.reason}",
+		)
+		restored_subjects = len(restored_subject_ids)
+		_reconcile_entity_bans(db, request.app.state.entities)
+	if payload.restricted and policy_id:
+		policy = db.query(
+			"""SELECT id, country_code AS countryCode, region, region_code AS regionCode, note
+			FROM geo_policies WHERE id = ? LIMIT 1""",
+			(policy_id,),
+		)[0]
+		affected_subjects = _ensure_geo_policy_scores(
+			db,
+			request.app.state.entities,
+			policy,
+			actor=actor,
+		)
 	db.audit(
 		actor,
 		"geo_restriction.update",
@@ -2145,6 +2277,8 @@ async def admin_geo_restriction_update(payload: GeoRestrictionInput, request: Re
 		"regionCode": region_code,
 		"restricted": payload.restricted,
 		"policyId": policy_id if payload.restricted else None,
+		"affectedSubjects": affected_subjects,
+		"restoredSubjects": restored_subjects,
 	}
 
 
@@ -2262,13 +2396,7 @@ async def admin_entities(
 		query=query[:160],
 		limit=limit,
 	)
-	count_rows = request.app.state.database.query(
-		"""SELECT subject_type AS subjectType, COUNT(*) AS total,
-		SUM(CASE WHEN current_score >= 50 THEN 1 ELSE 0 END) AS elevated,
-			MAX(current_score) AS maximumScore FROM risk_subjects
-		WHERE provenance_status = 'verified' AND subject_type IN ('account', 'ip')
-		GROUP BY subject_type ORDER BY CASE subject_type WHEN 'account' THEN 1 ELSE 2 END"""
-	)
+	count_rows = request.app.state.entities.subject_type_statistics()
 	counts_by_type = {row["subjectType"]: row for row in count_rows}
 	types = []
 	for key, label in SUBJECT_TYPE_CATALOG:
