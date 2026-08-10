@@ -38,6 +38,11 @@ def auth_me(request: Request) -> dict[str, Any]:
 	}
 
 
+def cms_gate(request: Request) -> Response:
+	require_admin_console_session(request)
+	return Response(status_code=204, headers={"Cache-Control": "no-store"})
+
+
 def auth_login(payload: LoginPayload, request: Request, response: Response) -> dict[str, Any]:
 	check_login_rate_limit(request)
 	bot = ensure_bot(str(payload.bot_id or ""))

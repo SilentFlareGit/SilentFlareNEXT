@@ -6,7 +6,7 @@ Use this when changing public blog routes, Ghost integration, layouts, content u
 
 - Public blog content source: Ghost Content API.
 - Public blog renderer: Astro static build.
-- Production publishing domain: `cms.silentflare.com`; its custom frontend uses FastAPI as a Ghost Admin API BFF.
+- Production publishing domain: `cms.silentflare.com`; SilentFlare Owner Auth gates the native Ghost Admin, which then requires a Ghost Staff login.
 - Production public blog domain: `blog.silentflare.com`.
 - Production authentication domain: `auth.silentflare.com`.
 - Production account domain: `accounts.silentflare.com`.
@@ -15,13 +15,14 @@ Use this when changing public blog routes, Ghost integration, layouts, content u
 
 Ghost owns content only: posts, tags, authors, cover images, SEO metadata, and media under `/content/`. Astro owns public rendering, RSS, sitemap, layout, search index, and public route shape.
 
-The public front end may only use a Ghost Content API key. A Ghost Admin API key is forbidden in browser code, build variables, committed files, and responses. The FastAPI CMS BFF may read one from its server-only production secret environment.
+The public front end may only use a Ghost Content API key. A Ghost Admin API key is forbidden in browser code, build variables, committed files, and responses. The dormant FastAPI CMS BFF may read one from its server-only production secret environment, but it is not publicly routed.
 
 ## Route Ownership
 
 - `/auth/`: public login UI, served from `auth.silentflare.com`.
 - `/accounts/`: registration, profile, and security settings, served from `accounts.silentflare.com`.
 - `/admin/`: owner/admin console for public user and comment management, served from `admin.silentflare.com`.
+- `/ghost/`: native Ghost Admin, served from `cms.silentflare.com` only after the Nginx Owner Auth gate succeeds; Ghost Staff authentication remains mandatory.
 - `/bots/`: bot-management console, served from `tgbot.silentflare.com` and `tgbotmanagement.silentflare.com`.
 - Blog routes stay public-renderer routes and must not directly host account forms or admin data management.
 - Ghost post pages may embed the SilentFlare-owned Discussion client. Ghost supplies the post slug only; FastAPI owns comment storage and mutations, while the Svelte client owns Markdown editing, safe rendering, and responsive interaction.
@@ -34,7 +35,7 @@ The public front end may only use a Ghost Content API key. A Ghost Admin API key
 - `src/utils/content-utils.ts` is the public data access layer used by pages and widgets.
 - Public routes should call `content-utils`, not Ghost client internals.
 
-When changing Ghost integration, verify that pagination, post/tag/author route builds, RSS, `/cms/`, and fallback mode still work.
+When changing Ghost integration, verify that pagination, post/tag/author route builds, RSS, the gated Ghost Admin route, and fallback mode still work.
 
 ## Local Fallback And Strict Validation
 

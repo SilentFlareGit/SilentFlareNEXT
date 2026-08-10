@@ -8,14 +8,14 @@ SilentFlareNEXT is an Astro blog front end based on the Fuwari template. Ghost r
 - Content source: Ghost Content API.
 - Custom backend: modular FastAPI with SQLite migrations and a durable job worker.
 - Deployment model: immutable Astro and API releases on FNS1, deployed separately from Ghost.
-- Secret rule: never put a Ghost Admin API key in browser or build-time code. Public rendering uses only the Ghost Content API key; the FastAPI CMS BFF reads its dedicated Admin integration key from the server secret environment.
+- Secret rule: never put a Ghost Admin API key or Staff password in browser or build-time code. Public rendering uses only the Ghost Content API key; native Ghost Admin uses its own Staff session behind the SilentFlare Owner Auth gate.
 
 ## Subsites
 
 SilentFlare uses separate hostnames for separate responsibilities:
 
 - `blog.silentflare.com`: public Astro/Fuwari front end, served by this app.
-- `cms.silentflare.com`: Owner-only SilentFlare publishing workspace backed by the FastAPI CMS BFF and private Ghost content engine.
+- `cms.silentflare.com`: native Ghost Admin publishing workspace behind SilentFlare Owner Auth and Ghost Staff authentication.
 - `api.silentflare.com`: production FastAPI for public identity, comments, Admin data, and Bot management.
 - `admin.silentflare.com`: SilentFlare custom admin dashboard for public users and comments.
 

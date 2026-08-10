@@ -148,3 +148,37 @@ def test_cms_session_rejects_unauthenticated_owner(monkeypatch, tmp_path) -> Non
 	monkeypatch.setattr(service, "require_admin_console_session", reject_session)
 	with TestClient(app, base_url="https://cms.silentflare.com") as client:
 		assert client.get("/cms/session").status_code == 401
+
+
+def test_cms_outer_gate_requires_admin_owner_session(monkeypatch, tmp_path) -> None:
+	app, _runtime, _email = load_test_app(monkeypatch, tmp_path)
+	from server.api.silentflare_api.domains.bots import service
+
+	checked = False
+
+	def require_owner_session(_request):
+		nonlocal checked
+		checked = True
+		return {"bot_id": "SilentFlare Admin"}
+
+	monkeypatch.setattr(service, "require_admin_console_session", require_owner_session)
+	with TestClient(app, base_url="https://api.silentflare.com") as client:
+		response = client.get("/auth/cms-gate")
+
+	assert response.status_code == 204
+	assert response.headers["cache-control"] == "no-store"
+	assert checked is True
+
+
+def test_cms_outer_gate_rejects_missing_owner_session(monkeypatch, tmp_path) -> None:
+	app, _runtime, _email = load_test_app(monkeypatch, tmp_path)
+	from server.api.silentflare_api.domains.bots import service
+
+	def reject_session(_request):
+		raise HTTPException(status_code=401, detail="Login required")
+
+	monkeypatch.setattr(service, "require_admin_console_session", reject_session)
+	with TestClient(app, base_url="https://api.silentflare.com") as client:
+		response = client.get("/auth/cms-gate")
+
+	assert response.status_code == 401

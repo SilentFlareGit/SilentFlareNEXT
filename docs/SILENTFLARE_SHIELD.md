@@ -178,7 +178,7 @@ No page or layout change is required for observe, allow, log, block, delay, or r
 
 ### Ghost
 
-Ghost remains the content owner and is treated as an upstream HTTP service. Shield does not use a Ghost Admin API key, alter Ghost core, or write moderation fields into Ghost tables. The custom CMS frontend is protected by Shield and sends writes to the FastAPI CMS BFF; Ghost Admin is not publicly routed. CMS paths fail closed and use stricter rules than public `/content/` media reads.
+Ghost remains the content owner and is treated as an upstream HTTP service. Shield does not use a Ghost Admin API key, alter Ghost core, or write moderation fields into Ghost tables. Native Ghost Admin remains inside the CMS route: Nginx requires a valid `SilentFlare Admin` Owner session through FastAPI before proxying `/ghost/`, and Ghost then enforces its own Staff session. CMS paths fail closed and use stricter rules than public `/content/` media reads.
 
 ### FastAPI
 

@@ -18,6 +18,11 @@ def auth_me(request: Request) -> dict[str, Any]:
 	return service.auth_me(request)
 
 
+@router.get("/auth/cms-gate", status_code=204)
+def cms_gate(request: Request) -> Response:
+	return service.cms_gate(request)
+
+
 @router.post("/auth/login")
 def auth_login(payload: LoginPayload, request: Request, response: Response) -> dict[str, Any]:
 	return service.auth_login(payload, request, response)

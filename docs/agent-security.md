@@ -8,6 +8,7 @@ Use this whenever a task touches credentials, environment variables, webhook URL
 - Never commit deploy webhook URLs with tokens.
 - Never print Ghost Content API keys.
 - Never add a Ghost Admin API key to browser code, build variables, committed files, logs, or responses. Only the FastAPI CMS BFF may read it from the server secret environment.
+- Never weaken, embed, or auto-fill a Ghost Staff password from site code. Keep Ghost Staff authentication strong after the SilentFlare Owner gate; use an operator password manager for convenience.
 - Never expose `DEPLOY_HOOK_TOKEN`.
 - Never expose Telegram bot tokens, Telegram webhook secrets, API admin tokens, session cookies, CSRF values, verification codes, TOTP secrets, password hashes, salts, or raw account tokens.
 - Do not paste secrets into GitHub issues, PR comments, logs, docs, or final responses.

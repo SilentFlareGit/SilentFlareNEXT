@@ -7,7 +7,7 @@ Use this when changing public authentication, accounts, profiles, comments, publ
 - `auth.silentflare.com`: canonical public-user authentication frontend.
 - `accounts.silentflare.com`: only public-user registration frontend, plus authenticated profile and security settings.
 - `admin.silentflare.com`: owner/admin console for public user management and comment management only.
-- `cms.silentflare.com`: owner publishing workspace; it reuses the separate Owner session and calls the FastAPI CMS BFF.
+- `cms.silentflare.com`: native Ghost Admin publishing workspace behind the separate SilentFlare Owner session.
 - `api.silentflare.com`: FastAPI backend for these surfaces.
 - `blog.silentflare.com`: public blog renderer. Do not put account forms or admin data management directly into the blog layout.
 
@@ -15,7 +15,7 @@ FastAPI is the only authority allowed to verify credentials, access the account 
 
 Public users share one opaque API-issued session cookie across `.silentflare.com`. Bot/admin Owner sessions are separate and must not be merged with public account sessions.
 
-CMS uses the same one-hour `SilentFlare Admin` Owner session as Admin, entered through `auth.silentflare.com/?audience=cms`. CMS does not accept the public account cookie and does not issue a Ghost Staff session.
+CMS uses the same one-hour `SilentFlare Admin` Owner session as Admin, entered through `auth.silentflare.com/?audience=cms`. After that outer gate succeeds, Ghost still issues and verifies its own Staff session. The public account cookie cannot unlock either layer.
 
 ## Front-End Sources
 
@@ -31,7 +31,7 @@ CMS uses the same one-hour `SilentFlare Admin` Owner session as Admin, entered t
 - Public account homepage: `accounts.silentflare.com/u/{username}`, rendered by `src/components/account/PublicProfileApp.svelte` without requiring a session.
 - Admin page: `src/pages/admin/index.astro`.
 - Admin app: `src/components/admin/AdminApp.svelte`.
-- CMS page and app: `src/pages/cms/index.astro` and `src/components/cms/CmsApp.svelte`.
+- Legacy CMS page and app: `src/pages/cms/index.astro` and `src/components/cms/CmsApp.svelte`; retained for rollback but not publicly routed.
 - Blog navbar account entry: `src/components/auth/UserMenu.svelte`.
 - Blog Discussion orchestration and login redirect: `src/components/comments/CommentSection.svelte`.
 - Comment publishing and editing UI: `src/components/comments/CommentForm.svelte`, `src/components/comments/CommentItem.svelte`, and `src/components/comments/MarkdownEditor.svelte`.
