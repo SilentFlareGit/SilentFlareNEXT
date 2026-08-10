@@ -107,6 +107,8 @@ bash /opt/silentflare/app/shield/scripts/install-fns1-routing.sh
 
 The environment script copies existing host Turnstile settings without printing them. The routing script creates timestamped backups under `/etc/nginx/shield-backups`, runs `nginx -t`, reloads only on success, and restores the previous files on error. Public blog reads have the only process-down fail-open route. Account, API, Admin, and CMS requests fail closed. The custom CMS does not expose Ghost Staff WebSockets, so every public CMS request remains behind Shield.
 
+The routing bundle also installs a recovery-only Ghost Staff proxy on `127.0.0.1:9443`. It is deliberately absent from Shield's host map and every public listener. Operators may reach it only through an authenticated SSH local forward plus a temporary local hostname override for `cms.silentflare.com`; verify the socket remains loopback-bound after every routing install. The public `https://cms.silentflare.com/ghost/` route must continue returning `404`.
+
 When the FastAPI `/internal/shield/*` contract changes, deploy the compatible API release before enabling Shield account-response buttons. Then deploy/rebuild Shield so the signed-command implementation and Shield migrations are active together. Shield 2.0 requires migrations `0009_entity_risk_ledger.sql`, `0010_risk_signal_queue.sql`, and `0011_complete_risk_ledger.sql`; retain an online SQLite backup before applying them.
 
 ## GitHub Actions Deployment

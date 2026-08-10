@@ -41,4 +41,6 @@ admin.silentflare.com/admin-api/*     -> api.silentflare.com/*
 cms.silentflare.com/cms-api/*         -> api.silentflare.com/*
 ```
 
-No browser bundle may contain a Ghost Admin API key. Public rendering uses only the Ghost Content API key. The CMS BFF is the only Ghost Admin API caller and reads its integration key from the production FastAPI secret environment. Public `/ghost/` and `/ghost/api/admin/` access is closed; emergency Ghost Staff access is available only through an SSH loopback tunnel.
+No browser bundle may contain a Ghost Admin API key. Public rendering uses only the Ghost Content API key. The CMS BFF is the only Ghost Admin API caller and reads its integration key from the production FastAPI secret environment. Public `/ghost/` and `/ghost/api/admin/` access is closed.
+
+Emergency Ghost Staff recovery is available only on the FNS1 loopback TLS listener at `127.0.0.1:9443`. Open an authenticated SSH local forward to that port, temporarily resolve `cms.silentflare.com` to `127.0.0.1` on the operator machine, and visit `https://cms.silentflare.com:9443/ghost/`. The recovery certificate is origin/self-signed and therefore requires an explicit local browser exception. Close the tunnel and remove the temporary host override immediately after recovery. Port `9443` must never be published by Cloudflare, the host firewall, or a public Nginx listener.
