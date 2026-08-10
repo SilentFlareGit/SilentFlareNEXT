@@ -147,6 +147,13 @@ class Settings(BaseSettings):
 	legacy_ghost_backup_auth_method: str = Field(
 		default="telegram", alias="GHOST_DB_BACKUP_AUTH_METHOD"
 	)
+	ghost_admin_url: str = Field(
+		default="http://127.0.0.1:2368", alias="GHOST_ADMIN_URL"
+	)
+	ghost_admin_host: str = Field(default="cms.silentflare.com", alias="GHOST_ADMIN_HOST")
+	ghost_admin_api_key: str = Field(default="", alias="GHOST_ADMIN_API_KEY", repr=False)
+	ghost_admin_api_version: str = Field(default="v6.0", alias="GHOST_ADMIN_API_VERSION")
+	ghost_admin_timeout_seconds: int = Field(default=20, alias="GHOST_ADMIN_TIMEOUT_SECONDS")
 	log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
 	@field_validator("web_cookie_secure", mode="before")

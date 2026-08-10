@@ -7,12 +7,15 @@ Use this when changing public authentication, accounts, profiles, comments, publ
 - `auth.silentflare.com`: canonical public-user authentication frontend.
 - `accounts.silentflare.com`: only public-user registration frontend, plus authenticated profile and security settings.
 - `admin.silentflare.com`: owner/admin console for public user management and comment management only.
+- `cms.silentflare.com`: owner publishing workspace; it reuses the separate Owner session and calls the FastAPI CMS BFF.
 - `api.silentflare.com`: FastAPI backend for these surfaces.
 - `blog.silentflare.com`: public blog renderer. Do not put account forms or admin data management directly into the blog layout.
 
 FastAPI is the only authority allowed to verify credentials, access the account database, issue sessions, refresh sessions, or destroy sessions. Frontends only call API routes.
 
 Public users share one opaque API-issued session cookie across `.silentflare.com`. Bot/admin Owner sessions are separate and must not be merged with public account sessions.
+
+CMS uses the same one-hour `SilentFlare Admin` Owner session as Admin, entered through `auth.silentflare.com/?audience=cms`. CMS does not accept the public account cookie and does not issue a Ghost Staff session.
 
 ## Front-End Sources
 
@@ -28,6 +31,7 @@ Public users share one opaque API-issued session cookie across `.silentflare.com
 - Public account homepage: `accounts.silentflare.com/u/{username}`, rendered by `src/components/account/PublicProfileApp.svelte` without requiring a session.
 - Admin page: `src/pages/admin/index.astro`.
 - Admin app: `src/components/admin/AdminApp.svelte`.
+- CMS page and app: `src/pages/cms/index.astro` and `src/components/cms/CmsApp.svelte`.
 - Blog navbar account entry: `src/components/auth/UserMenu.svelte`.
 - Blog Discussion orchestration and login redirect: `src/components/comments/CommentSection.svelte`.
 - Comment publishing and editing UI: `src/components/comments/CommentForm.svelte`, `src/components/comments/CommentItem.svelte`, and `src/components/comments/MarkdownEditor.svelte`.

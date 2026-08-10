@@ -28,12 +28,12 @@ export const subsites: Subsite[] = [
 		name: "CMS",
 		host: "cms.silentflare.com",
 		path: "/cms/",
-		status: "external",
-		purpose: "Ghost CMS",
+		status: "live",
+		purpose: "SilentFlare publishing workspace",
 		details:
-			"Ghost remains the dedicated content system for posts, tags, images, and SEO metadata.",
+			"The Owner-only CMS frontend uses the FastAPI CMS API while Ghost remains the content engine.",
 		actions: [
-			"Write and publish posts in Ghost Admin",
+			"Write and publish through the SilentFlare CMS",
 			"Expose public content through the Ghost Content API",
 		],
 	},
@@ -48,7 +48,7 @@ export const subsites: Subsite[] = [
 		actions: [
 			"Inspect custom API health and bot registry",
 			"Route operators to bot and backup management",
-			"Keep article editing inside Ghost",
+			"Keep article editing inside the CMS workspace",
 		],
 	},
 ];

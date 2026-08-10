@@ -6,7 +6,7 @@ Use this when changing public blog routes, Ghost integration, layouts, content u
 
 - Public blog content source: Ghost Content API.
 - Public blog renderer: Astro static build.
-- Production CMS/admin domain: `cms.silentflare.com`.
+- Production publishing domain: `cms.silentflare.com`; its custom frontend uses FastAPI as a Ghost Admin API BFF.
 - Production public blog domain: `blog.silentflare.com`.
 - Production authentication domain: `auth.silentflare.com`.
 - Production account domain: `accounts.silentflare.com`.
@@ -15,7 +15,7 @@ Use this when changing public blog routes, Ghost integration, layouts, content u
 
 Ghost owns content only: posts, tags, authors, cover images, SEO metadata, and media under `/content/`. Astro owns public rendering, RSS, sitemap, layout, search index, and public route shape.
 
-The front end may only use a Ghost Content API key. Ghost Admin API keys are forbidden in this repo.
+The public front end may only use a Ghost Content API key. A Ghost Admin API key is forbidden in browser code, build variables, committed files, and responses. The FastAPI CMS BFF may read one from its server-only production secret environment.
 
 ## Route Ownership
 

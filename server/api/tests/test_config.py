@@ -10,6 +10,7 @@ def test_settings_parse_boolean_and_redact_secret() -> None:
 		ACCOUNT_COOKIE_DOMAIN=".silentflare.com",
 		TURNSTILE_SECRET_KEY="turnstile-secret",
 		TURNSTILE_EXPECTED_HOSTNAMES="Auth.SilentFlare.com, blog.silentflare.com ",
+		GHOST_ADMIN_API_KEY="cms-key-id:" + "ab" * 32,
 	)
 
 	assert settings.web_cookie_secure is False
@@ -19,6 +20,7 @@ def test_settings_parse_boolean_and_redact_secret() -> None:
 	}
 	assert all(settings.production_readiness().values())
 	assert "turnstile-secret" not in repr(settings)
+	assert "cms-key-id" not in repr(settings)
 
 
 def test_settings_env_file_does_not_expand_dollar_values(tmp_path) -> None:

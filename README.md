@@ -8,20 +8,20 @@ SilentFlareNEXT is an Astro blog front end based on the Fuwari template. Ghost r
 - Content source: Ghost Content API.
 - Custom backend: modular FastAPI with SQLite migrations and a durable job worker.
 - Deployment model: immutable Astro and API releases on FNS1, deployed separately from Ghost.
-- Secret rule: never put a Ghost Admin API Key in this front end. Only use the Ghost Content API Key.
+- Secret rule: never put a Ghost Admin API key in browser or build-time code. Public rendering uses only the Ghost Content API key; the FastAPI CMS BFF reads its dedicated Admin integration key from the server secret environment.
 
 ## Subsites
 
 SilentFlare uses separate hostnames for separate responsibilities:
 
 - `blog.silentflare.com`: public Astro/Fuwari front end, served by this app.
-- `cms.silentflare.com`: external Ghost CMS and Ghost Admin at `/ghost`.
+- `cms.silentflare.com`: Owner-only SilentFlare publishing workspace backed by the FastAPI CMS BFF and private Ghost content engine.
 - `api.silentflare.com`: production FastAPI for public identity, comments, Admin data, and Bot management.
 - `admin.silentflare.com`: SilentFlare custom admin dashboard for public users and comments.
 
 The Astro app also provides subsite shells and boundary routes:
 
-- `/cms/`: Ghost CMS boundary and Content API connection status.
+- `/cms/`: responsive CMS publishing workspace for posts, tags, images, drafts, and publication.
 - `/api/`: API boundary/status page.
 - `/admin/`: production Admin console for public users and comments.
 
@@ -86,7 +86,7 @@ Environment and safety work completed:
 - Kept `.env` ignored.
 - Added explicit missing-config errors.
 - Added `GHOST_ALLOW_EMPTY=true` as a local UI-only fallback for development without real Ghost credentials.
-- Documented that Ghost runs externally and that Ghost Admin API keys must not be used in this front end.
+- Documented that Ghost runs externally and that Ghost Admin API keys must never enter browser or build-time code.
 
 Validation performed during initialization:
 

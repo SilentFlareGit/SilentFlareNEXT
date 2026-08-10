@@ -13,11 +13,14 @@ def table_columns(path: Path, table: str) -> set[str]:
 
 def test_migrations_create_current_schema_and_are_idempotent(tmp_path: Path) -> None:
 	path = tmp_path / "fresh.db"
-	assert migrate_database(path) == ["0001", "0002"]
+	assert migrate_database(path) == ["0001", "0002", "0003"]
 	assert migrate_database(path) == []
 	assert {"root_id", "created_ip"} <= table_columns(path, "comments")
 	assert {"deletion_requested_at", "deletion_scheduled_for"} <= table_columns(path, "users")
 	assert {"id", "job_type", "idempotency_key", "status"} <= table_columns(path, "jobs")
+	assert {"actor", "action", "resource_type", "resource_id"} <= table_columns(
+		path, "cms_audit_log"
+	)
 
 
 def test_migrations_normalize_legacy_database(tmp_path: Path) -> None:
@@ -50,7 +53,7 @@ def test_migrations_normalize_legacy_database(tmp_path: Path) -> None:
 			"""
 		)
 
-	assert migrate_database(path) == ["0001", "0002"]
+	assert migrate_database(path) == ["0001", "0002", "0003"]
 	assert {"root_id", "created_ip"} <= table_columns(path, "comments")
 	assert {"display_name", "totp_enabled", "deletion_review_status"} <= table_columns(
 		path, "users"

@@ -14,10 +14,12 @@ from .domains.accounts import router as accounts_router
 from .domains.admin import router as admin_router
 from .domains.auth import router as auth_router
 from .domains.bots import router as bots_router
+from .domains.cms import router as cms_router
 from .domains.comments import router as comments_router
 from .domains.health import router as health_router
 from .domains.internal_shield import router as internal_shield_router
 from .domains.site_settings import router as site_settings_router
+from .integrations.ghost_admin import GhostAdminClient
 
 ALLOWED_ORIGINS = [
 	*(
@@ -27,6 +29,7 @@ ALLOWED_ORIGINS = [
 			"admin.silentflare.com",
 			"accounts.silentflare.com",
 			"auth.silentflare.com",
+			"cms.silentflare.com",
 			"tgbot.silentflare.com",
 			"tgbotmanagement.silentflare.com",
 		)
@@ -38,6 +41,7 @@ ALLOWED_ORIGINS = [
 			"admin.silentflare.com",
 			"accounts.silentflare.com",
 			"auth.silentflare.com",
+			"cms.silentflare.com",
 			"tgbot.silentflare.com",
 			"tgbotmanagement.silentflare.com",
 		)
@@ -57,6 +61,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 	application = FastAPI(title=settings.app_name, lifespan=lifespan)
 	application.state.settings = settings
 	application.state.database = Database(settings.account_db_path)
+	application.state.ghost_admin = GhostAdminClient(settings)
 	application.middleware("http")(request_context_middleware)
 	application.add_middleware(
 		CORSMiddleware,
@@ -72,6 +77,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 		comments_router,
 		site_settings_router,
 		admin_router,
+		cms_router,
 		bots_router,
 		internal_shield_router,
 	):

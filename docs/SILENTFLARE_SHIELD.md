@@ -178,7 +178,7 @@ No page or layout change is required for observe, allow, log, block, delay, or r
 
 ### Ghost
 
-Ghost remains the content owner and is treated as an upstream HTTP service. Shield does not use a Ghost Admin API key, alter Ghost core, or write moderation fields into Ghost tables. CMS administrator paths should be fail closed and use stricter rules than public `/content/` media reads.
+Ghost remains the content owner and is treated as an upstream HTTP service. Shield does not use a Ghost Admin API key, alter Ghost core, or write moderation fields into Ghost tables. The custom CMS frontend is protected by Shield and sends writes to the FastAPI CMS BFF; Ghost Admin is not publicly routed. CMS paths fail closed and use stricter rules than public `/content/` media reads.
 
 ### FastAPI
 
@@ -335,7 +335,7 @@ The emergency switch is the audited global `bypass` mode. The out-of-process eme
 
 `shield/docker-compose.split.yml` is the portable split development deployment. `shield/docker-compose.split.prod.yml` uses Linux host networking and binds the gateway, control, and portal only to loopback ports 9080, 9082, and 9083. The one-shot migrator completes before these roles and the worker start. `shield/docker-compose.prod.yml` remains the single-process rollback target. All variants run non-root, read-only containers, mount only the Shield data volume, and drop Linux capabilities. `shield/nginx/silentflare-shield.conf` remains a generic merge reference. The production FNS1 files in `shield/nginx/fns1` are installable, versioned configurations.
 
-FNS1 uses an internal Nginx origin listener on `127.0.0.1:9081` for the Astro account/admin/blog renderers and Ghost HTTP traffic. Public Nginx sends the five protected Host values to Shield on `127.0.0.1:9080`; Shield then selects `9081` or FastAPI on `9010`. This prevents the routing loop that would occur if a Shield upstream pointed back to the public port. The separate `shield.silentflare.com` Nginx host also reaches port `9080`, but it serves only explicit public portal routes and is never added to the protected-upstream map. The blog has a one-second connection timeout and named fail-open origin. Accounts, API, Admin, and CMS fail closed. CMS Upgrade requests bypass the HTTP-only Shield gateway and proxy directly to Ghost; ordinary CMS HTTP traffic is still evaluated.
+FNS1 uses an internal Nginx origin listener on `127.0.0.1:9081` for the Astro account/admin/blog/CMS renderers and permitted Ghost Content API or media reads. Public Nginx sends the five protected Host values to Shield on `127.0.0.1:9080`; Shield then selects `9081` or FastAPI on `9010`. This prevents the routing loop that would occur if a Shield upstream pointed back to the public port. The separate `shield.silentflare.com` Nginx host also reaches port `9080`, but it serves only explicit public portal routes and is never added to the protected-upstream map. The blog has a one-second connection timeout and named fail-open origin. Accounts, API, Admin, and CMS fail closed. All public CMS traffic passes through Shield; no Ghost WebSocket or Staff-login bypass is exposed.
 
 Recommended FNS1 layout:
 

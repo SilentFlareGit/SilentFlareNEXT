@@ -109,6 +109,18 @@ for (const needle of ["Sign in", "SilentFlare unified login authentication"]) {
 
 console.log("Verified unified auth page content.");
 
+const cmsHtml = await readFile(path.join("dist", "cms", "index.html"), "utf8");
+for (const needle of ["CMS - SilentFlare", 'apiBase&quot;:[0,&quot;/cms-api&quot;]']) {
+	if (!cmsHtml.includes(needle)) {
+		throw new Error(`CMS page verification failed. Missing content: ${needle}`);
+	}
+}
+if (cmsHtml.includes("/ghost/api/admin/")) {
+	throw new Error("CMS page verification failed. A direct Ghost Admin API route is present.");
+}
+
+console.log("Verified CMS publishing shell and BFF boundary.");
+
 if (requireContent) {
 	const contentRoutes = [
 		["posts", "post"],

@@ -7,7 +7,11 @@ type AuthOptions = {
 	web_login_enabled?: boolean;
 };
 
-let { apiBase, returnUrl }: { apiBase: string; returnUrl: string } = $props();
+let {
+	apiBase,
+	returnUrl,
+	surface = "Admin",
+}: { apiBase: string; returnUrl: string; surface?: "Admin" | "CMS" } = $props();
 
 const adminId = "SilentFlare Admin";
 let options = $state<AuthOptions | null>(null);
@@ -131,7 +135,7 @@ onMount(async () => {
 			// No owner session yet.
 		}
 		message = telegramAvailable
-			? "One Telegram approval unlocks Admin for one hour."
+			? `One Telegram approval unlocks ${surface} for one hour.`
 			: "Telegram approval is unavailable on this server.";
 		tone = telegramAvailable ? "neutral" : "warning";
 	} catch (reason) {
@@ -157,7 +161,7 @@ onDestroy(stopPolling);
 		<span class="owner-mark"><Icon icon="material-symbols:shield-lock-outline-rounded" /></span>
 		<div><p>OWNER ACCESS</p><h2>Verify your identity</h2></div>
 	</div>
-	<p class="intro">Admin access uses a separate, bot-scoped session. Public account credentials cannot unlock this workspace.</p>
+	<p class="intro">{surface} access uses a separate, bot-scoped session. Public account credentials cannot unlock this workspace.</p>
 
 	<div class="method-tabs" aria-label="Owner verification method">
 		<button class:active={mode === "telegram"} onclick={() => (mode = "telegram")}><Icon icon="material-symbols:send-outline-rounded" />Telegram</button>

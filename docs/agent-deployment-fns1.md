@@ -105,7 +105,7 @@ bash -lc 'docker compose -f /opt/silentflare/app/shield/docker-compose.split.pro
 bash /opt/silentflare/app/shield/scripts/install-fns1-routing.sh
 ```
 
-The environment script copies existing host Turnstile settings without printing them. The routing script creates timestamped backups under `/etc/nginx/shield-backups`, runs `nginx -t`, reloads only on success, and restores the previous files on error. Public blog reads have the only process-down fail-open route. Account, API, Admin, and CMS requests fail closed; CMS connection upgrades use a direct Ghost exception because the current gateway is HTTP-only.
+The environment script copies existing host Turnstile settings without printing them. The routing script creates timestamped backups under `/etc/nginx/shield-backups`, runs `nginx -t`, reloads only on success, and restores the previous files on error. Public blog reads have the only process-down fail-open route. Account, API, Admin, and CMS requests fail closed. The custom CMS does not expose Ghost Staff WebSockets, so every public CMS request remains behind Shield.
 
 When the FastAPI `/internal/shield/*` contract changes, deploy the compatible API release before enabling Shield account-response buttons. Then deploy/rebuild Shield so the signed-command implementation and Shield migrations are active together. Shield 2.0 requires migrations `0009_entity_risk_ledger.sql`, `0010_risk_signal_queue.sql`, and `0011_complete_risk_ledger.sql`; retain an online SQLite backup before applying them.
 

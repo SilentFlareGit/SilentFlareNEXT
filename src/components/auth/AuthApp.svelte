@@ -23,7 +23,12 @@ let returnUrl = $state("https://accounts.silentflare.com/");
 let pendingId = $state("");
 let error = $state("");
 let notice = $state("");
-let adminMode = $state(false);
+let privilegedAudience = $state<"admin" | "cms" | "">("");
+
+const privilegedMode = $derived(Boolean(privilegedAudience));
+const privilegedProduct = $derived(
+	privilegedAudience === "cms" ? "CMS" : "Admin",
+);
 
 const accountCenterFeatures = [
 	{
@@ -70,9 +75,11 @@ function finishLogin(user: AuthUser, destination?: string) {
 
 async function bootstrap() {
 	const params = new URLSearchParams(window.location.search);
-	adminMode = params.get("audience") === "admin";
+	const audience = params.get("audience");
+	privilegedAudience =
+		audience === "admin" || audience === "cms" ? audience : "";
 	await resolveReturnUrl(params.get("return_url") ?? "");
-	if (adminMode) {
+	if (privilegedMode) {
 		step = "method";
 		return;
 	}
@@ -130,7 +137,7 @@ onMount(() => void bootstrap());
 </script>
 
 {#snippet story()}
-	{#if !adminMode}
+	{#if !privilegedMode}
 		<div class="feature-rail" aria-label="Account center areas">
 			{#each accountCenterFeatures as feature}
 				<span><Icon icon={feature.icon} />{feature.label}</span>
@@ -140,19 +147,19 @@ onMount(() => void bootstrap());
 {/snippet}
 
 <IdentityShell
-	product={adminMode ? "Admin" : ""}
-	headline={adminMode ? "A private door to public trust." : "One identity across SilentFlare."}
-	description={adminMode ? "Verify Owner access before reviewing members and moderated conversations." : "Sign in once for the blog, comments, your profile, privacy, and security settings."}
+	product={privilegedMode ? privilegedProduct : ""}
+	headline={privilegedAudience === "cms" ? "A focused place to publish." : privilegedMode ? "A private door to public trust." : "One identity across SilentFlare."}
+	description={privilegedAudience === "cms" ? "Verify Owner access before writing, reviewing, and publishing SilentFlare content." : privilegedMode ? "Verify Owner access before reviewing members and moderated conversations." : "Sign in once for the blog, comments, your profile, privacy, and security settings."}
 	backHref="https://blog.silentflare.com/"
 	backLabel="Return to the blog"
 	{story}
 >
-	{#key adminMode ? "admin" : step}
+	{#key privilegedMode ? privilegedAudience : step}
 		<div class="auth-step-panel">
-			{#if adminMode}
-				<AdminOwnerAuth {apiBase} {returnUrl} />
+			{#if privilegedMode}
+				<AdminOwnerAuth {apiBase} {returnUrl} surface={privilegedProduct} />
 			{:else if step === "checking" || step === "redirecting"}
-				<div class="auth-loading"><span></span><p>{step === "checking" ? "Checking your session…" : "Returning you safely…"}</p></div>
+				<div class="auth-loading"><span></span><p>{step === "checking" ? "Checking your session..." : "Returning you safely..."}</p></div>
 			{:else if step === "method"}
 				<MethodSelectPanel
 					onSelectEmailCode={() => { step = "email"; error = ""; }}

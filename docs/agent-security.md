@@ -7,7 +7,7 @@ Use this whenever a task touches credentials, environment variables, webhook URL
 - Never commit `.env`.
 - Never commit deploy webhook URLs with tokens.
 - Never print Ghost Content API keys.
-- Never add a Ghost Admin API key to this front end.
+- Never add a Ghost Admin API key to browser code, build variables, committed files, logs, or responses. Only the FastAPI CMS BFF may read it from the server secret environment.
 - Never expose `DEPLOY_HOOK_TOKEN`.
 - Never expose Telegram bot tokens, Telegram webhook secrets, API admin tokens, session cookies, CSRF values, verification codes, TOTP secrets, password hashes, salts, or raw account tokens.
 - Do not paste secrets into GitHub issues, PR comments, logs, docs, or final responses.
@@ -47,6 +47,8 @@ GHOST_CONTENT_API_KEY=<content-api-key>
 GHOST_API_VERSION=v5.0
 SITE_URL=https://blog.silentflare.com
 ```
+
+The production FastAPI secret file may additionally define `GHOST_ADMIN_URL`, `GHOST_ADMIN_HOST`, `GHOST_ADMIN_API_VERSION`, and `GHOST_ADMIN_API_KEY`. The key must belong to a dedicated custom integration, remain server-side, and never be copied into the root build `.env`. The loopback Admin API request preserves Ghost's canonical CMS host and HTTPS forwarding metadata to avoid an external redirect.
 
 ## Known FastAPI Variable Names
 
